@@ -1,8 +1,8 @@
 # After `idf.py build`, uses build/compile_commands.json.
 # Remove Xtensa/GCC-only flags so clangd (even esp-clang) does not warn on unknown arguments.
 # Pair with VS Code: --query-driver=** (see .vscode/settings.json).
-CompilationDatabase: build
 CompileFlags:
+  CompilationDatabase: build
   Remove:
     - -fno-shrink-wrap
     - -fstrict-volatile-bitfields

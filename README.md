@@ -1,4 +1,4 @@
-# RegattaOne Laser
+# RegattaOne Boat
 
 ESP32-S3 **firmware** that reads a **DFRobot SEN0140** 10-DOF IMU over **I2C** and streams samples over **BLE NimBLE**, plus a **web app** (Chrome + Web Bluetooth) that fuses the IMU in the browser (**Madgwick**), draws a **live 3D board** matching orientation on your table, and exposes **camera pan/tilt** so you can frame the scene like the device in front of you.
 
