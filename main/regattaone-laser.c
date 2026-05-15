@@ -21,13 +21,16 @@
 #include "msp430_bsl_invoke.h"
 #include "msp430_uart_rx.h"
 #endif
+#if CONFIG_REGATTAONE_SEN0140_ENABLE
 #include "sen0140_10dof.h"
+#endif
 
 static const char *TAG = "main";
 
 #define BLE_IMU_PERIOD_MS   20
 #define UART_CSV_INTERVAL_MS 500
 
+#if CONFIG_REGATTAONE_SEN0140_ENABLE
 static void sensor_task(void *arg)
 {
     (void)arg;
@@ -51,6 +54,7 @@ static void sensor_task(void *arg)
         vTaskDelay(period);
     }
 }
+#endif /* CONFIG_REGATTAONE_SEN0140_ENABLE */
 
 void app_main(void)
 {
@@ -61,15 +65,36 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-#if CONFIG_REGATTAONE_MSP430_ENABLE
-    ESP_LOGI(TAG, "Starting: SEN0140 I2C, BLE, Blues Notecard, RYUW122 UART, MSP430 bridge");
+    ESP_LOGI(
+        TAG,
+        "Bring-up: IMU %s | Notecard %s | UWB %s | MSP430 %s",
+#if CONFIG_REGATTAONE_SEN0140_ENABLE
+        "on",
 #else
-    ESP_LOGI(TAG, "Starting: SEN0140 I2C, BLE, Blues Notecard, RYUW122 UART (no MSP430)");
+        "off",
 #endif
+#if CONFIG_REGATTAONE_NOTECARD_ENABLE
+        "on",
+#else
+        "off",
+#endif
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+        "on",
+#else
+        "off",
+#endif
+#if CONFIG_REGATTAONE_MSP430_ENABLE
+        "on"
+#else
+        "off"
+#endif
+    );
 
     i2c_bus_mux_init();
 
-    esp_err_t err = sen0140_board_init();
+    esp_err_t err;
+#if CONFIG_REGATTAONE_SEN0140_ENABLE
+    err = sen0140_board_init();
     const bool sen0140_ok = (err == ESP_OK);
     if (!sen0140_ok) {
 #if CONFIG_REGATTAONE_MSP430_ENABLE
@@ -80,6 +105,9 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "SEN0140 (10 DOF) ready. GPIO SDA=%d SCL=%d", SEN0140_I2C_SDA_GPIO, SEN0140_I2C_SCL_GPIO);
     }
+#else
+    const bool sen0140_ok = false;
+#endif
 
 #if CONFIG_REGATTAONE_MSP430_ENABLE
     err = msp430_bsl_gpio_init();
@@ -96,7 +124,11 @@ void app_main(void)
 
 #if CONFIG_REGATTAONE_NOTECARD_ENABLE
     {
+#if CONFIG_REGATTAONE_SEN0140_ENABLE
         i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)sen0140_i2c_bus_handle();
+#else
+        i2c_master_bus_handle_t bus = NULL;
+#endif
         err = blues_notecard_init(bus);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "Blues Notecard init: %s", esp_err_to_name(err));

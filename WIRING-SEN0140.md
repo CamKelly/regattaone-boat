@@ -1,6 +1,19 @@
-# SEN0140 (10 DOF) ↔ ESP32-S3 wiring
+# SEN0140 (10 DOF) ↔ ESP32 wiring
 
 The DFRobot **SEN0140** in the [DigiKey datasheet](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2524/SEN0140_Web.pdf) is a **10-DOF IMU** on one I2C bus (ADXL345 accelerometer, ITG-3200 gyro, HMC5883L magnetometer, BMP085 barometer). It is **not** a color sensor.
+
+## Seeed XIAO ESP32-C3 (firmware default: GPIO6 / GPIO7)
+
+On this board, **the “D” pad number is not the same as the SoC GPIO number.** Firmware defaults use **SoC GPIO6 = SDA** and **SoC GPIO7 = SCL**, which on the XIAO ESP32-C3 map to:
+
+| Signal | SoC GPIO | XIAO **PCB pad** (silk) | Typical mistake |
+| ------ | -------- | ---------------------- | ----------------- |
+| **SDA** | **GPIO6** | **D4** (often labeled SDA) | Using **D6** — that pad is **GPIO21** (UART TX), not GPIO6. |
+| **SCL** | **GPIO7** | **D5** (often labeled SCL) | Using **D7** — that pad is **GPIO20** (UART RX), not GPIO7. |
+
+If **every** I2C probe times out in the log, you are almost certainly on the wrong pads or have a wiring fault. Re-seat **GND** and **3V3**, confirm **SDA/SCL** order on the SEN0140 breakout, and add **~4.7 kΩ** pull-ups to 3.3 V on SDA/SCL if you are on a breadboard with long wires.
+
+Then `idf.py menuconfig` → **Component config → RegattaOne — SEN0140 I2C pins** must match the GPIO numbers of the pads you actually used.
 
 ## Connections (ESP32-S3 Mini — your layout)
 
@@ -59,11 +72,6 @@ Same bus. Firmware probes **`0x77`**, then **`0x76`**. **BMP280** chip id is **`
 
 ## Changing pins
 
-Edit `main/sen0140_10dof.h`:
-
-```c
-#define SEN0140_I2C_SDA_GPIO    10
-#define SEN0140_I2C_SCL_GPIO    11
-```
+Use **`idf.py menuconfig`** → **Component config → RegattaOne — SEN0140 I2C pins** (values come from `CONFIG_SEN0140_I2C_*` in `main/sen0140_10dof.h`).
 
 Pick GPIOs that are free on your specific dev board and not used for flash/PSRAM straps if applicable.

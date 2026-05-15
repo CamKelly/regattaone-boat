@@ -1,8 +1,8 @@
 # RegattaOne Boat
 
-ESP32-S3 **firmware** that reads a **DFRobot SEN0140** 10-DOF IMU over **I2C** and streams samples over **BLE NimBLE**, plus a **web app** (Chrome + Web Bluetooth) that fuses the IMU in the browser (**Madgwick**), draws a **live 3D board** matching orientation on your table, and exposes **camera pan/tilt** so you can frame the scene like the device in front of you.
+ESP-IDF **firmware** for **ESP32-C3** or **ESP32-S3** that bridges **Blues Notecard for LoRa** (I2C), a **REYAX RYUW122_Lite** UWB module (UART), and **Chrome over Web Bluetooth** on the same NimBLE GATT service. An **Angular + Ionic** web app connects to the device, sends **Notecard JSON** requests, and shows **Notecard responses** and **UWB UART** lines.
 
-This is **not** a hello-world template; the stock ESP-IDF example text has been replaced by this project.
+BLE advertised name: **`RegattaOne-Boat`**.
 
 ---
 
@@ -10,266 +10,163 @@ This is **not** a hello-world template; the stock ESP-IDF example text has been 
 
 | Layer | Role |
 | ----- | ---- |
-| **Firmware** (`main/`) | Init I2C, probe ADXL345 / ITG-3200 / mag / baro, read ~50 Hz, notify a binary IMU packet over GATT; optional UART CSV for debugging. |
-| **Web app** (`web/`) | Pair over Web Bluetooth, parse packets, Madgwick MARG/IMU fusion, Three.js scene with PCB photo, grid + axis helpers, heading compass, bubble level, optional mag X/Y plot, **camera pan & tilt** (orbit around the board center). |
+| **Firmware** (`main/`) | NimBLE GATT **0xFEF0**; optional **SEN0140** IMU task (**0xFEF1**); **Blues Notecard** serial-over-I2C (**0xFEF7** write / **0xFEF8** notify); **RYUW122** UART lines → **0xFEF9** notify; optional **MSP430** paths (**default off** in menuconfig). |
+| **Web app** (`web/`) | **Web Bluetooth**: connect by service UUID, **Send to Notecard**, live **response** and **UWB** logs (no IMU / Three.js in the maintained UI). |
+| **Wiring** | See **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)** for Seeed **XIAO ESP32-C3** ↔ Notecarrier / Notecard ↔ RYUW122. |
 
-BLE advertised name: **`RegattaOne-SEN0140`**.
+Hardware references: [Notecard for LoRa](https://shop.blues.com/products/notecard-lora), [Notecarrier B](https://shop.blues.com/products/carr-b), [RYUW122_Lite](https://reyax.com/products/RYUW122_Lite).
 
 ---
 
 ## Prerequisites
 
-1. **ESP-IDF** (5.x; project tested with ESP32-S3). Install per [Espressif getting started](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/index.html), then in every new terminal:
+1. **ESP-IDF** 5.x (CI / docs often use **v5.x**; this tree is also used with **ESP-IDF 6** in some setups). Install per [Espressif getting started](https://docs.espressif.com/projects/esp-idf/en/latest/esp32c3/get-started/index.html) for your chip, then:
 
    ```bash
-   . $HOME/esp/esp-idf/export.sh   # adjust path to your IDF clone
+   . $HOME/esp/esp-idf/export.sh   # adjust to your IDF path
    ```
 
-2. **Node.js** 18+ and **npm**.
+2. **Node.js** 18+ and **npm** (for `web/`).
 
-3. **Chrome** (desktop or Android) for **Web Bluetooth**. The page must be a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts): **`https://`** or **`http://localhost`** (Vite dev server qualifies).
+3. **Chrome** (desktop or Android) for **Web Bluetooth**. Page must be a [secure context](https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts): **`https://`** or **`http://localhost`**.
 
-4. **USB cable** and driver for your ESP32-S3 board.
+4. **USB cable** for flash / serial monitor on the dev board.
 
 ---
 
-## Hardware: SEN0140 ↔ ESP32-S3
+## Firmware: build, flash, monitor
 
-The **SEN0140** ([DigiKey datasheet PDF](https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2524/SEN0140_Web.pdf)) is a **10-DOF** module on one I2C bus: **ADXL345** accel, **ITG-3200** gyro, **magnetometer** (several possible chips), **BMP085/BMP280** baro. It is **not** a color sensor.
+From the **repository root**:
 
-### Connections (ESP32-S3 Mini–style layout)
+```bash
+# Pick chip (examples)
+idf.py set-target esp32c3
+# or: idf.py set-target esp32s3
 
-Firmware defaults in `main/sen0140_10dof.h` use **GPIO10 = SDA** and **GPIO11 = SCL**, matching **header pin 10 → SDA** and **pin 11 → SCL** when silkscreened **IO10** / **IO11** (typical WEMOS/LOLIN ESP32-S3 Mini).
-
-| SEN0140 pin | ESP32-S3 Mini | SoC GPIO | Notes |
-| ----------- | ------------- | -------- | ----- |
-| **VCC** | **3.3 V** | — | Module accepts ~3–8 V; **3.3 V** is appropriate for ESP32. |
-| **GND** | **GND** | — | Common ground. |
-| **SDA** | **Pin 10** (IO10) | **GPIO 10** | Must match `SEN0140_I2C_SDA_GPIO`. |
-| **SCL** | **Pin 11** (IO11) | **GPIO 11** | Must match `SEN0140_I2C_SCL_GPIO`. |
-
-If your board’s **physical** pin numbers do **not** map to GPIO10/11, use the **GPIO numbers printed on the PCB** and update the defines in `main/sen0140_10dof.h`:
-
-```c
-#define SEN0140_I2C_SDA_GPIO    10
-#define SEN0140_I2C_SCL_GPIO    11
+idf.py build
+idf.py -p PORT flash monitor
 ```
 
-Pick pins that are free and not used for flash/PSRAM straps on your module.
+- **`sdkconfig.defaults`** — shared NimBLE / BT options. Target-specific extras: **`sdkconfig.defaults.esp32c3`**, **`sdkconfig.defaults.esp32s3`** (merge via `idf.py set-target` / your `sdkconfig`).
+- **Pins:** **Component config → RegattaOne** in `idf.py menuconfig` — SEN0140 I2C, Notecard (standalone or shared bus), RYUW122 UART, MSP430 (if enabled).
 
-Follow the **SEN0140 breakout silkscreen** for SDA/SCL order (some boards label **VCC, GND, SCL, SDA**).
+After changing target: if CMake complains, run **`idf.py fullclean`** once, then **`idf.py set-target …`** and **`idf.py build`** again.
 
-### I2C details
+### Main firmware modules
 
-- **Logic:** 3.3 V (same as ESP32-S3).
-- **Pull-ups:** The DFRobot board usually has SDA/SCL pull-ups; firmware also enables weak internal pull-ups. Add external **~4.7 kΩ** to 3.3 V if the bus is noisy or uses long wires.
-- **Speed:** **100 kHz** in code (`SEN0140_I2C_FREQ_HZ`).
-
-### Magnetometer auto-detect
-
-The compass shares **SDA/SCL/GND/3V3** only. Firmware probes in order (see `sen0140_10dof.c`): LIS3MDL @ `0x1E`, HMC5883L path, LIS3MDL @ `0x1C`, QMC5883L, then `0x0C` (VCM5883L / AK8963 disambiguated by chip ID).
-
-| Chip | 7-bit address | Notes |
-| ---- | ------------- | ----- |
-| **HMC5883L** | `0x1E` | DFRobot SEN0140; data order **X, Z, Y** in chip. |
-| **LIS3MDL** | `0x1E` / `0x1C` | WHO_AM_I `0x3D` @ `0x0F`. |
-| **QMC5883L** | `0x0D` | Common on GY-271-style boards. |
-| **VCM5883L** | `0x0C` | Chip ID `0x82` @ `0x0C`. |
-| **AK8963** | `0x0C` / `0x0D` | WHO_AM_I `0x48` @ `0x00`. |
-
-On boot, a log line such as `Magnetometer: VCM5883L @ 0x0c` shows which mag was found.
-
-### Barometer
-
-Firmware probes **BMP085/BMP280** at **`0x77`** then **`0x76`**. BMP280 chip id **`0x58`** @ **`0xD0`**; BMP085 **`0x55`** @ **`0xD0`**. When present, UART loop can print **°C** and **hPa**.
-
-### I2C address cheat sheet (same bus)
-
-| Sensor | Address |
-| ------ | ------- |
-| ADXL345 | `0x53` (tries `0x1D` if SDO strapped other way) |
-| ITG-3200 | `0x68` |
-| HMC5883L | `0x1E` |
-| LIS3MDL | `0x1E` or `0x1C` |
-| QMC5883L | `0x0D` |
-| VCM5883L | `0x0C` (factory may vary) |
-| AK8963 | `0x0C` / `0x0D` |
-| BMP085 | `0x77` |
-| BMP280 | `0x77` or `0x76` |
-
-The same wiring content is kept in **`WIRING-SEN0140.md`** for a dedicated hardware-only reference.
-
----
-
-## Firmware build, flash, and monitor
-
-From the **repository root** (where the top-level `CMakeLists.txt` lives):
-
-1. **Set target** (first clone, or when changing chip):
-
-   ```bash
-   idf.py set-target esp32s3
-   ```
-
-   `sdkconfig.defaults` sets **`CONFIG_IDF_TARGET="esp32s3"`**, **BLE only**, **NimBLE** enabled (required for `ble_sen0140.c`).
-
-2. **Configure** (optional): `idf.py menuconfig` — usually unnecessary if defaults match your board.
-
-3. **Build:**
-
-   ```bash
-   idf.py build
-   ```
-
-4. **Flash and serial monitor** (replace `PORT` with your device, e.g. `/dev/tty.usbmodem101`, `COM5`):
-
-   ```bash
-   idf.py -p PORT flash monitor
-   ```
-
-5. **Exit monitor:** `Ctrl-]`.
-
-Expected log lines include SEN0140 init (**SDA/SCL GPIO**), magnetometer detection, **NimBLE** start, and periodic **UART** human + CSV lines (~every **500 ms**). The IMU notification rate to BLE is driven by the sensor task (**20 ms** period in `regattaone-laser.c` → ~50 Hz).
-
-### Main source files
-
-| File | Purpose |
+| Path | Purpose |
 | ---- | ------- |
-| `main/regattaone-laser.c` | `app_main`: NVS, `sen0140_board_init`, `ble_sen0140_init`, sensor FreeRTOS task. |
-| `main/sen0140_10dof.c` / `.h` | I2C driver, chip probe, `sen0140_read_sample`, UART print helpers. |
-| `main/ble_sen0140.c` / `.h` | NimBLE GATT service **0xFEF0**, notify characteristic **0xFEF1**, binary packet layout. |
-| `sdkconfig.defaults` | `esp32s3`, `CONFIG_BT_NIMBLE_ENABLED=y`, Bluedroid off. |
+| `main/regattaone-laser.c` | `app_main`: NVS, I2C mux, SEN0140 (optional), BLE, Notecard, RYUW122 UART task, MSP430 (optional). |
+| `main/ble_sen0140.c` / `.h` | NimBLE service **0xFEF0** and characteristics **0xFEF1–0xFEF9** (see table below). |
+| `main/blues_notecard.c` / `.h` | Blues **serial-over-I2C** to Notecard (default address **0x17**). |
+| `main/ryuw122_uart.c` / `.h` | UART listener → BLE **0xFEF9** notifies. |
+| `main/i2c_bus_mux.c` / `.h` | Mutex so SEN0140 and Notecard can share one I2C bus. |
+| `main/sen0140_10dof.c` / `.h` | Optional DFRobot SEN0140 IMU (legacy; disable by not wiring / init failure). |
+| `main/msp430_*.c` | Optional MSP430 BSL / UART bridge (**`CONFIG_REGATTAONE_MSP430_ENABLE`** default **n**). |
 
 ---
 
-## Web app: install, run, use
+## BLE GATT (Web Bluetooth & other clients)
 
-The UI is an **Ionic 8 + Angular 19** standalone app (same BLE / Three.js / PGA behavior as before, with a clearer header: **Connect / Disconnect** and an **SEN0140 | PGA460** segment control).
+Service **16-bit UUID `0xFEF0`** (full UUID `0000fef0-0000-1000-8000-00805f9b34fb`).
 
-### Install (once)
+| Char | UUID (16-bit) | Direction | Purpose |
+| ---- | ------------- | --------- | ------- |
+| IMU | `0xFEF1` | Notify | Binary IMU packet (`sen0140_ble_imu_pkt_t`) if SEN0140 task runs. |
+| MSP430 UART | `0xFEF2` | Notify | Raw UART bytes (if MSP430 enabled). |
+| MSP430 BSL invoke | `0xFEF3` | Write | BSL entry (if MSP430 enabled). |
+| MSP430 FW upload | `0xFEF4` | Write | Chunked upload (if enabled). |
+| MSP430 flash status | `0xFEF5` | Notify | UTF-8 status lines (if enabled). |
+| MSP430 GPIO | `0xFEF6` | Write | RST/TEST levels (if enabled). |
+| **Notecard request** | **`0xFEF7`** | **Write** | UTF-8 JSON line, **must end with `\n`**. |
+| **Notecard response** | **`0xFEF8`** | **Notify** | UTF-8 JSON response (chunked). |
+| **UWB UART line** | **`0xFEF9`** | **Notify** | UTF-8 line(s) from RYUW122 (chunked if long). |
+
+The maintained web client uses **`0xFEF7` / `0xFEF8` / `0xFEF9`** and **`web/src/lib/protocol.ts`** for those UUIDs.
+
+---
+
+## Web app
+
+**Ionic + Angular** standalone app.
 
 ```bash
 cd web
 npm install
-```
-
-### Development server
-
-```bash
 npm run dev
 ```
 
-Open **Chrome** at **`http://localhost:5173`** (or the host/port shown in the terminal; `npm run start` uses the same defaults).
+Open **Chrome** at **`http://localhost:5173`** (or the URL printed by `ng serve`). Click **Connect Bluetooth**, pick **`RegattaOne-Boat`** (or any device advertising service **`0xFEF0`**), then use **Send to Notecard** and watch the **UWB** log.
 
-### Using the UI (checklist)
-
-1. **Connect Bluetooth** — choose **`RegattaOne-SEN0140`**. Keep the tab in the foreground; some platforms throttle background tabs.
-2. With the **PCB flat and level** on the table, click **Align when flat** once so the 3D model matches your desk reference.
-3. **3D view** — board orientation updates from fused quaternion; grid and colored world axes show +X/+Y/+Z; green **N** is grid “north” (+Z).
-4. **Heading** — numeric readout and bottom-right compass vs green N.
-5. **Bubble level** (top-right) — tilt vs gravity from the IMU (not affected by Align).
-6. **Mag X/Y plot** — optional overlay on the board when mag data is present.
-7. **Camera pan & tilt** — left panel: orbit the **camera** around the fixed look target at the board center (**pan** = yaw around vertical; **tilt** = pitch up/down; distance unchanged). **Reset pan & tilt** restores the default framing. This does **not** change firmware or sensor fusion.
-
-### Production build (optional)
+Production build:
 
 ```bash
-cd web
-npm run build
+cd web && npm run build
 ```
 
-Static output is under **`web/dist/regattaone-web/browser/`** (serve that folder). For a quick local check: `npx ng serve` / `npm run dev` is simpler than a static server.
+Output under **`web/dist/regattaone-web/browser/`** (serve over **HTTPS** if not on localhost—Web Bluetooth requires a secure context).
 
-Serve the built files over **HTTPS** if you host remotely (Web Bluetooth requires a secure context).
-
-A **Vite-only snapshot** of the previous client (if you need it) lives in **`web-vite-legacy/`** at the repo root; the maintained app is **`web/`**.
+A legacy **Vite** snapshot lives in **`web-vite-legacy/`**; day-to-day development uses **`web/`**.
 
 ---
 
-## BLE GATT (for debugging or other clients)
+## Optional: SEN0140 IMU (legacy)
 
-| Item | Value |
-| ---- | ----- |
-| Service UUID (16-bit) | `0xFEF0` → `0000fef0-0000-1000-8000-00805f9b34fb` |
-| IMU notify | `0xFEF1` → `0000fef1-0000-1000-8000-00805f9b34fb` |
-| MSP430 UART notify | `0xFEF2` → `0000fef2-0000-1000-8000-00805f9b34fb` |
-| MSP430 BSL invoke (write, any small payload) | `0xFEF3` → `0000fef3-0000-1000-8000-00805f9b34fb` — ESP32 toggles **RST/TEST** GPIOs per TI SLAU550 §3.3.2; requires wiring from `main/msp430_bsl_invoke.h` defaults |
-| MSP430 FW upload (write, framed chunks) | `0xFEF4` → framed **TI-TXT** transfer + on-device BSL flash (see web MSP430 tab) |
-| MSP430 flash status (notify, UTF-8 lines) | `0xFEF5` → progress / errors during programming |
-
-Packet layout matches **`sen0140_ble_imu_pkt_t`** in `main/ble_sen0140.c` and **`web/src/lib/protocol.ts`** (little-endian): version, flags, seq, accel (g), gyro (rad/s), mag (int16), optional v2 **temp_c** / **press_hpa** floats.
+If the **SEN0140** 10-DOF breakout is wired on the same I2C bus as the Notecard, firmware can still run the IMU task and stream **0xFEF1**. Pin defaults for **ESP32-C3 (XIAO)** are **GPIO6 SDA / GPIO7 SCL** (menuconfig). More detail: **[WIRING-SEN0140.md](WIRING-SEN0140.md)**.
 
 ---
 
-## Repository layout (important paths)
+## Repository layout
 
 ```text
-regattaone-laser/
-├── PGA460 Datasheet.pdf        # TI SLASEJ4C — UART §7.3.6.2 / Table 7-3 (copied into web build as datasheets/)
-├── CMakeLists.txt              # ESP-IDF project root
-├── sdkconfig.defaults          # esp32s3 + NimBLE defaults
+regattaone-boat/
+├── CMakeLists.txt                 # ESP-IDF project root
+├── sdkconfig.defaults             # Shared BT / NimBLE defaults
+├── sdkconfig.defaults.esp32c3     # C3-specific (optional merge)
+├── sdkconfig.defaults.esp32s3     # S3-specific (optional merge)
 ├── main/
-│   ├── CMakeLists.txt
-│   ├── regattaone-laser.c      # app_main + sensor task
-│   ├── sen0140_10dof.c/.h      # I2C / SEN0140
-│   ├── ble_sen0140.c/.h        # NimBLE GATT (IMU + MSP430 UART + BSL write)
-│   ├── msp430_bsl_invoke.c/.h # MSP430 BSL hardware entry (RST/TEST)
-│   ├── msp430_bsl_flash.c/.h  # TI-TXT + SLAU550 UART BSL programming
-│   ├── msp430_fw_upload.c/.h # BLE chunk reassembly → flash task
-│   ├── pga460_uart.c/.h        # PGA460 UART driver (ESP-IDF)
-│   ├── pga460_ussc.c/.h        # TI USSC-style commands (UART port of TI sketch)
-│   ├── PGA460_USSC_PORT.md     # How the USSC reference maps to this firmware
-│   └── PGA460_USSC_G2553.cpp   # TI Energia reference (not compiled; keep for comparison)
-├── web/                        # Ionic + Angular (standalone) client
-│   ├── angular.json
-│   ├── package.json
-│   └── src/
-│       ├── app/                # Shell (Ionic header + segment)
-│       ├── assets/images/      # `sen0140-board.png` — 3D PCB texture (copied from `web-vite-legacy/public/`)
-│       ├── lib/                # protocol, madgwick, magPlot, pgaPanel, plots
-│       ├── regatta-main.ts     # BLE, Three.js, PGA wiring (bootstrapped from AppComponent)
-│       └── regatta-styles.css  # Layout + PGA EVM (from prior Vite app)
-├── web-vite-legacy/            # Optional: previous Vite + vanilla TS client (not the default build)
-├── WIRING-SEN0140.md           # Wiring reference (duplicate of README hardware section)
-├── WIRING-PGA460.md            # PGA460 carrier: power + UART to ESP32-S3
-└── pytest_hello_world.py       # Legacy ESP-IDF CI helper from template (optional)
+│   ├── regattaone-laser.c         # app_main
+│   ├── ble_sen0140.c / .h         # NimBLE GATT
+│   ├── blues_notecard.c / .h    # Notecard I2C
+│   ├── ryuw122_uart.c / .h       # UWB UART → BLE
+│   ├── i2c_bus_mux.c / .h
+│   ├── sen0140_10dof.c / .h     # Optional IMU
+│   ├── msp430_*.c / .h          # Optional MSP430 (off by default)
+│   └── Kconfig.projbuild
+├── web/                           # Angular app (boat UI)
+├── web-vite-legacy/               # Old Vite client (reference)
+├── WIRING-ESP32C3-NOTECARD-UWB.md # Primary wiring guide
+├── WIRING-SEN0140.md             # Optional IMU wiring
+└── .clangd                        # clangd: CompileFlags + build/compile_commands.json
 ```
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Things to check |
-| ------- | ---------------- |
-| **Firmware won’t start / I2C errors** | Wiring table above; 3.3 V; SDA/SCL not swapped; `SEN0140_I2C_SDA_GPIO` / `SCL` match your board; shorter wires; external pull-ups. |
-| **No magnetometer / wrong mag** | Boot log for detected chip; address conflicts; clone boards with QMC5883L instead of HMC. |
-| **Build errors for BT** | `sdkconfig` must have **NimBLE** on, **Bluedroid** off (see `sdkconfig.defaults`). Run `idf.py fullclean` after retargeting. |
-| **Flash fails** | Correct `PORT`, USB cable with data lines, hold BOOT if your board requires it, lower baud in `menuconfig` if needed. |
-| **Chrome: no Bluetooth / no device** | Use **Chrome**; **HTTPS** or **localhost**; Bluetooth on; device not paired only to OS in a way that blocks new connections (remove old pairing if stuck). |
-| **Connects but no motion** | Notifications enabled? Firmware running sensor task? Check status text in UI for packet flags and `dt`. |
-| **Model doesn’t match table** | **Align when flat** with board level; re-run after major firmware/sensor changes. |
-| **Drift / noisy heading** | Move away from metal/PC speakers; mag fusion sensitive to environment; baro/mag optional for basic tilt. |
-
-For ESP-IDF toolchain and CMake details, see the [ESP-IDF build system](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/build-system.html).
+| Symptom | Check |
+| ------- | ----- |
+| **Build fails after retarget** | `idf.py fullclean`, then `set-target` and `build` again. |
+| **No Bluetooth in browser** | Chrome, **HTTPS** or **localhost**, OS Bluetooth on. |
+| **Connect fails** | Firmware running? Correct chip flashed? Device advertising **0xFEF0**? |
+| **Notecard write errors** | JSON ends with **newline**; I2C wiring and **3.3 V**; default Notecard address **0x17**. |
+| **No UWB lines** | UART **TX/RX crossed**; baud matches module (default **115200**); GPIOs match menuconfig. |
+| **clangd / IDE flags** | Run **`idf.py build`** so **`build/compile_commands.json`** exists; `.clangd` points **`CompileFlags.CompilationDatabase`** at **`build`**. |
 
 ---
 
 ## License / origin
 
-`main/regattaone-laser.c` retains SPDX headers from the Espressif template; application-specific files (`sen0140_10dof.*`, `ble_sen0140.*`, `web/`) follow your project licensing choices.
+`main/regattaone-laser.c` retains SPDX headers from the Espressif template. Other files follow your project’s license choices. Blues **serial-over-I2C** behavior is aligned with the public **note-arduino** / Notecard host model; cite Blues when redistributing derived protocol code.
 
 ---
 
-## Quick reference commands
+## Quick reference
 
 ```bash
-# Firmware (from repo root, ESP-IDF exported)
-idf.py set-target esp32s3
+idf.py set-target esp32c3   # or esp32s3
 idf.py build
-idf.py -p PORT flash monitor
+idf.py -p /dev/tty.usbmodem* flash monitor
 
-# Web
 cd web && npm install && npm run dev
 ```
-
-When you return after a long break: **wire per the table → flash firmware → verify UART → `npm install` in `web/` if package.json changed → `npm run dev` → Chrome → Connect → Align when flat → adjust camera pan/tilt as needed.**

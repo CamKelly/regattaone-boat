@@ -49,6 +49,8 @@ The Notecard sits in the **M.2** slot on the carrier; you do **not** wire the M.
 | **SDA** | **GPIO6** | **D4** (often labeled **SDA** on XIAO) |
 | **SCL** | **GPIO7** | **D5** (often labeled **SCL** on XIAO) |
 
+**Important:** pad **D6** is **not** SoC GPIO6 (on XIAO ESP32-C3, **D6** is UART TX / **GPIO21**). Pad **D7** is **not** GPIO7 (**D7** is UART RX / **GPIO20**). If you wire I2C to **D6/D7** by mistake, every I2C transaction will time out. Use **D4/D5** for the defaults above, or set **SEN0140** / **NOTECARD** GPIOs in menuconfig to match the pads you actually use.
+
 These match **Component config → RegattaOne — SEN0140 I2C pins** and **… Blues Notecard …** defaults when the Notecard shares the same bus as the (optional) SEN0140 driver.
 
 ### 2.2 Connection table (XIAO ↔ Notecarrier B)
