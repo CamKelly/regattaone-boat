@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RegattaOne — SEN0140 (BLE)</title>
+  </head>
+  <body data-app-screen="sen0140">
+    <header id="app-top" class="app-top">
+      <div class="app-top-primary">
+        <div class="app-top-ble">
+          <button id="connect" type="button">Connect Bluetooth</button>
+          <button id="disconnect" type="button" disabled>Disconnect</button>
+        </div>
+      </div>
+    </header>
+
+    <div id="ui" class="ui-panel">
+      <div id="screen-sen0140" class="app-screen ui-screen-horiz" role="main">
+        <div class="ui-toolbar-band">
+          <div class="ui-toolbar-row ui-toolbar-row--title">
+            <h1>SEN0140 orientation</h1>
+            <p class="hint">
+              Chrome / Android · HTTPS or <code>localhost</code> · <strong>RegattaOne-SEN0140</strong> ·
+              <strong>Align when flat</strong> once level (zero heel reference); silk <strong>Y</strong> → red arrow,
+              <strong>Z</strong> out of PCB → green +Y. Mount so heading (+Z) matches bow when coaching heel.
+            </p>
+          </div>
+          <div class="ui-toolbar-row ui-toolbar-row--imu">
+            <button id="align" type="button" disabled title="Hold the board flat and level, then click">
+              Align when flat
+            </button>
+            <p class="heading-readout">
+              Heading (+Z): <strong id="hdg-deg">—</strong>°
+              <span class="heading-note">(red = silk +Y)</span>
+            </p>
+            <p class="heel-readout" aria-live="polite">
+              Heel: <strong id="heel-deg">—</strong>° · Rate: <strong id="heel-rate">—</strong>°/s
+              <span class="heel-note">− port · + stbd · uses Align</span>
+            </p>
+            <label class="mag-plot-toggle">
+              <input id="mag-plot-toggle" type="checkbox" />
+              Telemetry strip
+            </label>
+          </div>
+          <div class="ui-toolbar-row ui-toolbar-row--orbit">
+            <div class="view-orbit" id="view-orbit">
+              <div class="view-orbit-head">
+                <span class="view-orbit-title">Pan &amp; tilt</span>
+                <span class="view-orbit-hint-inline"
+                  >Pan = left/right; tilt = up/down · fixed distance</span
+                >
+              </div>
+              <div class="view-orbit-blocks">
+                <div class="view-orbit-block">
+                  <span class="view-orbit-sub"
+                    >Pan <span class="view-orbit-readout" id="view-pan-deg" aria-live="polite">0.00°</span></span
+                  >
+                  <div class="view-orbit-row">
+                    <button type="button" id="view-pan-cc15">−15°</button>
+                    <button type="button" id="view-pan-c15">+15°</button>
+                    <button type="button" id="view-pan-cc1">−1°</button>
+                    <button type="button" id="view-pan-c1">+1°</button>
+                    <button type="button" id="view-pan-cc025">−0.25°</button>
+                    <button type="button" id="view-pan-c025">+0.25°</button>
+                  </div>
+                </div>
+                <div class="view-orbit-block">
+                  <span class="view-orbit-sub"
+                    >Tilt <span class="view-orbit-readout" id="view-tilt-deg" aria-live="polite">0.00°</span></span
+                  >
+                  <div class="view-orbit-row">
+                    <button type="button" id="view-tilt-cc15">−15°</button>
+                    <button type="button" id="view-tilt-c15">+15°</button>
+                    <button type="button" id="view-tilt-cc1">−1°</button>
+                    <button type="button" id="view-tilt-c1">+1°</button>
+                    <button type="button" id="view-tilt-cc025">−0.25°</button>
+                    <button type="button" id="view-tilt-c025">+0.25°</button>
+                    <button type="button" id="view-orbit-reset" class="view-orbit-reset">Reset</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="ui-toolbar-row ui-toolbar-row--stream">
+            <div class="imu-stream-block">
+              <span class="imu-stream-label">Live 10-DOF</span>
+              <pre id="status" class="imu-stream-status">Disconnected</pre>
+            </div>
+          </div>
+          <div id="telemetry-strip" class="telemetry-strip telemetry-strip--embedded" hidden>
+            <canvas id="telemetry-canvas" aria-label="Live telemetry time series"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="bubble-level" aria-label="Board tilt vs gravity" title="Tilt from vertical (uses IMU; not affected by Align)">
+      <span class="bubble-level-title">Level</span>
+      <div class="bubble-vial">
+        <div class="bubble-ring"></div>
+        <div class="bubble-dot" id="bubble-dot"></div>
+      </div>
+      <span class="bubble-tilt" id="bubble-tilt">—</span>
+    </div>
+    <div id="compass" aria-hidden="true" title="Board forward vs grid north">
+      <span class="compass-n">N</span>
+      <div class="compass-face">
+        <div class="compass-needle" id="compass-needle"></div>
+      </div>
+    </div>
+    <canvas id="c"></canvas>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

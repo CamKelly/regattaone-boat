@@ -1,0 +1,24 @@
+{
+  "cmake.cmakePath": "/opt/homebrew/bin/cmake",
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.openOcdConfigs": [
+    "board/esp32c3-builtin.cfg"
+  ],
+  "idf.port": "/dev/tty.usbmodem1101",
+  "idf.enableSerialPortChipIdRequest": false,
+  "idf.currentSetup": "/Users/cameronkelly/.espressif/v6.0/esp-idf",
+  "idf.enableIdfComponentManager": false,
+  "idf.customExtraVars": {
+    "OPENOCD_SCRIPTS": "/Users/cameronkelly/.espressif/tools/openocd-esp32/v0.11.0-esp32-20220706/openocd-esp32/share/openocd/scripts",
+    "ESP_ROM_ELF_DIR": "/Users/cameronkelly/.espressif/tools/esp-rom-elfs/20220823/",
+    "IDF_COMPONENT_MANAGER": "0",
+    "IDF_TARGET": "esp32c3"
+  },
+  "clangd.path": "/Users/cameronkelly/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=/Users/cameronkelly/regattaone-boat/build"
+  ],
+  "idf.flashType": "UART"
+}

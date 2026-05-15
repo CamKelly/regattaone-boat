@@ -1,0 +1,17 @@
+# NimBLE — Web Bluetooth (see main/ble_sen0140.c, web/).
+# Chip target: `idf.py set-target esp32s3` | `esp32c3` (uses sdkconfig.defaults.<chip>).
+# Note: CONFIG_BTDM_* applies only to ESP32 / ESP32-S3; omit here so ESP32-C3 builds stay BLE-only.
+# Flash size: set per target in `sdkconfig.defaults.esp32c3` / `sdkconfig.defaults.esp32s3`.
+
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_GAP_SERVICE=y
+# Quieter serial: hides routine “GATT procedure …” INFO lines (use ERROR for less).
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+
+# IMU FEF1 notifies (42 B) + link-layer backlog; margin for future GATT traffic.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=96
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=96

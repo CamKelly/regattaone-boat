@@ -1,0 +1,14 @@
+# ESP32 / ESP32-S3 dual-mode controller: force BLE-only (no Classic BT).
+# Many ESP32-S3 Mini / DevKit modules use 8 MB — avoids spi_flash header vs chip mismatch warning.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
+CONFIG_BTDM_CTRL_MODE_BTDM=n
+
+# SEN0140 on ESP32-S3 Mini (header IO10/IO11) — see WIRING-SEN0140.md.
+CONFIG_SEN0140_I2C_SDA_GPIO=10
+CONFIG_SEN0140_I2C_SCL_GPIO=11
+
+# MSP430 BSL GPIO + UART bridge (RST/TEST + TX/RX). Disable in menuconfig for IMU-only bring-up.
+CONFIG_REGATTAONE_MSP430_ENABLE=y

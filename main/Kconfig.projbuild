@@ -1,0 +1,115 @@
+menu "RegattaOne — Blues Notecard (LoRa, I2C)"
+
+    config REGATTAONE_NOTECARD_ENABLE
+        bool "Enable Blues Notecard over I2C (serial-over-I2C)"
+        default y
+        help
+            When enabled, GATT writes to 0xFEF7 run JSON transactions on the Notecard (default address 0x17).
+            Shares the SEN0140 I2C bus when that bus exists; otherwise creates a dedicated bus on NOTECARD pins.
+
+    config NOTECARD_I2C_ADDR_7BIT
+        hex "Notecard 7-bit I2C address"
+        default 0x17
+        help
+            Blues default is 0x17 unless changed with a card.io request.
+
+    config NOTECARD_I2C_FREQ_HZ
+        int "Notecard I2C clock (Hz)"
+        default 100000
+
+    config NOTECARD_I2C_PORT_NUM
+        int "I2C port (0 = I2C_NUM_0)"
+        range 0 1
+        default 0
+
+    config NOTECARD_I2C_SDA_GPIO
+        int "Standalone Notecard bus SDA GPIO (used only if SEN0140 bus is unavailable)"
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 48
+        default 6 if IDF_TARGET_ESP32C3
+        default 10
+
+    config NOTECARD_I2C_SCL_GPIO
+        int "Standalone Notecard bus SCL GPIO (used only if SEN0140 bus is unavailable)"
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 48
+        default 7 if IDF_TARGET_ESP32C3
+        default 11
+
+endmenu
+
+menu "RegattaOne — REYAX RYUW122 (UWB UART)"
+
+    config REGATTAONE_RYUW122_ENABLE
+        bool "Enable RYUW122 UART listener → BLE 0xFEF9"
+        default y
+        help
+            UART lines (terminated by LF) are forwarded to Web Bluetooth as notifies on 0xFEF9.
+
+    config RYUW122_UART_PORT_NUM
+        int "UART controller (1 = UART_NUM_1; keep UART0 for USB console)"
+        range 0 1
+        default 1
+
+    config RYUW122_UART_BAUD
+        int "UART baud rate"
+        default 115200
+
+    config RYUW122_UART_TX_GPIO
+        int "UWB module RX ← ESP TX (GPIO)"
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 48
+        default 5 if IDF_TARGET_ESP32C3
+        default 17
+
+    config RYUW122_UART_RX_GPIO
+        int "UWB module TX → ESP RX (GPIO)"
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 48
+        default 4 if IDF_TARGET_ESP32C3
+        default 18
+
+endmenu
+
+menu "RegattaOne — MSP430"
+
+    config REGATTAONE_MSP430_ENABLE
+        bool "Enable MSP430 BSL GPIO + UART bridge"
+        default n
+        help
+            When disabled, the app does not touch RST/TEST GPIOs or the MSP430 UART peripheral.
+            Use this for IMU-only bring-up (SEN0140 + BLE). Enable when the MSP430 is connected.
+
+endmenu
+
+menu "RegattaOne — SEN0140 I2C pins"
+
+    config SEN0140_I2C_SDA_GPIO
+        int "GPIO for SEN0140 I2C SDA"
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 39 if IDF_TARGET_ESP32
+        range 0 48
+        default 6 if IDF_TARGET_ESP32C3
+        default 10
+        help
+            ESP32-C3: only GPIO 0–21 exist on the chip (XIAO D4 = GPIO6).
+            ESP32-S3: GPIO up to 48 (many packages omit some numbers).
+            Set to match your wiring, then idf.py build.
+
+    config SEN0140_I2C_SCL_GPIO
+        int "GPIO for SEN0140 I2C SCL"
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 39 if IDF_TARGET_ESP32
+        range 0 48
+        default 7 if IDF_TARGET_ESP32C3
+        default 11
+        help
+            ESP32-C3: only GPIO 0–21 (XIAO D5 = GPIO7).
+
+endmenu
