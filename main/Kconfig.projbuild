@@ -57,8 +57,15 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
             XIAO ESP32-C3: use UART1 on D2/D3. UART0 (D6/D7) shares the USB-serial chip.
 
     config RYUW122_UART_BAUD
-        int "UART baud rate (factory default 9600; probe tries 9600 then 115200)"
-        default 9600
+        int "UART baud after probe (REYAX default 115200; boot probes 115200/9600/57600)"
+        default 115200
+
+    config RYUW122_BOOT_DELAY_MS
+        int "Delay after UART init before AT probe (module power-up)"
+        range 0 5000
+        default 500
+        help
+            RYUW122 may need hundreds of ms after power before UART responds.
 
     config RYUW122_UART_TX_GPIO
         int "UWB module RX ← ESP TX (GPIO)"

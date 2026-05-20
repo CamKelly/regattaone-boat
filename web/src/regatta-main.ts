@@ -21,7 +21,7 @@ let statusEl: HTMLElement | null = null;
 let bleStatusEl: HTMLElement | null = null;
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-05-20a";
+const WEB_BLE_REV = "2026-05-20b";
 
 const notecardRspAcc: number[] = [];
 let uwbLineLogText = "";
@@ -104,7 +104,7 @@ function onUwbLineNotify(ev: Event): void {
   if (!v) {
     return;
   }
-  const s = new TextDecoder().decode(v.buffer);
+  const s = new TextDecoder().decode(v);
   if (s.length > 0) {
     appendUwbLog(s.endsWith("\n") ? s : `${s}\n`);
   }

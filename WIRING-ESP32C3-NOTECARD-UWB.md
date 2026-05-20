@@ -74,32 +74,47 @@ These match **Component config → RegattaOne — SEN0140 I2C pins** and **… B
 
 ## 3. REYAX RYUW122 Lite — UART
 
-The module is controlled over **UART** (default **115200 8N1** in this project; confirm with REYAX AT manual / your module defaults).
+The module is controlled over **UART** (**115200 8N1** factory default per REYAX; firmware also probes **9600** and **57600** at boot).
 
-### 3.1 Default UART in this firmware
+### 3.1 RYUW122_Lite 6-pin header (count pin 1 at VDD)
+
+Many bring-up failures are **wrong pin on this header** (silk says RX/TX but order is not “top to bottom = RX, TX”).
+
+| Pin | Name | Connect to XIAO |
+| --- | ---- | ---------------- |
+| **1** | **VDD** | **3V3** |
+| **2** | **NRST** | **3V3** (or leave open if module has pull-up — must **not** sit at GND) |
+| **3** | **RXD** | **D3 / GPIO5** (ESP **TX** → module **receive**) |
+| **4** | **TXD** | **D2 / GPIO4** (ESP **RX** ← module **transmit**) |
+| **5** | **PA7** | Leave **unconnected** (do **not** tie to GND — **low = sleep**, UART may not answer) |
+| **6** | **GND** | **GND** |
+
+### 3.2 Default UART in this firmware
 
 | Role | ESP32-C3 **GPIO** | Seeed XIAO ESP32-C3 **pad** (typical) |
 | ---- | ----------------- | ------------------------------------- |
-| **ESP TX** (to module **RX**) | **GPIO5** | **D3** |
-| **ESP RX** (from module **TX**) | **GPIO4** | **D2** |
+| **ESP TX** (to module **RXD** pin 3) | **GPIO5** | **D3** |
+| **ESP RX** (from module **TXD** pin 4) | **GPIO4** | **D2** |
 
-**Do not use D6/D7 for REYAX** — those pads go to the USB–serial chip. With USB plugged in, UWB on D6/D7 will not work. Use **UART1** on **D2/D3** so USB and REYAX can run together.
+**Do not use D6/D7 for REYAX** — those pads are **UART0 / USB–serial**. With USB plugged in, wiring the module to D6/D7 gives **no bytes on RX** even though IMU/Notecard work. Use **UART1** on **D2/D3**.
 
-### 3.2 Connection table (XIAO ↔ RYUW122_Lite)
+At boot, firmware tries **menuconfig TX/RX** then **swapped TX/RX** and logs which layout gets `+OK`.
 
-| XIAO ESP32-C3 | RYUW122_Lite (typical UART labels) |
-| ------------- | ---------------------------------- |
-| **3V3** | **VDD** / **VCC** (3.3 V) |
-| **GND** | **GND** |
-| **D3 / GPIO5** (MCU **TX**) | **RX** (module receive) |
-| **D2 / GPIO4** (MCU **RX**) | **TX** (module transmit) |
+### 3.3 Connection table (XIAO ↔ RYUW122_Lite)
 
-Always **cross** TX and RX as above.
+| XIAO ESP32-C3 | RYUW122_Lite |
+| ------------- | ------------ |
+| **3V3** | Pin **1** VDD |
+| **GND** | Pin **6** GND |
+| **D3 / GPIO5** (MCU **TX**) | Pin **3** **RXD** |
+| **D2 / GPIO4** (MCU **RX**) | Pin **4** **TXD** |
 
-### 3.3 Baud rate
+Always **cross** data lines: MCU TX → module RXD, MCU RX ← module TXD.
 
-- Firmware default: **`CONFIG_RYUW122_UART_BAUD` = 115200** (menuconfig).
-- If you change the module’s UART rate via AT commands, set the **same** value in menuconfig and rebuild.
+### 3.4 Baud rate
+
+- REYAX default: **115200** (`CONFIG_RYUW122_UART_BAUD`; boot also probes 9600 / 57600).
+- If you changed rate with `AT+IPR`, match menuconfig or reset the module.
 
 ---
 
