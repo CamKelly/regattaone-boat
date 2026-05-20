@@ -49,36 +49,36 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
             UART lines (terminated by LF) are forwarded to Web Bluetooth as notifies on 0xFEF9.
 
     config RYUW122_UART_PORT_NUM
-        int "UART controller (0 = UART_NUM_0)"
+        int "UART controller (1 = UART_NUM_1 on XIAO; do not use 0 — D6/D7 are USB)"
         range 0 1
-        default 0 if IDF_TARGET_ESP32C3
+        default 1 if IDF_TARGET_ESP32C3
         default 1
         help
-            ESP32-C3 XIAO with UWB on D6/D7: use UART0 and USB Serial/JTAG for idf monitor (see sdkconfig.defaults.esp32c3).
+            XIAO ESP32-C3: use UART1 on D2/D3. UART0 (D6/D7) shares the USB-serial chip.
 
     config RYUW122_UART_BAUD
-        int "UART baud rate"
-        default 115200
+        int "UART baud rate (factory default 9600; probe tries 9600 then 115200)"
+        default 9600
 
     config RYUW122_UART_TX_GPIO
         int "UWB module RX ← ESP TX (GPIO)"
         range 0 21 if IDF_TARGET_ESP32C3
         range 0 48 if IDF_TARGET_ESP32S3
         range 0 48
-        default 21 if IDF_TARGET_ESP32C3
+        default 5 if IDF_TARGET_ESP32C3
         default 17
         help
-            ESP32-C3 Seeed XIAO: pad D6 = SoC GPIO21 (UART TX). Same pads as USB-serial on many boards.
+            XIAO ESP32-C3: pad D3 = GPIO5 (ESP TX → module RX). Not D6 (GPIO21 = USB).
 
     config RYUW122_UART_RX_GPIO
         int "UWB module TX → ESP RX (GPIO)"
         range 0 21 if IDF_TARGET_ESP32C3
         range 0 48 if IDF_TARGET_ESP32S3
         range 0 48
-        default 20 if IDF_TARGET_ESP32C3
+        default 4 if IDF_TARGET_ESP32C3
         default 18
         help
-            ESP32-C3 Seeed XIAO: pad D7 = SoC GPIO20 (UART RX).
+            XIAO ESP32-C3: pad D2 = GPIO4 (ESP RX ← module TX). Not D7 (GPIO20 = USB).
 
 endmenu
 
