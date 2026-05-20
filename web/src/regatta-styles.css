@@ -365,6 +365,10 @@ body[data-app-tab="radio"] #compass {
   max-width: min(400px, 100%);
   margin-top: 2px;
 }
+body[data-app-screen="boat"] .imu-stream-block {
+  max-width: none;
+  width: 100%;
+}
 .imu-stream-label {
   display: block;
   font-size: 0.62rem;
@@ -2496,4 +2500,99 @@ body[data-app-screen="boat"] .boat-main-panel {
 }
 body[data-app-screen="boat"] .msp430-uart-log {
   max-height: min(28vh, 280px);
+}
+body[data-app-screen="boat"] .uwb-line-log {
+  min-height: 8rem;
+}
+body[data-app-screen="boat"] .boat-section {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(51, 65, 85, 0.45);
+}
+body[data-app-screen="boat"] .boat-section:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+body[data-app-screen="boat"] .radio-h3 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin: 0.75rem 0 0.35rem;
+}
+body[data-app-screen="boat"] .imu-meta-line {
+  margin: 0 0 0.5rem;
+  white-space: nowrap;
+  overflow: visible;
+}
+body[data-app-screen="boat"] .imu-connection-line {
+  max-height: none;
+  overflow: visible;
+  white-space: nowrap;
+  word-break: normal;
+}
+body[data-app-screen="boat"] .sensor-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.55fr) minmax(140px, 1fr) minmax(120px, 0.95fr) minmax(72px, 0.55fr) minmax(
+      88px,
+      0.65fr
+    );
+  gap: 8px;
+  align-items: stretch;
+}
+@media (max-width: 900px) {
+  body[data-app-screen="boat"] .sensor-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  body[data-app-screen="boat"] .sensor-card--accel {
+    grid-column: 1 / -1;
+  }
+}
+body[data-app-screen="boat"] .sensor-card {
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(51, 65, 85, 0.55);
+  border-radius: 8px;
+  min-width: 0;
+}
+body[data-app-screen="boat"] .sensor-card--accel .sensor-card-value {
+  white-space: nowrap;
+  font-size: 0.68rem;
+}
+body[data-app-screen="boat"] .sensor-card-label {
+  display: block;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+body[data-app-screen="boat"] .sensor-card-value {
+  display: block;
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #e2e8f0;
+  word-break: break-word;
+}
+body[data-app-screen="boat"] .uwb-at-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+body[data-app-screen="boat"] .uwb-at-input {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  padding: 8px 10px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(71, 85, 105, 0.65);
+  border-radius: 6px;
+}
+body[data-app-screen="boat"] .uwb-at-input:disabled {
+  opacity: 0.5;
 }

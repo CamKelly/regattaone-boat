@@ -32,43 +32,84 @@ import { startRegattaApp } from "../regatta-main";
         <div id="screen-boat" class="app-screen ui-screen-horiz boat-screen" role="main">
           <div class="ui-toolbar-band boat-toolbar-band">
             <div class="ui-toolbar-row ui-toolbar-row--title">
-              <h1>LoRa (Blues Notecard) + UWB (RYUW122)</h1>
+              <h1>IMU · UWB · Notecard</h1>
               <p class="hint">
-                Chrome · HTTPS or <code>localhost</code> · Web Bluetooth · device name e.g.
-                <strong>RegattaOne-Boat</strong> · service <code>0xFEF0</code>.
+                Chrome · HTTPS or <code>localhost</code> · <strong>RegattaOne-Boat</strong> · service
+                <code>0xFEF0</code>
               </p>
             </div>
             <div class="ui-toolbar-row ui-toolbar-row--stream">
               <div class="imu-stream-block">
-                <span class="imu-stream-label">Status</span>
-                <pre id="boat-status" class="imu-stream-status">Disconnected</pre>
+                <span class="imu-stream-label">Connection</span>
+                <pre id="boat-status" class="imu-stream-status imu-connection-line">Disconnected</pre>
               </div>
             </div>
-            <div class="msp430-uart-panel boat-main-panel">
-              <div class="msp430-sub-head">
-                <p class="hint">
-                  <a href="https://shop.blues.com/products/notecard-lora" target="_blank" rel="noopener">Notecard for LoRa</a>
-                  over I2C. <a href="https://reyax.com/products/RYUW122_Lite" target="_blank" rel="noopener">RYUW122_Lite</a>
-                  over UART — lines arrive on notify <code>0xFEF9</code>. Each Notecard request must end with a
-                  newline character (e.g. <code>&#123;"req":"hub.status"&#125;</code> then press Enter before Send).
-                </p>
+
+            <section class="boat-section" aria-labelledby="imu-heading">
+              <h2 id="imu-heading" class="radio-h2">SEN0140 IMU <code>0xFEF1</code></h2>
+              <p id="imu-meta" class="hint imu-meta-line">Connect to stream accel, gyro, mag, temperature, and pressure.</p>
+              <div class="sensor-grid" aria-live="polite">
+                <div class="sensor-card sensor-card--accel">
+                  <span class="sensor-card-label">Accelerometer</span>
+                  <span id="imu-accel" class="sensor-card-value">—</span>
+                </div>
+                <div class="sensor-card">
+                  <span class="sensor-card-label">Gyroscope</span>
+                  <span id="imu-gyro" class="sensor-card-value">—</span>
+                </div>
+                <div class="sensor-card">
+                  <span class="sensor-card-label">Magnetometer</span>
+                  <span id="imu-mag" class="sensor-card-value">—</span>
+                </div>
+                <div class="sensor-card">
+                  <span class="sensor-card-label">Temperature</span>
+                  <span id="imu-temp" class="sensor-card-value">—</span>
+                </div>
+                <div class="sensor-card">
+                  <span class="sensor-card-label">Barometer</span>
+                  <span id="imu-baro" class="sensor-card-value">—</span>
+                </div>
               </div>
-              <label class="hint" for="notecard-json"><strong>Notecard JSON</strong> (GATT write <code>0xFEF7</code>)</label>
+            </section>
+
+            <section class="boat-section" aria-labelledby="uwb-heading">
+              <h2 id="uwb-heading" class="radio-h2">REYAX RYUW122 <code>0xFEFA</code> / <code>0xFEF9</code></h2>
+              <p class="hint">
+                Send AT commands (e.g. <code>AT</code>). Firmware appends <code>CRLF</code> if needed; responses appear below.
+              </p>
+              <label class="hint" for="uwb-at-input"><strong>AT command</strong></label>
+              <div class="uwb-at-row">
+                <input
+                  id="uwb-at-input"
+                  class="uwb-at-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="AT"
+                  disabled
+                />
+                <button type="button" id="uwb-at-send" class="msp430-uart-btn" disabled>Send AT</button>
+              </div>
+              <h3 class="radio-h3">UART log</h3>
+              <pre id="uwb-line-log" class="msp430-uart-log uwb-line-log" aria-live="polite"></pre>
+            </section>
+
+            <section class="boat-section boat-section--notecard" aria-labelledby="nc-heading">
+              <h2 id="nc-heading" class="radio-h2">Blues Notecard <code>0xFEF7</code></h2>
+              <label class="hint" for="notecard-json"><strong>Notecard JSON</strong> (newline-terminated)</label>
               <textarea
                 id="notecard-json"
                 class="notecard-json-ta"
-                rows="5"
+                rows="4"
                 spellcheck="false"
                 placeholder='{"req":"hub.status"}'
               ></textarea>
-              <div class="msp430-uart-actions" style="margin-top: 0.5rem">
+              <div class="msp430-uart-actions">
                 <button type="button" id="notecard-send" class="msp430-uart-btn" disabled>Send to Notecard</button>
               </div>
-              <h2 class="radio-h2">Notecard response (<code>0xFEF8</code>)</h2>
+              <h3 class="radio-h3">Notecard response <code>0xFEF8</code></h3>
               <pre id="notecard-rsp-log" class="msp430-uart-log" aria-live="polite"></pre>
-              <h2 class="radio-h2">UWB UART (<code>0xFEF9</code>)</h2>
-              <pre id="uwb-line-log" class="msp430-uart-log" aria-live="polite"></pre>
-            </div>
+            </section>
           </div>
         </div>
       </div>

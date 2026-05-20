@@ -27,6 +27,9 @@
 #if CONFIG_REGATTAONE_NOTECARD_ENABLE
 #include "blues_notecard.h"
 #endif
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+#include "ryuw122_uart.h"
+#endif
 #include "msp430_bsl_invoke.h"
 #include "msp430_fw_upload.h"
 #if CONFIG_REGATTAONE_MSP430_ENABLE
@@ -48,6 +51,8 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_NOTECARD_REQ_UUID  0xfef7
 #define SEN0140_GATT_NOTECARD_RSP_UUID  0xfef8
 #define SEN0140_GATT_UWB_LINE_UUID      0xfef9
+/** Write: UTF-8 AT command (CRLF appended if missing); response lines on FEF9 notify. */
+#define SEN0140_GATT_UWB_AT_UUID        0xfefa
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 200U
@@ -363,6 +368,46 @@ static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, 
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+static int gatt_svr_access_uwb_at(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                  void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_READ_NOT_PERMITTED;
+    }
+    uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+    if (om_len == 0U || om_len > 256U) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    uint8_t buf[260];
+    if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    size_t n = om_len;
+    if (n < 2U || buf[n - 2U] != '\r' || buf[n - 1U] != '\n') {
+        if (n >= sizeof(buf) - 2U) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (n > 0U && buf[n - 1U] == '\n') {
+            buf[n - 1U] = '\r';
+            buf[n++] = '\n';
+        } else {
+            buf[n++] = '\r';
+            buf[n++] = '\n';
+        }
+    }
+    esp_err_t err = ryuw122_uart_write(buf, n);
+    return (err == ESP_OK) ? 0 : BLE_ATT_ERR_UNLIKELY;
+#else
+    (void)ctxt;
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+#endif
+}
+
 static const struct ble_gatt_svc_def s_gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -420,6 +465,11 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .access_cb = gatt_svr_access_uwb_line,
                     .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                     .val_handle = &s_uwb_line_chr_val_handle,
+                },
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_UWB_AT_UUID),
+                    .access_cb = gatt_svr_access_uwb_at,
+                    .flags = BLE_GATT_CHR_F_WRITE,
                 },
                 {
                     0,
@@ -632,11 +682,11 @@ esp_err_t ble_sen0140_init(void)
 
     ESP_LOGI(TAG, "NimBLE host task started — watch for \"stack sync\" then \"GAP advertising\"");
     ESP_LOGI(TAG,
-             "NimBLE GATT (svc %04x imu %04x uart %04x bsl %04x fw %04x prog %04x gpio %04x nc_req %04x nc_rsp %04x uwb %04x)",
+             "NimBLE GATT (svc %04x imu %04x uart %04x bsl %04x fw %04x prog %04x gpio %04x nc_req %04x nc_rsp %04x uwb %04x uwb_at %04x)",
              SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_UART_CHR_UUID,
              SEN0140_GATT_BSL_CHR_UUID, SEN0140_GATT_FW_CHR_UUID, SEN0140_GATT_PROG_STATUS_CHR_UUID,
              SEN0140_GATT_GPIO_CHR_UUID, SEN0140_GATT_NOTECARD_REQ_UUID, SEN0140_GATT_NOTECARD_RSP_UUID,
-             SEN0140_GATT_UWB_LINE_UUID);
+             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID);
     return ESP_OK;
 }
 

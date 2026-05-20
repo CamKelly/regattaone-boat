@@ -49,9 +49,12 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
             UART lines (terminated by LF) are forwarded to Web Bluetooth as notifies on 0xFEF9.
 
     config RYUW122_UART_PORT_NUM
-        int "UART controller (1 = UART_NUM_1; keep UART0 for USB console)"
+        int "UART controller (0 = UART_NUM_0)"
         range 0 1
+        default 0 if IDF_TARGET_ESP32C3
         default 1
+        help
+            ESP32-C3 XIAO with UWB on D6/D7: use UART0 and USB Serial/JTAG for idf monitor (see sdkconfig.defaults.esp32c3).
 
     config RYUW122_UART_BAUD
         int "UART baud rate"
@@ -62,16 +65,20 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         range 0 21 if IDF_TARGET_ESP32C3
         range 0 48 if IDF_TARGET_ESP32S3
         range 0 48
-        default 5 if IDF_TARGET_ESP32C3
+        default 21 if IDF_TARGET_ESP32C3
         default 17
+        help
+            ESP32-C3 Seeed XIAO: pad D6 = SoC GPIO21 (UART TX). Same pads as USB-serial on many boards.
 
     config RYUW122_UART_RX_GPIO
         int "UWB module TX → ESP RX (GPIO)"
         range 0 21 if IDF_TARGET_ESP32C3
         range 0 48 if IDF_TARGET_ESP32S3
         range 0 48
-        default 4 if IDF_TARGET_ESP32C3
+        default 20 if IDF_TARGET_ESP32C3
         default 18
+        help
+            ESP32-C3 Seeed XIAO: pad D7 = SoC GPIO20 (UART RX).
 
 endmenu
 

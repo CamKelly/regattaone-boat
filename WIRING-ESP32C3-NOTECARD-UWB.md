@@ -80,10 +80,10 @@ The module is controlled over **UART** (default **115200 8N1** in this project; 
 
 | Role | ESP32-C3 **GPIO** | Seeed XIAO ESP32-C3 **pad** (typical) |
 | ---- | ----------------- | ------------------------------------- |
-| **ESP TX** (to module **RX**) | **GPIO5** | **D3** |
-| **ESP RX** (from module **TX**) | **GPIO4** | **D2** |
+| **ESP TX** (to module **RX**) | **GPIO21** | **D6** |
+| **ESP RX** (from module **TX**) | **GPIO20** | **D7** |
 
-These are **UART1** in firmware (`RYUW122_UART_PORT_NUM` default **1**) so **UART0** stays available for the USB bridge / console.
+**Note:** D6/D7 are the same pads as the XIAO’s USB-serial UART on many boards. Firmware uses **UART1** on these pins (`RYUW122_UART_PORT_NUM` default **1**). IMU I2C stays on **D4/D5** (GPIO6/7) — do not confuse D6 with “GPIO6”.
 
 ### 3.2 Connection table (XIAO ↔ RYUW122_Lite)
 
@@ -91,8 +91,8 @@ These are **UART1** in firmware (`RYUW122_UART_PORT_NUM` default **1**) so **UAR
 | ------------- | ---------------------------------- |
 | **3V3** | **VDD** / **VCC** (3.3 V) |
 | **GND** | **GND** |
-| **D3 / GPIO5** (MCU **TX**) | **RX** (module receive) |
-| **D2 / GPIO4** (MCU **RX**) | **TX** (module transmit) |
+| **D6 / GPIO21** (MCU **TX**) | **RX** (module receive) |
+| **D7 / GPIO20** (MCU **RX**) | **TX** (module transmit) |
 
 Always **cross** TX and RX as above.
 
@@ -134,7 +134,7 @@ Avoid strapping-sensitive pins and pins reserved for **flash** or **USB/JTAG** o
                     │                     │
                     │ GPIO6/7 ─I2C───────┼────► Notecarrier B → Notecard (LoRa)
                     │                     │        (SDA/SCL, 3V3, GND)
-                    │ GPIO4/5 ─UART1─────┼────► RYUW122_Lite (RX/TX, 3V3, GND)
+                    │ GPIO20/21 ─UART1───┼────► RYUW122_Lite (RX/TX, 3V3, GND)
                     │                     │
                     └─────────────────────┘
 ```

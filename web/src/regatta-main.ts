@@ -1,22 +1,35 @@
+import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
+  BLE_IMU_CHAR_UUID,
   BLE_NOTECARD_REQ_CHAR_UUID,
   BLE_NOTECARD_RSP_CHAR_UUID,
   BLE_SERVICE_UUID,
+  BLE_UWB_AT_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
 } from "./lib/protocol";
 
 let gatt: BluetoothRemoteGATTServer | null = null;
+let charImu: BluetoothRemoteGATTCharacteristic | null = null;
 let charNotecardReq: BluetoothRemoteGATTCharacteristic | null = null;
 let charNotecardRsp: BluetoothRemoteGATTCharacteristic | null = null;
 let charUwbLine: BluetoothRemoteGATTCharacteristic | null = null;
+let charUwbAt: BluetoothRemoteGATTCharacteristic | null = null;
 
 let connectBtn!: HTMLButtonElement;
 let disconnectBtn!: HTMLButtonElement;
 let statusEl: HTMLElement | null = null;
 let bleStatusEl: HTMLElement | null = null;
 
+/** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
+const WEB_BLE_REV = "2026-05-20a";
+
 const notecardRspAcc: number[] = [];
 let uwbLineLogText = "";
+let lastImuWallMs = 0;
+
+function bleErrMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
 
 function setBleToolbar(text: string): void {
   if (bleStatusEl) {
@@ -30,10 +43,25 @@ function setStatus(text: string): void {
   }
 }
 
-function syncSendBtn(): void {
-  const sendBtn = document.querySelector<HTMLButtonElement>("#notecard-send");
-  if (sendBtn) {
-    sendBtn.disabled = charNotecardReq === null;
+function setText(id: string, text: string): void {
+  const el = document.querySelector(`#${id}`);
+  if (el) {
+    el.textContent = text;
+  }
+}
+
+function syncActionButtons(): void {
+  const ncSend = document.querySelector<HTMLButtonElement>("#notecard-send");
+  const uwbSend = document.querySelector<HTMLButtonElement>("#uwb-at-send");
+  const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
+  if (ncSend) {
+    ncSend.disabled = charNotecardReq === null;
+  }
+  if (uwbSend) {
+    uwbSend.disabled = charUwbAt === null;
+  }
+  if (uwbInput) {
+    uwbInput.disabled = charUwbAt === null;
   }
 }
 
@@ -43,6 +71,18 @@ function renderNotecardRspFromAcc(): void {
     return;
   }
   el.textContent = new TextDecoder().decode(new Uint8Array(notecardRspAcc));
+}
+
+function appendUwbLog(chunk: string): void {
+  uwbLineLogText += chunk;
+  if (uwbLineLogText.length > 16000) {
+    uwbLineLogText = uwbLineLogText.slice(-12000);
+  }
+  const el = document.querySelector("#uwb-line-log");
+  if (el) {
+    el.textContent = uwbLineLogText;
+    el.scrollTop = el.scrollHeight;
+  }
 }
 
 function onNotecardRspNotify(ev: Event): void {
@@ -65,14 +105,43 @@ function onUwbLineNotify(ev: Event): void {
     return;
   }
   const s = new TextDecoder().decode(v.buffer);
-  uwbLineLogText += s;
-  if (uwbLineLogText.length > 12000) {
-    uwbLineLogText = uwbLineLogText.slice(-8000);
+  if (s.length > 0) {
+    appendUwbLog(s.endsWith("\n") ? s : `${s}\n`);
   }
-  const el = document.querySelector("#uwb-line-log");
-  if (el) {
-    el.textContent = uwbLineLogText;
+}
+
+function onImuNotify(ev: Event): void {
+  const ch = ev.target as BluetoothRemoteGATTCharacteristic;
+  const v = ch.value;
+  if (!v || v.byteLength < PKT_MIN_SIZE) {
+    return;
   }
+  const pkt = parseImuPacket(v);
+  if (!pkt) {
+    return;
+  }
+
+  const now = performance.now();
+  const dtMs = lastImuWallMs > 0 ? now - lastImuWallMs : 0;
+  lastImuWallMs = now;
+
+  const f = formatImuFields(pkt);
+  setText("imu-accel", f.accel);
+  setText("imu-gyro", f.gyro);
+  setText("imu-mag", f.mag);
+  setText("imu-temp", f.temp);
+  setText("imu-baro", f.baro);
+  setText("imu-meta", `${f.meta}${dtMs > 0 ? ` · ${dtMs.toFixed(0)} ms` : ""}`);
+}
+
+function resetImuDisplay(): void {
+  lastImuWallMs = 0;
+  setText("imu-accel", "—");
+  setText("imu-gyro", "—");
+  setText("imu-mag", "—");
+  setText("imu-temp", "—");
+  setText("imu-baro", "—");
+  setText("imu-meta", "Connect to stream accel, gyro, mag, temperature, and pressure.");
 }
 
 async function sendNotecardRequest(): Promise<void> {
@@ -100,6 +169,24 @@ async function sendNotecardRequest(): Promise<void> {
   }
 }
 
+async function sendUwbAt(): Promise<void> {
+  if (!charUwbAt) {
+    return;
+  }
+  const input = document.querySelector<HTMLInputElement>("#uwb-at-input");
+  let cmd = (input?.value ?? "").trim();
+  if (!cmd) {
+    return;
+  }
+  appendUwbLog(`> ${cmd}\n`);
+  try {
+    await charUwbAt.writeValue(new TextEncoder().encode(cmd));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    appendUwbLog(`! BLE write error: ${msg}\n`);
+  }
+}
+
 async function connectBle(): Promise<void> {
   if (!navigator.bluetooth) {
     setStatus("Web Bluetooth not available. Use Chrome on HTTPS or localhost.");
@@ -113,7 +200,14 @@ async function connectBle(): Promise<void> {
   try {
     const dev = await navigator.bluetooth.requestDevice({
       filters: [{ services: [BLE_SERVICE_UUID] }],
-      optionalServices: [BLE_SERVICE_UUID],
+      optionalServices: [
+        BLE_SERVICE_UUID,
+        BLE_IMU_CHAR_UUID,
+        BLE_NOTECARD_REQ_CHAR_UUID,
+        BLE_NOTECARD_RSP_CHAR_UUID,
+        BLE_UWB_LINE_CHAR_UUID,
+        BLE_UWB_AT_CHAR_UUID,
+      ],
     });
 
     setStatus(`Connecting to ${dev.name ?? "device"}…`);
@@ -130,57 +224,88 @@ async function connectBle(): Promise<void> {
 
     const svc = await gatt.getPrimaryService(BLE_SERVICE_UUID);
 
+    charImu = null;
     charNotecardReq = null;
     charNotecardRsp = null;
     charUwbLine = null;
+    charUwbAt = null;
+
+    const parts: string[] = [`Web BLE ${WEB_BLE_REV}`];
 
     try {
-      charNotecardReq = await svc.getCharacteristic(BLE_NOTECARD_REQ_CHAR_UUID);
-    } catch {
-      charNotecardReq = null;
+      charImu = await svc.getCharacteristic(BLE_IMU_CHAR_UUID);
+      charImu.addEventListener("characteristicvaluechanged", onImuNotify);
+      await charImu.startNotifications();
+      parts.push("IMU ✓");
+    } catch (e) {
+      charImu = null;
+      parts.push("IMU ✗");
+      console.error("BLE IMU", e);
     }
     try {
-      charNotecardRsp = await svc.getCharacteristic(BLE_NOTECARD_RSP_CHAR_UUID);
-      charNotecardRsp.addEventListener("characteristicvaluechanged", onNotecardRspNotify);
-      await charNotecardRsp.startNotifications();
-    } catch {
-      charNotecardRsp = null;
+      charUwbAt = await svc.getCharacteristic(BLE_UWB_AT_CHAR_UUID);
+      parts.push("UWB AT ✓");
+    } catch (e) {
+      charUwbAt = null;
+      parts.push("UWB AT ✗");
+      console.error("BLE UWB AT", e);
     }
     try {
       charUwbLine = await svc.getCharacteristic(BLE_UWB_LINE_CHAR_UUID);
       charUwbLine.addEventListener("characteristicvaluechanged", onUwbLineNotify);
       await charUwbLine.startNotifications();
-    } catch {
+      parts.push("UWB RX ✓");
+    } catch (e) {
       charUwbLine = null;
+      parts.push("UWB RX ✗");
+      console.error("BLE UWB line", e);
+    }
+    try {
+      charNotecardReq = await svc.getCharacteristic(BLE_NOTECARD_REQ_CHAR_UUID);
+      parts.push("NC req ✓");
+    } catch (e) {
+      charNotecardReq = null;
+      parts.push("NC req —");
+    }
+    try {
+      charNotecardRsp = await svc.getCharacteristic(BLE_NOTECARD_RSP_CHAR_UUID);
+      charNotecardRsp.addEventListener("characteristicvaluechanged", onNotecardRspNotify);
+      await charNotecardRsp.startNotifications();
+      parts.push("NC rsp ✓");
+    } catch (e) {
+      charNotecardRsp = null;
+      parts.push("NC rsp —");
     }
 
-    syncSendBtn();
+    syncActionButtons();
     disconnectBtn.disabled = false;
     setBleToolbar(`BLE: ${dev.name ?? "connected"}`);
-    setStatus("Connected. Send Notecard JSON (newline-terminated) or watch UWB UART lines below.");
+    setStatus(parts.join(" · "));
     dev.addEventListener("gattserverdisconnected", onDisconnected);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     setStatus(`Error: ${msg}`);
     setBleToolbar("BLE: —");
     connectBtn.disabled = false;
-    charNotecardRsp?.removeEventListener("characteristicvaluechanged", onNotecardRspNotify);
-    charUwbLine?.removeEventListener("characteristicvaluechanged", onUwbLineNotify);
-    charNotecardReq = null;
-    charNotecardRsp = null;
-    charUwbLine = null;
-    syncSendBtn();
+    teardownChars();
     gatt = null;
   }
 }
 
-function onDisconnected(): void {
+function teardownChars(): void {
+  charImu?.removeEventListener("characteristicvaluechanged", onImuNotify);
   charNotecardRsp?.removeEventListener("characteristicvaluechanged", onNotecardRspNotify);
   charUwbLine?.removeEventListener("characteristicvaluechanged", onUwbLineNotify);
+  charImu = null;
   charNotecardReq = null;
   charNotecardRsp = null;
   charUwbLine = null;
-  syncSendBtn();
+  charUwbAt = null;
+  syncActionButtons();
+}
+
+function onDisconnected(): void {
+  teardownChars();
   gatt = null;
   disconnectBtn.disabled = true;
   connectBtn.disabled = false;
@@ -192,6 +317,7 @@ function onDisconnected(): void {
   if (uwbEl) {
     uwbEl.textContent = "";
   }
+  resetImuDisplay();
   setStatus("Disconnected");
 }
 
@@ -214,11 +340,18 @@ export function startRegattaApp(): void {
   bleStatusEl = document.querySelector("#ble-status");
 
   document.querySelector("#notecard-send")?.addEventListener("click", () => void sendNotecardRequest());
+  document.querySelector("#uwb-at-send")?.addEventListener("click", () => void sendUwbAt());
+  document.querySelector("#uwb-at-input")?.addEventListener("keydown", (ev) => {
+    if (ev instanceof KeyboardEvent && ev.key === "Enter") {
+      void sendUwbAt();
+    }
+  });
 
   connectBtn.addEventListener("click", () => void connectBle());
   disconnectBtn.addEventListener("click", () => void disconnectBle());
 
   setBleToolbar("BLE: —");
-  setStatus("Disconnected. Choose a device advertising the RegattaOne service (e.g. RegattaOne-Boat).");
-  syncSendBtn();
+  resetImuDisplay();
+  setStatus(`Disconnected. Connect to RegattaOne-Boat (service 0xFEF0).\nWeb BLE ${WEB_BLE_REV} — hard-refresh (Cmd+Shift+R) if IMU/AT stay disabled.`);
+  syncActionButtons();
 }
