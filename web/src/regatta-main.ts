@@ -5,11 +5,7 @@ import {
   BLE_NOTECARD_RSP_CHAR_UUID,
   BLE_SERVICE_UUID,
   BLE_UWB_AT_CHAR_UUID,
-  BLE_UWB_CFG_CHAR_UUID,
-  BLE_UWB_DIST_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
-  type UwbConfig,
-  type UwbDistanceSample,
 } from "./lib/protocol";
 
 let gatt: BluetoothRemoteGATTServer | null = null;
@@ -18,8 +14,6 @@ let charNotecardReq: BluetoothRemoteGATTCharacteristic | null = null;
 let charNotecardRsp: BluetoothRemoteGATTCharacteristic | null = null;
 let charUwbLine: BluetoothRemoteGATTCharacteristic | null = null;
 let charUwbAt: BluetoothRemoteGATTCharacteristic | null = null;
-let charUwbCfg: BluetoothRemoteGATTCharacteristic | null = null;
-let charUwbDist: BluetoothRemoteGATTCharacteristic | null = null;
 
 let connectBtn!: HTMLButtonElement;
 let disconnectBtn!: HTMLButtonElement;
@@ -27,19 +21,7 @@ let statusEl: HTMLElement | null = null;
 let bleStatusEl: HTMLElement | null = null;
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-05-22a";
-
-const DEFAULT_UWB_CONFIG: UwbConfig = {
-  role: "tag",
-  networkId: "REYAX123",
-  address: "DAVID123",
-  password: "00000000000000000000000000000000",
-  peerAddress: "DAVID123",
-  anchorPayload: "TEST",
-  tagPayload: "HELLO",
-  rangeIntervalMs: 500,
-  autoRange: true,
-};
+const WEB_BLE_REV = "2026-05-20b";
 
 const notecardRspAcc: number[] = [];
 let uwbLineLogText = "";
@@ -72,10 +54,6 @@ function syncActionButtons(): void {
   const ncSend = document.querySelector<HTMLButtonElement>("#notecard-send");
   const uwbSend = document.querySelector<HTMLButtonElement>("#uwb-at-send");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  const uwbApply = document.querySelector<HTMLButtonElement>("#uwb-apply");
-  const uwbFields = document.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-    "#uwb-role, #uwb-network-id, #uwb-address, #uwb-peer, #uwb-password, #uwb-range-ms, #uwb-auto-range",
-  );
   if (ncSend) {
     ncSend.disabled = charNotecardReq === null;
   }
@@ -84,121 +62,6 @@ function syncActionButtons(): void {
   }
   if (uwbInput) {
     uwbInput.disabled = charUwbAt === null;
-  }
-  if (uwbApply) {
-    uwbApply.disabled = charUwbCfg === null;
-  }
-  for (const el of uwbFields) {
-    el.disabled = charUwbCfg === null;
-  }
-}
-
-function readUwbForm(): UwbConfig {
-  const roleEl = document.querySelector<HTMLSelectElement>("#uwb-role");
-  const role = roleEl?.value === "anchor" ? "anchor" : "tag";
-  return {
-    role,
-    networkId: document.querySelector<HTMLInputElement>("#uwb-network-id")?.value.trim() ?? DEFAULT_UWB_CONFIG.networkId,
-    address: document.querySelector<HTMLInputElement>("#uwb-address")?.value.trim() ?? DEFAULT_UWB_CONFIG.address,
-    password: document.querySelector<HTMLInputElement>("#uwb-password")?.value.trim() ?? DEFAULT_UWB_CONFIG.password,
-    peerAddress: document.querySelector<HTMLInputElement>("#uwb-peer")?.value.trim() ?? DEFAULT_UWB_CONFIG.peerAddress,
-    anchorPayload: DEFAULT_UWB_CONFIG.anchorPayload,
-    tagPayload: DEFAULT_UWB_CONFIG.tagPayload,
-    rangeIntervalMs: Number(document.querySelector<HTMLInputElement>("#uwb-range-ms")?.value) || 500,
-    autoRange: document.querySelector<HTMLInputElement>("#uwb-auto-range")?.checked ?? true,
-  };
-}
-
-function fillUwbForm(cfg: UwbConfig): void {
-  const roleEl = document.querySelector<HTMLSelectElement>("#uwb-role");
-  if (roleEl) {
-    roleEl.value = cfg.role;
-  }
-  const set = (id: string, v: string | number | boolean): void => {
-    const el = document.querySelector<HTMLInputElement | HTMLSelectElement>(`#${id}`);
-    if (!el) {
-      return;
-    }
-    if (el instanceof HTMLInputElement && el.type === "checkbox") {
-      el.checked = Boolean(v);
-    } else {
-      el.value = String(v);
-    }
-  };
-  set("uwb-network-id", cfg.networkId);
-  set("uwb-address", cfg.address);
-  set("uwb-peer", cfg.peerAddress);
-  set("uwb-password", cfg.password);
-  set("uwb-range-ms", cfg.rangeIntervalMs);
-  set("uwb-auto-range", cfg.autoRange);
-}
-
-function setUwbDistance(cm: number | null, peer?: string): void {
-  const val = document.querySelector("#uwb-distance");
-  const meta = document.querySelector("#uwb-distance-meta");
-  if (val) {
-    val.textContent = cm === null ? "—" : `${cm.toFixed(1)} cm`;
-  }
-  if (meta) {
-    meta.textContent = peer ? `peer ${peer}` : "";
-  }
-}
-
-async function loadUwbConfigFromDevice(): Promise<void> {
-  if (!charUwbCfg) {
-    fillUwbForm(DEFAULT_UWB_CONFIG);
-    return;
-  }
-  try {
-    const v = await charUwbCfg.readValue();
-    const text = new TextDecoder().decode(v);
-    const parsed = JSON.parse(text) as Partial<UwbConfig>;
-    fillUwbForm({ ...DEFAULT_UWB_CONFIG, ...parsed });
-  } catch {
-    fillUwbForm(DEFAULT_UWB_CONFIG);
-  }
-}
-
-async function applyUwbConfig(): Promise<void> {
-  if (!charUwbCfg) {
-    return;
-  }
-  const cfg = readUwbForm();
-  if (cfg.networkId.length !== 8 || cfg.address.length !== 8) {
-    setStatus("UWB: network ID and address must be exactly 8 characters.");
-    return;
-  }
-  if (cfg.role === "anchor" && cfg.peerAddress.length !== 8) {
-    setStatus("UWB: peer tag address must be 8 characters for anchor mode.");
-    return;
-  }
-  if (cfg.password.length !== 32 || !/^[0-9A-Fa-f]{32}$/.test(cfg.password)) {
-    setStatus("UWB: password must be 32 hex digits.");
-    return;
-  }
-  try {
-    const body = new TextEncoder().encode(JSON.stringify(cfg));
-    await charUwbCfg.writeValue(body);
-    setStatus(`UWB config applied (${cfg.role}). BLE name should show -${cfg.role}. Reconnect if needed.`);
-    setUwbDistance(null);
-  } catch (e) {
-    setStatus(`UWB apply failed: ${bleErrMsg(e)}`);
-  }
-}
-
-function onUwbDistNotify(ev: Event): void {
-  const ch = ev.target as BluetoothRemoteGATTCharacteristic;
-  const v = ch.value;
-  if (!v) {
-    return;
-  }
-  try {
-    const sample = JSON.parse(new TextDecoder().decode(v)) as UwbDistanceSample;
-    if (typeof sample.d_cm === "number") {
-      setUwbDistance(sample.d_cm, sample.peer);
-    }
-  } catch {
-    /* ignore malformed */
   }
 }
 
@@ -344,8 +207,6 @@ async function connectBle(): Promise<void> {
         BLE_NOTECARD_RSP_CHAR_UUID,
         BLE_UWB_LINE_CHAR_UUID,
         BLE_UWB_AT_CHAR_UUID,
-        BLE_UWB_CFG_CHAR_UUID,
-        BLE_UWB_DIST_CHAR_UUID,
       ],
     });
 
@@ -368,8 +229,6 @@ async function connectBle(): Promise<void> {
     charNotecardRsp = null;
     charUwbLine = null;
     charUwbAt = null;
-    charUwbCfg = null;
-    charUwbDist = null;
 
     const parts: string[] = [`Web BLE ${WEB_BLE_REV}`];
 
@@ -382,26 +241,6 @@ async function connectBle(): Promise<void> {
       charImu = null;
       parts.push("IMU ✗");
       console.error("BLE IMU", e);
-    }
-    try {
-      charUwbCfg = await svc.getCharacteristic(BLE_UWB_CFG_CHAR_UUID);
-      await loadUwbConfigFromDevice();
-      parts.push("UWB cfg ✓");
-    } catch (e) {
-      charUwbCfg = null;
-      fillUwbForm(DEFAULT_UWB_CONFIG);
-      parts.push("UWB cfg ✗");
-      console.error("BLE UWB cfg", e);
-    }
-    try {
-      charUwbDist = await svc.getCharacteristic(BLE_UWB_DIST_CHAR_UUID);
-      charUwbDist.addEventListener("characteristicvaluechanged", onUwbDistNotify);
-      await charUwbDist.startNotifications();
-      parts.push("UWB dist ✓");
-    } catch (e) {
-      charUwbDist = null;
-      parts.push("UWB dist ✗");
-      console.error("BLE UWB dist", e);
     }
     try {
       charUwbAt = await svc.getCharacteristic(BLE_UWB_AT_CHAR_UUID);
@@ -457,14 +296,11 @@ function teardownChars(): void {
   charImu?.removeEventListener("characteristicvaluechanged", onImuNotify);
   charNotecardRsp?.removeEventListener("characteristicvaluechanged", onNotecardRspNotify);
   charUwbLine?.removeEventListener("characteristicvaluechanged", onUwbLineNotify);
-  charUwbDist?.removeEventListener("characteristicvaluechanged", onUwbDistNotify);
   charImu = null;
   charNotecardReq = null;
   charNotecardRsp = null;
   charUwbLine = null;
   charUwbAt = null;
-  charUwbCfg = null;
-  charUwbDist = null;
   syncActionButtons();
 }
 
@@ -482,8 +318,6 @@ function onDisconnected(): void {
     uwbEl.textContent = "";
   }
   resetImuDisplay();
-  fillUwbForm(DEFAULT_UWB_CONFIG);
-  setUwbDistance(null);
   setStatus("Disconnected");
 }
 
@@ -506,7 +340,6 @@ export function startRegattaApp(): void {
   bleStatusEl = document.querySelector("#ble-status");
 
   document.querySelector("#notecard-send")?.addEventListener("click", () => void sendNotecardRequest());
-  document.querySelector("#uwb-apply")?.addEventListener("click", () => void applyUwbConfig());
   document.querySelector("#uwb-at-send")?.addEventListener("click", () => void sendUwbAt());
   document.querySelector("#uwb-at-input")?.addEventListener("keydown", (ev) => {
     if (ev instanceof KeyboardEvent && ev.key === "Enter") {
@@ -519,10 +352,6 @@ export function startRegattaApp(): void {
 
   setBleToolbar("BLE: —");
   resetImuDisplay();
-  fillUwbForm(DEFAULT_UWB_CONFIG);
-  setUwbDistance(null);
-  setStatus(
-    `Disconnected. Look for RegattaOne-Boat-anchor or RegattaOne-Boat-tag (service 0xFEF0).\nWeb BLE ${WEB_BLE_REV} — hard-refresh if characteristics stay disabled.`,
-  );
+  setStatus(`Disconnected. Connect to RegattaOne-Boat (service 0xFEF0).\nWeb BLE ${WEB_BLE_REV} — hard-refresh (Cmd+Shift+R) if IMU/AT stay disabled.`);
   syncActionButtons();
 }

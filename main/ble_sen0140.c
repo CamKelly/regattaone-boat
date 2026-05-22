@@ -28,7 +28,6 @@
 #include "blues_notecard.h"
 #endif
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
-#include "ryuw122_config.h"
 #include "ryuw122_uart.h"
 #endif
 #include "msp430_bsl_invoke.h"
@@ -54,13 +53,6 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_UWB_LINE_UUID      0xfef9
 /** Write: UTF-8 AT command (CRLF appended if missing); response lines on FEF9 notify. */
 #define SEN0140_GATT_UWB_AT_UUID        0xfefa
-/** Read/Write: JSON UWB test config (role, networkId, address, password, peer, autoRange). */
-#define SEN0140_GATT_UWB_CFG_UUID       0xfefb
-/** Notify: JSON distance `{"d_cm":40,"peer":"DAVID123"}`. */
-#define SEN0140_GATT_UWB_DIST_UUID      0xfefc
-
-#define BLE_GAP_NAME_BASE "RegattaOne-Boat"
-#define BLE_GAP_NAME_MAX  31
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 200U
@@ -96,15 +88,12 @@ static uint16_t s_fw_chr_val_handle;
 static uint16_t s_prog_status_chr_val_handle;
 static uint16_t s_notecard_rsp_chr_val_handle;
 static uint16_t s_uwb_line_chr_val_handle;
-static uint16_t s_uwb_dist_chr_val_handle;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
-static char s_ble_gap_name[BLE_GAP_NAME_MAX + 1] = BLE_GAP_NAME_BASE "-tag";
 static bool s_notify_enabled;
 static bool s_uart_notify_enabled;
 static bool s_prog_notify_enabled;
 static bool s_notecard_rsp_notify_enabled;
 static bool s_uwb_line_notify_enabled;
-static bool s_uwb_dist_notify_enabled;
 static uint16_t s_seq;
 
 /**
@@ -151,7 +140,6 @@ static bool subscribe_attr_matches_chr(uint16_t sub_attr_handle, uint16_t chr_va
 static uint8_t s_ble_own_addr_type;
 
 static void ble_advertise(void);
-static void ble_set_gap_name_from_cfg(const ryuw122_config_t *cfg);
 
 static int gatt_svr_access_imu(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                void *arg)
@@ -380,63 +368,6 @@ static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, 
     return BLE_ATT_ERR_UNLIKELY;
 }
 
-static int gatt_svr_access_uwb_cfg(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
-                                 void *arg)
-{
-    (void)conn_handle;
-    (void)attr_handle;
-    (void)arg;
-
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        ryuw122_config_t cfg;
-        (void)ryuw122_config_load(&cfg);
-        char *json = NULL;
-        if (ryuw122_config_to_json(&cfg, &json) != ESP_OK || !json) {
-            return BLE_ATT_ERR_UNLIKELY;
-        }
-        int rc = os_mbuf_append(ctxt->om, json, (uint16_t)strlen(json)) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
-        free(json);
-        return rc;
-    }
-    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (om_len == 0U || om_len > 512U) {
-            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-        }
-        char buf[513];
-        if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
-            return BLE_ATT_ERR_UNLIKELY;
-        }
-        ryuw122_config_t cfg;
-        (void)ryuw122_config_load(&cfg);
-        if (ryuw122_config_from_json(buf, om_len, &cfg) != ESP_OK) {
-            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-        }
-        if (ryuw122_config_update(&cfg) != ESP_OK) {
-            return BLE_ATT_ERR_UNLIKELY;
-        }
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
-#else
-    (void)ctxt;
-    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
-#endif
-}
-
-static int gatt_svr_access_uwb_dist(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
-                                    void *arg)
-{
-    (void)conn_handle;
-    (void)attr_handle;
-    (void)arg;
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
-}
-
 static int gatt_svr_access_uwb_at(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                   void *arg)
 {
@@ -541,17 +472,6 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .flags = BLE_GATT_CHR_F_WRITE,
                 },
                 {
-                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_UWB_CFG_UUID),
-                    .access_cb = gatt_svr_access_uwb_cfg,
-                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
-                },
-                {
-                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_UWB_DIST_UUID),
-                    .access_cb = gatt_svr_access_uwb_dist,
-                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-                    .val_handle = &s_uwb_dist_chr_val_handle,
-                },
-                {
                     0,
                 },
             },
@@ -618,7 +538,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_prog_notify_enabled = false;
         s_notecard_rsp_notify_enabled = false;
         s_uwb_line_notify_enabled = false;
-        s_uwb_dist_notify_enabled = false;
         msp430_fw_upload_abort();
 #if CONFIG_REGATTAONE_MSP430_ENABLE
         (void)msp430_uart_apply_config(115200, UART_PARITY_DISABLE);
@@ -656,10 +575,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_uwb_line_notify_enabled = event->subscribe.cur_notify;
             ESP_LOGI(TAG, "uwb line notify=%d", (int)s_uwb_line_notify_enabled);
         }
-        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_uwb_dist_chr_val_handle)) {
-            s_uwb_dist_notify_enabled = event->subscribe.cur_notify;
-            ESP_LOGI(TAG, "uwb dist notify=%d", (int)s_uwb_dist_notify_enabled);
-        }
         return 0;
 
     case BLE_GAP_EVENT_MTU:
@@ -669,17 +584,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     default:
         return 0;
     }
-}
-
-static void ble_set_gap_name_from_cfg(const ryuw122_config_t *cfg)
-{
-    const char *suffix = "-tag";
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-    if (cfg) {
-        suffix = ryuw122_config_role_suffix(cfg->role);
-    }
-#endif
-    snprintf(s_ble_gap_name, sizeof(s_ble_gap_name), "%s%s", BLE_GAP_NAME_BASE, suffix);
 }
 
 static void ble_advertise(void)
@@ -693,8 +597,9 @@ static void ble_advertise(void)
     fields.tx_pwr_lvl_is_present = 1;
     fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
-    fields.name = (uint8_t *)s_ble_gap_name;
-    fields.name_len = strlen(s_ble_gap_name);
+    const char *name = "RegattaOne-Boat";
+    fields.name = (uint8_t *)name;
+    fields.name_len = strlen(name);
     fields.name_is_complete = 1;
 
     fields.uuids16 = (ble_uuid16_t[]){ BLE_UUID16_INIT(SEN0140_GATT_SVC_UUID) };
@@ -714,29 +619,9 @@ static void ble_advertise(void)
     if (rc != 0) {
         ESP_LOGE(TAG, "adv_start rc=%d", rc);
     } else {
-        ESP_LOGI(TAG, "GAP advertising (connectable), name %s", s_ble_gap_name);
+        ESP_LOGI(TAG, "GAP advertising (connectable), name RegattaOne-Boat");
     }
 }
-
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-void ble_sen0140_uwb_refresh_advertise(const ryuw122_config_t *cfg)
-{
-    ble_set_gap_name_from_cfg(cfg);
-    int rc = ble_svc_gap_device_name_set(s_ble_gap_name);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "device_name set rc=%d", rc);
-    }
-    if (ble_gap_adv_active()) {
-        (void)ble_gap_adv_stop();
-    }
-    ble_advertise();
-}
-#else
-void ble_sen0140_uwb_refresh_advertise(const ryuw122_config_t *cfg)
-{
-    (void)cfg;
-}
-#endif
 
 static void on_reset(int reason)
 {
@@ -786,14 +671,7 @@ esp_err_t ble_sen0140_init(void)
         return ESP_FAIL;
     }
 
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-    ryuw122_config_t cfg;
-    (void)ryuw122_config_load(&cfg);
-    ble_set_gap_name_from_cfg(&cfg);
-#else
-    ble_set_gap_name_from_cfg(NULL);
-#endif
-    rc = ble_svc_gap_device_name_set(s_ble_gap_name);
+    rc = ble_svc_gap_device_name_set("RegattaOne-Boat");
     if (rc != 0) {
         ESP_LOGE(TAG, "device_name rc=%d", rc);
     }
@@ -808,40 +686,9 @@ esp_err_t ble_sen0140_init(void)
              SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_UART_CHR_UUID,
              SEN0140_GATT_BSL_CHR_UUID, SEN0140_GATT_FW_CHR_UUID, SEN0140_GATT_PROG_STATUS_CHR_UUID,
              SEN0140_GATT_GPIO_CHR_UUID, SEN0140_GATT_NOTECARD_REQ_UUID, SEN0140_GATT_NOTECARD_RSP_UUID,
-             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID, SEN0140_GATT_UWB_CFG_UUID,
-             SEN0140_GATT_UWB_DIST_UUID);
+             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID);
     return ESP_OK;
 }
-
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-void ble_sen0140_uwb_distance_notify(float dist_cm, const char *peer_address)
-{
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_uwb_dist_notify_enabled) {
-        return;
-    }
-    char json[96];
-    const char *peer = peer_address ? peer_address : "";
-    int n = snprintf(json, sizeof(json), "{\"d_cm\":%.2f,\"peer\":\"%s\"}", (double)dist_cm, peer);
-    if (n <= 0 || n >= (int)sizeof(json)) {
-        return;
-    }
-    ble_notify_take();
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(json, (uint16_t)n);
-    if (om) {
-        int nrc = ble_gatts_notify_custom(s_conn_handle, s_uwb_dist_chr_val_handle, om);
-        if (nrc != 0) {
-            ESP_LOGW(TAG, "uwb dist notify rc=%d", nrc);
-        }
-    }
-    ble_notify_give();
-}
-#else
-void ble_sen0140_uwb_distance_notify(float dist_cm, const char *peer_address)
-{
-    (void)dist_cm;
-    (void)peer_address;
-}
-#endif
 
 void ble_sen0140_prog_status_notify(const char *msg)
 {

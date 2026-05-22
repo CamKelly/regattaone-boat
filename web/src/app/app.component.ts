@@ -34,8 +34,7 @@ import { startRegattaApp } from "../regatta-main";
             <div class="ui-toolbar-row ui-toolbar-row--title">
               <h1>IMU · UWB · Notecard</h1>
               <p class="hint">
-                Chrome · HTTPS or <code>localhost</code> · BLE name
-                <strong>RegattaOne-Boat-anchor</strong> or <strong>RegattaOne-Boat-tag</strong> · service
+                Chrome · HTTPS or <code>localhost</code> · <strong>RegattaOne-Boat</strong> · service
                 <code>0xFEF0</code>
               </p>
             </div>
@@ -74,42 +73,7 @@ import { startRegattaApp } from "../regatta-main";
             </section>
 
             <section class="boat-section" aria-labelledby="uwb-heading">
-              <h2 id="uwb-heading" class="radio-h2">REYAX RYUW122 test <code>0xFEFB</code> / <code>0xFEFC</code></h2>
-              <p class="hint">
-                Flash one board as <strong>anchor</strong> and one as <strong>tag</strong> with the same 8-byte
-                network ID and 32-digit password. Anchor polls the tag address for distance (REYAX AT manual).
-              </p>
-              <div class="uwb-test-grid">
-                <label class="hint" for="uwb-role"><strong>Role</strong></label>
-                <select id="uwb-role" class="uwb-field" disabled>
-                  <option value="tag">Tag (AT+MODE=0)</option>
-                  <option value="anchor">Anchor (AT+MODE=1)</option>
-                </select>
-                <label class="hint" for="uwb-network-id"><strong>Network ID</strong> (8 chars)</label>
-                <input id="uwb-network-id" class="uwb-field" type="text" maxlength="8" spellcheck="false" disabled />
-                <label class="hint" for="uwb-address"><strong>This address</strong> (8 chars)</label>
-                <input id="uwb-address" class="uwb-field" type="text" maxlength="8" spellcheck="false" disabled />
-                <label class="hint" for="uwb-peer"><strong>Peer tag address</strong> (anchor only)</label>
-                <input id="uwb-peer" class="uwb-field" type="text" maxlength="8" spellcheck="false" disabled />
-                <label class="hint" for="uwb-password"><strong>Password</strong> (32 hex)</label>
-                <input id="uwb-password" class="uwb-field uwb-field--wide" type="text" maxlength="32" spellcheck="false" disabled />
-                <label class="hint" for="uwb-range-ms"><strong>Poll interval (ms)</strong></label>
-                <input id="uwb-range-ms" class="uwb-field" type="number" min="100" max="60000" value="500" disabled />
-                <label class="hint uwb-check-label" for="uwb-auto-range">
-                  <input id="uwb-auto-range" type="checkbox" disabled />
-                  Auto ranging (ANCHOR_SEND / TAG_SEND loop)
-                </label>
-              </div>
-              <div class="msp430-uart-actions">
-                <button type="button" id="uwb-apply" class="msp430-uart-btn" disabled>Apply &amp; save to module</button>
-              </div>
-              <div class="uwb-distance-block" aria-live="polite">
-                <span class="uwb-distance-label">Distance</span>
-                <span id="uwb-distance" class="uwb-distance-value">—</span>
-                <span id="uwb-distance-meta" class="hint uwb-distance-meta"></span>
-                <span class="hint uwb-distance-hint">Shown on the anchor device when ranging is active.</span>
-              </div>
-              <h3 class="radio-h3">Manual AT <code>0xFEFA</code> / log <code>0xFEF9</code></h3>
+              <h2 id="uwb-heading" class="radio-h2">REYAX RYUW122 <code>0xFEFA</code> / <code>0xFEF9</code></h2>
               <p class="hint">
                 Send AT commands (e.g. <code>AT</code>). Firmware appends <code>CRLF</code> if needed; responses appear below.
               </p>

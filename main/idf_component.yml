@@ -1,3 +1,0 @@
-## IDF 6.x: built-in `json` was removed; use managed cJSON for UWB BLE config.
-dependencies:
-  espressif/cjson: "^1.7.19"

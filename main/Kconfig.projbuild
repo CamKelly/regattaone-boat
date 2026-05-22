@@ -87,51 +87,6 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         help
             XIAO ESP32-C3: pad D2 = GPIO4 (ESP RX ← module TX). Not D7 (GPIO20 = USB).
 
-    choice RYUW122_DEFAULT_ROLE
-        prompt "Default UWB role (NVS overrides after BLE save)"
-        default RYUW122_DEFAULT_ROLE_TAG
-        help
-            Anchor polls a tag address (AT+ANCHOR_SEND); tag advertises payload (AT+TAG_SEND).
-
-        config RYUW122_DEFAULT_ROLE_TAG
-            bool "TAG"
-        config RYUW122_DEFAULT_ROLE_ANCHOR
-            bool "ANCHOR"
-    endchoice
-
-    config RYUW122_DEFAULT_NETWORKID
-        string "Default network ID (8 ASCII, AT+NETWORKID)"
-        default "REYAX123"
-
-    config RYUW122_DEFAULT_ADDRESS
-        string "Default module address (8 ASCII, AT+ADDRESS)"
-        default "DAVID123"
-
-    config RYUW122_DEFAULT_PEER_ADDRESS
-        string "Default peer tag address for anchor ranging"
-        default "DAVID123"
-
-    config RYUW122_DEFAULT_PASSWORD
-        string "Default AES password (32 hex, AT+CPIN)"
-        default "00000000000000000000000000000000"
-
-    config RYUW122_DEFAULT_ANCHOR_PAYLOAD
-        string "Default ANCHOR_SEND payload (≤12 ASCII)"
-        default "TEST"
-
-    config RYUW122_DEFAULT_TAG_PAYLOAD
-        string "Default TAG_SEND payload (≤12 ASCII)"
-        default "HELLO"
-
-    config RYUW122_DEFAULT_RANGE_MS
-        int "Default ranging interval (ms)"
-        range 100 60000
-        default 500
-
-    config RYUW122_DEFAULT_AUTO_RANGE
-        bool "Auto-start ranging after boot apply"
-        default y
-
 endmenu
 
 menu "RegattaOne — MSP430"
