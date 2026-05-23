@@ -13,6 +13,7 @@
 #include "sdkconfig.h"
 
 #include "ble_sen0140.h"
+#include "boat_id.h"
 #include "blues_notecard.h"
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
@@ -64,6 +65,7 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    ESP_ERROR_CHECK(boat_id_init());
 
     ESP_LOGI(
         TAG,

@@ -13,3 +13,9 @@ export const BLE_NOTECARD_RSP_CHAR_UUID = "0000fef8-0000-1000-8000-00805f9b34fb"
 export const BLE_UWB_LINE_CHAR_UUID = "0000fef9-0000-1000-8000-00805f9b34fb";
 /** Write UTF-8 AT command to RYUW122 (firmware appends CRLF if missing). */
 export const BLE_UWB_AT_CHAR_UUID = "0000fefa-0000-1000-8000-00805f9b34fb";
+/** Read/write user-assigned boat id (UTF-8, max 32 chars, stored in device NVS). */
+export const BLE_BOAT_ID_CHAR_UUID = "0000fefb-0000-1000-8000-00805f9b34fb";
+
+export const BOAT_ID_MAX_LEN = 32;
+/** Max chars in BLE scan name (legacy ADV packet limit with service UUID). */
+export const BOAT_ID_BLE_NAME_MAX_LEN = 20;

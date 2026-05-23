@@ -3,7 +3,7 @@
  * Service 0xFEF0: IMU notify 0xFEF1; MSP430 UART notify 0xFEF2; BSL invoke 0xFEF3;
  * FW upload write 0xFEF4; flash status notify 0xFEF5; RST/TEST manual drive write 0xFEF6;
  * Notecard JSON write 0xFEF7; Notecard response notify 0xFEF8; UWB UART line notify 0xFEF9;
- * RYUW122 AT write 0xFEFA (responses on FEF9).
+ * RYUW122 AT write 0xFEFA (responses on FEF9); boat id read/write 0xFEFB (NVS).
  */
 #pragma once
 

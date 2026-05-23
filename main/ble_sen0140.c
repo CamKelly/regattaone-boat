@@ -24,6 +24,7 @@
 #include "sdkconfig.h"
 
 #include "ble_sen0140.h"
+#include "boat_id.h"
 #if CONFIG_REGATTAONE_NOTECARD_ENABLE
 #include "blues_notecard.h"
 #endif
@@ -53,6 +54,8 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_UWB_LINE_UUID      0xfef9
 /** Write: UTF-8 AT command (CRLF appended if missing); response lines on FEF9 notify. */
 #define SEN0140_GATT_UWB_AT_UUID        0xfefa
+/** Read/write: user-assigned boat id (UTF-8, max 32 chars, persisted in NVS). */
+#define SEN0140_GATT_BOAT_ID_UUID       0xfefb
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 200U
@@ -140,6 +143,7 @@ static bool subscribe_attr_matches_chr(uint16_t sub_attr_handle, uint16_t chr_va
 static uint8_t s_ble_own_addr_type;
 
 static void ble_advertise(void);
+static void ble_apply_gap_name(void);
 
 static int gatt_svr_access_imu(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                void *arg)
@@ -301,6 +305,55 @@ static int gatt_svr_access_prog_status(uint16_t conn_handle, uint16_t attr_handl
         return os_mbuf_append(ctxt->om, &zero, 1) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
     return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int gatt_svr_access_boat_id(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                   void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const char *id = boat_id_get();
+        size_t n = strlen(id);
+        if (n == 0U) {
+            return 0;
+        }
+        return os_mbuf_append(ctxt->om, id, (uint16_t)n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (om_len > BOAT_ID_MAX_LEN) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        char buf[BOAT_ID_MAX_LEN + 1U];
+        if (om_len > 0U) {
+            if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+        }
+        buf[om_len] = '\0';
+        if (boat_id_set(buf, om_len) != ESP_OK) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        ble_apply_gap_name();
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static void ble_apply_gap_name(void)
+{
+    const char *name = boat_id_ble_name();
+    int rc = ble_svc_gap_device_name_set(name);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "gap device_name_set rc=%d", rc);
+    }
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_adv_stop();
+        ble_advertise();
+    }
 }
 
 static int gatt_svr_access_notecard_req(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
@@ -472,6 +525,11 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .flags = BLE_GATT_CHR_F_WRITE,
                 },
                 {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_BOAT_ID_UUID),
+                    .access_cb = gatt_svr_access_boat_id,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                },
+                {
                     0,
                 },
             },
@@ -597,7 +655,7 @@ static void ble_advertise(void)
     fields.tx_pwr_lvl_is_present = 1;
     fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
 
-    const char *name = "RegattaOne-Boat";
+    const char *name = boat_id_ble_name();
     fields.name = (uint8_t *)name;
     fields.name_len = strlen(name);
     fields.name_is_complete = 1;
@@ -619,7 +677,7 @@ static void ble_advertise(void)
     if (rc != 0) {
         ESP_LOGE(TAG, "adv_start rc=%d", rc);
     } else {
-        ESP_LOGI(TAG, "GAP advertising (connectable), name RegattaOne-Boat");
+        ESP_LOGI(TAG, "GAP advertising (connectable), name %s", name);
     }
 }
 
@@ -671,7 +729,7 @@ esp_err_t ble_sen0140_init(void)
         return ESP_FAIL;
     }
 
-    rc = ble_svc_gap_device_name_set("RegattaOne-Boat");
+    rc = ble_svc_gap_device_name_set(boat_id_ble_name());
     if (rc != 0) {
         ESP_LOGE(TAG, "device_name rc=%d", rc);
     }
@@ -686,7 +744,7 @@ esp_err_t ble_sen0140_init(void)
              SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_UART_CHR_UUID,
              SEN0140_GATT_BSL_CHR_UUID, SEN0140_GATT_FW_CHR_UUID, SEN0140_GATT_PROG_STATUS_CHR_UUID,
              SEN0140_GATT_GPIO_CHR_UUID, SEN0140_GATT_NOTECARD_REQ_UUID, SEN0140_GATT_NOTECARD_RSP_UUID,
-             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID);
+             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID, SEN0140_GATT_BOAT_ID_UUID);
     return ESP_OK;
 }
 

@@ -61,6 +61,26 @@ import { startRegattaApp } from "../regatta-main";
               </div>
             </div>
 
+            <div class="ui-toolbar-row ui-toolbar-row--boat-id">
+              <div class="ble-device-picker-wrap">
+                <label class="imu-stream-label" for="boat-id-input">Boat ID <code>0xFEFB</code></label>
+                <div class="ble-device-picker-row">
+                  <input
+                    id="boat-id-input"
+                    class="boat-id-input"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    maxlength="32"
+                    placeholder="e.g. port-bow"
+                    disabled
+                  />
+                  <button type="button" id="boat-id-save" class="regatta-ble-btn" disabled>Save ID</button>
+                </div>
+                <p id="boat-id-status" class="hint boat-id-status">Connect a device to set its boat ID.</p>
+              </div>
+            </div>
+
             <section class="boat-section" aria-labelledby="imu-heading">
               <h2 id="imu-heading" class="radio-h2">SEN0140 IMU <code>0xFEF1</code></h2>
               <p id="imu-meta" class="hint imu-meta-line">Connect to stream accel, gyro, mag, temperature, and pressure.</p>

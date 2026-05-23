@@ -1,15 +1,18 @@
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
+  BLE_BOAT_ID_CHAR_UUID,
   BLE_IMU_CHAR_UUID,
   BLE_NOTECARD_REQ_CHAR_UUID,
   BLE_NOTECARD_RSP_CHAR_UUID,
   BLE_SERVICE_UUID,
   BLE_UWB_AT_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
+  BOAT_ID_MAX_LEN,
+  BOAT_ID_BLE_NAME_MAX_LEN,
 } from "./lib/protocol";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-05-22e";
+const WEB_BLE_REV = "2026-05-23a";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -33,6 +36,9 @@ interface BleBoatSession {
   charNotecardRsp: BluetoothRemoteGATTCharacteristic | null;
   charUwbLine: BluetoothRemoteGATTCharacteristic | null;
   charUwbAt: BluetoothRemoteGATTCharacteristic | null;
+  charBoatId: BluetoothRemoteGATTCharacteristic | null;
+  boatId: string;
+  boatIdDraft: string;
   notecardRspAcc: number[];
   uwbLineLogText: string;
   notecardJsonDraft: string;
@@ -79,6 +85,106 @@ function getActiveSession(): BleBoatSession | null {
   return sessions.get(activeSessionId) ?? null;
 }
 
+function sessionDisplayName(session: BleBoatSession): string {
+  const id = session.boatId.trim();
+  return id.length > 0 ? id : session.name;
+}
+
+async function readBoatIdFromDevice(session: BleBoatSession): Promise<void> {
+  if (!session.charBoatId || !session.gatt.connected) {
+    return;
+  }
+  try {
+    const val = await session.charBoatId.readValue();
+    session.boatId = new TextDecoder().decode(val).replace(/\0/g, "").trim();
+    session.boatIdDraft = session.boatId;
+  } catch (e) {
+    console.warn("BLE boat id read failed", session.name, e);
+  }
+}
+
+function validateBoatIdDraft(id: string): string | null {
+  const trimmed = id.trim();
+  if (trimmed.length === 0) {
+    return "Boat ID cannot be empty.";
+  }
+  if (trimmed.length > BOAT_ID_MAX_LEN) {
+    return `Boat ID must be at most ${BOAT_ID_MAX_LEN} characters.`;
+  }
+  if (!/^[\x20-\x7E]+$/.test(trimmed)) {
+    return "Boat ID must be printable ASCII.";
+  }
+  return null;
+}
+
+async function saveBoatIdToDevice(): Promise<void> {
+  const session = getActiveSession();
+  const input = document.querySelector<HTMLInputElement>("#boat-id-input");
+  const statusEl = document.querySelector("#boat-id-status");
+  if (!session?.charBoatId || !input) {
+    if (statusEl) {
+      statusEl.textContent = "Boat ID requires firmware with characteristic 0xFEFB.";
+    }
+    return;
+  }
+  const draft = input.value;
+  const err = validateBoatIdDraft(draft);
+  if (err) {
+    if (statusEl) {
+      statusEl.textContent = err;
+    }
+    return;
+  }
+  const trimmed = draft.trim();
+  try {
+    await gattWrite(session, "boatid", new TextEncoder().encode(trimmed));
+    session.boatId = trimmed;
+    session.boatIdDraft = trimmed;
+    session.name = trimmed;
+    if (statusEl) {
+      const bleNote =
+        trimmed.length > BOAT_ID_BLE_NAME_MAX_LEN
+          ? ` Saved on device. BLE scan name uses first ${BOAT_ID_BLE_NAME_MAX_LEN} chars until reconnect.`
+          : " Saved on device — BLE name updates after disconnect/reconnect.";
+      statusEl.textContent = `Saved: ${trimmed}.${bleNote}`;
+    }
+    renderDeviceSelector();
+    updateToolbarSummary();
+    setBleToolbar(`BLE: ${sessionDisplayName(session)} · ${sessions.size} device${sessions.size === 1 ? "" : "s"}`);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (statusEl) {
+      statusEl.textContent = `Save failed: ${msg}`;
+    }
+  }
+}
+
+function syncBoatIdUi(session: BleBoatSession | null): void {
+  const input = document.querySelector<HTMLInputElement>("#boat-id-input");
+  const saveBtn = document.querySelector<HTMLButtonElement>("#boat-id-save");
+  const statusEl = document.querySelector("#boat-id-status");
+  const canEdit = session !== null && session.gatt.connected && session.charBoatId !== null;
+  if (input) {
+    input.disabled = !canEdit;
+    input.value = session?.boatIdDraft ?? "";
+    input.maxLength = BOAT_ID_MAX_LEN;
+  }
+  if (saveBtn) {
+    saveBtn.disabled = !canEdit;
+  }
+  if (statusEl) {
+    if (!session) {
+      statusEl.textContent = "Connect a device to set its boat ID.";
+    } else if (!session.charBoatId) {
+      statusEl.textContent = "Flash firmware with boat ID support (0xFEFB) to enable.";
+    } else if (session.boatId) {
+      statusEl.textContent = `Stored on device: ${session.boatId}`;
+    } else {
+      statusEl.textContent = "No ID set — assign one to use as the BLE name (shown when adding/connecting).";
+    }
+  }
+}
+
 function setBleToolbar(text: string): void {
   if (bleStatusEl) {
     bleStatusEl.textContent = text;
@@ -113,6 +219,7 @@ function syncActionButtons(): void {
   if (uwbInput) {
     uwbInput.disabled = !canWrite || session.charUwbAt === null;
   }
+  syncBoatIdUi(session);
 }
 
 async function runGattOp<T>(session: BleBoatSession, op: () => Promise<T>): Promise<T> {
@@ -146,6 +253,7 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<stri
   session.charNotecardRsp = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
+  session.charBoatId = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
 
@@ -188,6 +296,13 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<stri
   } catch (e) {
     parts.push("NC rsp —");
   }
+  try {
+    session.charBoatId = await svc.getCharacteristic(BLE_BOAT_ID_CHAR_UUID);
+    parts.push("ID ✓");
+  } catch (e) {
+    session.charBoatId = null;
+    parts.push("ID —");
+  }
 
   return parts.join(" · ");
 }
@@ -210,6 +325,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
       session.connectionStatus = await bindSessionCharacteristics(session);
     }
     await setSessionNotifications(session, true);
+    await readBoatIdFromDevice(session);
     return session.gatt.connected;
   } catch (e) {
     console.error("BLE activate failed", session.name, e);
@@ -228,6 +344,7 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charNotecardRsp = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
+  session.charBoatId = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
   if (session.gatt.connected) {
@@ -305,10 +422,16 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
   }
 }
 
-type GattWriteTarget = "notecard" | "uwb";
+type GattWriteTarget = "notecard" | "uwb" | "boatid";
 
 function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BluetoothRemoteGATTCharacteristic | null {
-  return target === "notecard" ? session.charNotecardReq : session.charUwbAt;
+  if (target === "notecard") {
+    return session.charNotecardReq;
+  }
+  if (target === "uwb") {
+    return session.charUwbAt;
+  }
+  return session.charBoatId;
 }
 
 async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data: BufferSource): Promise<void> {
@@ -397,6 +520,8 @@ function saveUiToSession(session: BleBoatSession): void {
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
   session.notecardJsonDraft = ncTa?.value ?? "";
   session.uwbAtDraft = uwbInput?.value ?? "";
+  const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
+  session.boatIdDraft = boatIdInput?.value ?? session.boatIdDraft;
 }
 
 function loadSessionToUi(session: BleBoatSession): void {
@@ -412,7 +537,7 @@ function loadSessionToUi(session: BleBoatSession): void {
   renderNotecardRsp(session);
   renderUwbLog(session);
   setStatus(session.connectionStatus);
-  setBleToolbar(`BLE: ${session.name} (${sessions.size} connected)`);
+  setBleToolbar(`BLE: ${sessionDisplayName(session)} · ${sessions.size} device${sessions.size === 1 ? "" : "s"}`);
   syncActionButtons();
 }
 
@@ -450,7 +575,7 @@ function updateToolbarSummary(): void {
   }
   const active = getActiveSession();
   if (active) {
-    setBleToolbar(`BLE: ${active.name} · ${n} device${n === 1 ? "" : "s"}`);
+    setBleToolbar(`BLE: ${sessionDisplayName(active)} · ${n} device${n === 1 ? "" : "s"}`);
   } else {
     setBleToolbar(`BLE: ${n} device${n === 1 ? "" : "s"} connected`);
   }
@@ -466,7 +591,7 @@ function sessionLabel(session: BleBoatSession): string {
     }
   }
   const suffix = duplicateName ? ` · ${session.deviceId.slice(-6)}` : "";
-  return `${session.name}${suffix}${offline}`;
+  return `${sessionDisplayName(session)}${suffix}${offline}`;
 }
 
 function renderDeviceSelector(): void {
@@ -696,6 +821,9 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
     charNotecardRsp: null,
     charUwbLine: null,
     charUwbAt: null,
+    charBoatId: null,
+    boatId: "",
+    boatIdDraft: "",
     notecardRspAcc: [],
     uwbLineLogText: "",
     notecardJsonDraft: "",
@@ -740,6 +868,7 @@ async function connectBle(): Promise<void> {
         BLE_NOTECARD_RSP_CHAR_UUID,
         BLE_UWB_LINE_CHAR_UUID,
         BLE_UWB_AT_CHAR_UUID,
+        BLE_BOAT_ID_CHAR_UUID,
       ],
     });
 
@@ -841,10 +970,19 @@ export function startRegattaApp(): void {
     }
   });
 
+  document.querySelector("#boat-id-save")?.addEventListener("click", () => void saveBoatIdToDevice());
+  document.querySelector<HTMLInputElement>("#boat-id-input")?.addEventListener("input", (ev) => {
+    const session = getActiveSession();
+    if (session && ev.target instanceof HTMLInputElement) {
+      session.boatIdDraft = ev.target.value;
+    }
+  });
+
   connectBtn.addEventListener("click", () => void connectBle());
 
   setBleToolbar("BLE: —");
   clearUiPanels();
+  syncBoatIdUi(null);
   renderDeviceSelector();
   setStatus(
     `No devices connected. Add RegattaOne-Boat devices (service 0xFEF0).\nWeb BLE ${WEB_BLE_REV} — hard-refresh (Cmd+Shift+R) if controls stay disabled.`,
