@@ -122,54 +122,41 @@ ion-app {
   font-variant-numeric: tabular-nums;
 }
 
-.ble-device-list-wrap {
+.ble-device-picker-wrap {
   display: flex;
   flex-direction: column;
   gap: 6px;
   width: 100%;
 }
 
-.ble-device-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.ble-device-list-empty {
-  margin: 0;
-}
-
-.ble-device-row {
+.ble-device-picker-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
+}
+
+select.ble-device-select {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+  max-width: 100%;
+  margin: 0;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(71, 85, 105, 0.45);
-}
-
-.ble-device-row--active {
-  border-color: #38bdf8;
-  background: rgba(14, 116, 144, 0.18);
-}
-
-.ble-device-name {
-  font-size: 0.88rem;
-  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid rgba(71, 85, 105, 0.65);
+  background: rgba(15, 23, 42, 0.85);
   color: #e2e8f0;
+  font-family: inherit;
+  font-size: 0.88rem;
 }
 
-.ble-device-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+select.ble-device-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
-.ble-device-select,
 .ble-device-disconnect {
-  padding: 6px 10px;
-  font-size: 0.78rem;
+  padding: 8px 12px;
+  font-size: 0.82rem;
+  white-space: nowrap;
 }

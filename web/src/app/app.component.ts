@@ -43,9 +43,21 @@ import { startRegattaApp } from "../regatta-main";
             </div>
 
             <div class="ui-toolbar-row ui-toolbar-row--devices">
-              <div class="ble-device-list-wrap">
-                <span class="imu-stream-label">Connected devices</span>
-                <div id="ble-device-list" class="ble-device-list" aria-live="polite"></div>
+              <div class="ble-device-picker-wrap">
+                <label class="imu-stream-label" for="ble-device-select">Connected device</label>
+                <div class="ble-device-picker-row">
+                  <select id="ble-device-select" class="ble-device-select" disabled aria-live="polite">
+                    <option value="">No devices connected</option>
+                  </select>
+                  <button
+                    type="button"
+                    id="ble-device-disconnect"
+                    class="regatta-ble-btn regatta-ble-btn--secondary ble-device-disconnect"
+                    disabled
+                  >
+                    Disconnect
+                  </button>
+                </div>
               </div>
             </div>
 
