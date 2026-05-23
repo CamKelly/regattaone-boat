@@ -14,6 +14,7 @@
 
 #include "ble_sen0140.h"
 #include "boat_id.h"
+#include "boat_id_note.h"
 #include "blues_notecard.h"
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
@@ -136,6 +137,9 @@ void app_main(void)
             ESP_LOGW(TAG, "Blues Notecard init: %s", esp_err_to_name(err));
         } else {
             ESP_LOGI(TAG, "Blues Notecard I2C (%s bus)", bus ? "shared SEN0140" : "standalone");
+            if (boat_id_get()[0] != '\0') {
+                boat_id_notehub_report_async(BOAT_ID_NOTE_BOOT);
+            }
         }
     }
 #endif

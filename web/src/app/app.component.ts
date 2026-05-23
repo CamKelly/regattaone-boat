@@ -35,13 +35,6 @@ import { startRegattaApp } from "../regatta-main";
                 <code>0xFEF0</code>
               </p>
             </div>
-            <div class="ui-toolbar-row ui-toolbar-row--stream">
-              <div class="imu-stream-block">
-                <span class="imu-stream-label">Connection</span>
-                <pre id="boat-status" class="imu-stream-status imu-connection-line">Disconnected</pre>
-              </div>
-            </div>
-
             <div class="ui-toolbar-row ui-toolbar-row--devices">
               <div class="ble-device-picker-wrap">
                 <label class="imu-stream-label" for="ble-device-select">Connected device</label>

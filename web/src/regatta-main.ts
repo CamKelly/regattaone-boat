@@ -45,7 +45,6 @@ interface BleBoatSession {
   uwbAtDraft: string;
   lastImuWallMs: number;
   imu: ImuDisplay;
-  connectionStatus: string;
   notificationsOn: boolean;
   imuNotificationsOn: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
@@ -61,7 +60,6 @@ const sessions = new Map<string, BleBoatSession>();
 let activeSessionId: string | null = null;
 
 let connectBtn!: HTMLButtonElement;
-let statusEl: HTMLElement | null = null;
 let bleStatusEl: HTMLElement | null = null;
 let deviceSelectEl: HTMLSelectElement | null = null;
 let deviceDisconnectBtn: HTMLButtonElement | null = null;
@@ -149,8 +147,7 @@ async function saveBoatIdToDevice(): Promise<void> {
       statusEl.textContent = `Saved: ${trimmed}.${bleNote}`;
     }
     renderDeviceSelector();
-    updateToolbarSummary();
-    setBleToolbar(`BLE: ${sessionDisplayName(session)} · ${sessions.size} device${sessions.size === 1 ? "" : "s"}`);
+    updateBleToolbar();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (statusEl) {
@@ -191,10 +188,40 @@ function setBleToolbar(text: string): void {
   }
 }
 
-function setStatus(text: string): void {
-  if (statusEl) {
-    statusEl.textContent = text;
+/** Toolbar line: active device name, device count, and problems only (no GATT checklist). */
+function updateBleToolbar(note?: string): void {
+  const n = sessions.size;
+  if (n === 0) {
+    setBleToolbar(note ?? "BLE: add a device");
+    return;
   }
+  const active = getActiveSession();
+  if (!active) {
+    setBleToolbar(note ?? `BLE: ${n} device${n === 1 ? "" : "s"} — select one`);
+    return;
+  }
+  const name = sessionDisplayName(active);
+  const multi = n > 1 ? ` · ${n} devices` : "";
+  if (note) {
+    setBleToolbar(`BLE: ${name}${multi} — ${note}`);
+    return;
+  }
+  if (!active.gatt.connected) {
+    setBleToolbar(`BLE: ${name}${multi} — not connected`);
+    return;
+  }
+  const missing: string[] = [];
+  if (!active.charImu) {
+    missing.push("IMU");
+  }
+  if (!active.charUwbAt) {
+    missing.push("UWB");
+  }
+  if (missing.length > 0) {
+    setBleToolbar(`BLE: ${name}${multi} — ${missing.join(", ")} unavailable`);
+    return;
+  }
+  setBleToolbar(`BLE: ${name}${multi}`);
 }
 
 function setText(id: string, text: string): void {
@@ -245,7 +272,7 @@ function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charUwbLine?.removeEventListener("characteristicvaluechanged", session.onUwbLineNotify);
 }
 
-async function bindSessionCharacteristics(session: BleBoatSession): Promise<string> {
+async function bindSessionCharacteristics(session: BleBoatSession): Promise<void> {
   await setSessionNotifications(session, false);
   detachCharacteristicListeners(session);
   session.charImu = null;
@@ -258,53 +285,41 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<stri
   session.imuNotificationsOn = false;
 
   const svc = await session.gatt.getPrimaryService(BLE_SERVICE_UUID);
-  const parts: string[] = [`Web BLE ${WEB_BLE_REV}`];
 
   try {
     session.charImu = await svc.getCharacteristic(BLE_IMU_CHAR_UUID);
     session.charImu.addEventListener("characteristicvaluechanged", session.onImuNotify);
-    parts.push("IMU ✓");
   } catch (e) {
-    parts.push("IMU ✗");
-    console.error("BLE IMU", session.name, e);
+    console.error("BLE IMU unavailable", session.name, e);
   }
   try {
     session.charUwbAt = await svc.getCharacteristic(BLE_UWB_AT_CHAR_UUID);
-    parts.push("UWB AT ✓");
   } catch (e) {
-    parts.push("UWB AT ✗");
-    console.error("BLE UWB AT", session.name, e);
+    console.error("BLE UWB AT unavailable", session.name, e);
   }
   try {
     session.charUwbLine = await svc.getCharacteristic(BLE_UWB_LINE_CHAR_UUID);
     session.charUwbLine.addEventListener("characteristicvaluechanged", session.onUwbLineNotify);
-    parts.push("UWB RX ✓");
   } catch (e) {
-    parts.push("UWB RX ✗");
-    console.error("BLE UWB line", session.name, e);
+    console.warn("BLE UWB RX unavailable", session.name, e);
   }
   try {
     session.charNotecardReq = await svc.getCharacteristic(BLE_NOTECARD_REQ_CHAR_UUID);
-    parts.push("NC req ✓");
   } catch (e) {
-    parts.push("NC req —");
+    console.warn("BLE Notecard req unavailable", session.name, e);
   }
   try {
     session.charNotecardRsp = await svc.getCharacteristic(BLE_NOTECARD_RSP_CHAR_UUID);
     session.charNotecardRsp.addEventListener("characteristicvaluechanged", session.onNotecardRspNotify);
-    parts.push("NC rsp ✓");
   } catch (e) {
-    parts.push("NC rsp —");
+    console.warn("BLE Notecard rsp unavailable", session.name, e);
   }
   try {
     session.charBoatId = await svc.getCharacteristic(BLE_BOAT_ID_CHAR_UUID);
-    parts.push("ID ✓");
   } catch (e) {
     session.charBoatId = null;
-    parts.push("ID —");
+    console.warn("BLE boat ID unavailable", session.name, e);
   }
-
-  return parts.join(" · ");
 }
 
 async function activateSession(session: BleBoatSession): Promise<boolean> {
@@ -322,7 +337,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
       }
     }
     if (!session.charImu || !session.charUwbAt) {
-      session.connectionStatus = await bindSessionCharacteristics(session);
+      await bindSessionCharacteristics(session);
     }
     await setSessionNotifications(session, true);
     await readBoatIdFromDevice(session);
@@ -455,8 +470,9 @@ async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data:
       } catch (e) {
         lastErr = e;
         if (attempt === 0 && session.gatt.connected) {
-          session.connectionStatus = await bindSessionCharacteristics(session);
+          await bindSessionCharacteristics(session);
           if (session.deviceId === activeSessionId) {
+            updateBleToolbar();
             await setCommsNotifications(session, true);
           }
           continue;
@@ -536,8 +552,7 @@ function loadSessionToUi(session: BleBoatSession): void {
   renderImuDisplay(session);
   renderNotecardRsp(session);
   renderUwbLog(session);
-  setStatus(session.connectionStatus);
-  setBleToolbar(`BLE: ${sessionDisplayName(session)} · ${sessions.size} device${sessions.size === 1 ? "" : "s"}`);
+  updateBleToolbar();
   syncActionButtons();
 }
 
@@ -564,20 +579,6 @@ function clearUiPanels(): void {
   }
   if (uwbLog) {
     uwbLog.textContent = "";
-  }
-}
-
-function updateToolbarSummary(): void {
-  const n = sessions.size;
-  if (n === 0) {
-    setBleToolbar("BLE: —");
-    return;
-  }
-  const active = getActiveSession();
-  if (active) {
-    setBleToolbar(`BLE: ${sessionDisplayName(active)} · ${n} device${n === 1 ? "" : "s"}`);
-  } else {
-    setBleToolbar(`BLE: ${n} device${n === 1 ? "" : "s"} connected`);
   }
 }
 
@@ -638,14 +639,14 @@ async function setActiveSession(deviceId: string): Promise<void> {
   }
   activeSessionId = deviceId;
   if (!(await activateSession(next))) {
-    setStatus(`${next.name} could not connect.`);
+    updateBleToolbar("could not connect");
     syncActionButtons();
     renderDeviceSelector();
     return;
   }
   loadSessionToUi(next);
   renderDeviceSelector();
-  updateToolbarSummary();
+  updateBleToolbar();
 }
 
 function createNotifyHandlers(session: BleBoatSession): void {
@@ -730,17 +731,13 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
       void setActiveSession(remaining.deviceId);
     } else {
       clearUiPanels();
-      setStatus(
-        wasManualDisconnect
-          ? `Disconnected. Web BLE ${WEB_BLE_REV} — add a device to connect.`
-          : "Device disconnected unexpectedly.",
-      );
+      updateBleToolbar(wasManualDisconnect ? "disconnected" : "link lost");
       syncActionButtons();
     }
   }
 
   renderDeviceSelector();
-  updateToolbarSummary();
+  updateBleToolbar();
 }
 
 async function sendNotecardRequest(): Promise<void> {
@@ -830,7 +827,6 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
     uwbAtDraft: "",
     lastImuWallMs: 0,
     imu: defaultImuDisplay(),
-    connectionStatus: "",
     notificationsOn: false,
     imuNotificationsOn: false,
     parked: false,
@@ -842,7 +838,7 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
   };
   createNotifyHandlers(session);
 
-  session.connectionStatus = await bindSessionCharacteristics(session);
+  await bindSessionCharacteristics(session);
 
   dev.addEventListener("gattserverdisconnected", session.onDisconnected);
   return session;
@@ -850,13 +846,12 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
 
 async function connectBle(): Promise<void> {
   if (!navigator.bluetooth) {
-    setStatus("Web Bluetooth not available. Use Chrome on HTTPS or localhost.");
+    updateBleToolbar("Web Bluetooth unavailable — use Chrome on HTTPS");
     return;
   }
 
   connectBtn.disabled = true;
-  setStatus("Selecting device…");
-  setBleToolbar("BLE: selecting…");
+  updateBleToolbar("selecting device…");
 
   try {
     const dev = await navigator.bluetooth.requestDevice({
@@ -874,12 +869,11 @@ async function connectBle(): Promise<void> {
 
     if (sessions.has(dev.id)) {
       await setActiveSession(dev.id);
-      setStatus(`${dev.name ?? "Device"} is already connected — switched to it.`);
+      updateBleToolbar("switched device");
       return;
     }
 
-    setStatus(`Connecting to ${dev.name ?? "device"}…`);
-    setBleToolbar("BLE: connecting…");
+    updateBleToolbar("connecting…");
 
     const activeBeforeConnect = getActiveSession();
     if (activeBeforeConnect) {
@@ -893,16 +887,10 @@ async function connectBle(): Promise<void> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("cancel")) {
-      const active = getActiveSession();
-      if (active) {
-        setStatus(active.connectionStatus);
-      } else {
-        setStatus(`No device selected. Web BLE ${WEB_BLE_REV}`);
-      }
+      updateBleToolbar();
     } else {
-      setStatus(`Error: ${msg}`);
+      updateBleToolbar(msg);
     }
-    updateToolbarSummary();
   } finally {
     connectBtn.disabled = false;
   }
@@ -929,7 +917,6 @@ export function startRegattaApp(): void {
   document.body.dataset["appTab"] = "main";
 
   connectBtn = document.querySelector<HTMLButtonElement>("#connect")!;
-  statusEl = document.querySelector("#boat-status");
   bleStatusEl = document.querySelector("#ble-status");
   deviceSelectEl = document.querySelector<HTMLSelectElement>("#ble-device-select");
   deviceDisconnectBtn = document.querySelector<HTMLButtonElement>("#ble-device-disconnect");
@@ -980,12 +967,10 @@ export function startRegattaApp(): void {
 
   connectBtn.addEventListener("click", () => void connectBle());
 
-  setBleToolbar("BLE: —");
+  console.info(`RegattaOne Boat web BLE ${WEB_BLE_REV}`);
   clearUiPanels();
   syncBoatIdUi(null);
   renderDeviceSelector();
-  setStatus(
-    `No devices connected. Add RegattaOne-Boat devices (service 0xFEF0).\nWeb BLE ${WEB_BLE_REV} — hard-refresh (Cmd+Shift+R) if controls stay disabled.`,
-  );
+  updateBleToolbar();
   syncActionButtons();
 }
