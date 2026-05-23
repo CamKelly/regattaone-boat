@@ -21,10 +21,7 @@ import { startRegattaApp } from "../regatta-main";
           </div>
           <ion-title>RegattaOne Boat</ion-title>
           <ion-buttons slot="end" class="regatta-ble-buttons">
-            <button type="button" id="connect" class="regatta-ble-btn">Connect Bluetooth</button>
-            <button type="button" id="disconnect" class="regatta-ble-btn regatta-ble-btn--secondary" disabled>
-              Disconnect
-            </button>
+            <button type="button" id="connect" class="regatta-ble-btn">Add device</button>
           </ion-buttons>
         </ion-toolbar>
       </ion-header>
@@ -42,6 +39,13 @@ import { startRegattaApp } from "../regatta-main";
               <div class="imu-stream-block">
                 <span class="imu-stream-label">Connection</span>
                 <pre id="boat-status" class="imu-stream-status imu-connection-line">Disconnected</pre>
+              </div>
+            </div>
+
+            <div class="ui-toolbar-row ui-toolbar-row--devices">
+              <div class="ble-device-list-wrap">
+                <span class="imu-stream-label">Connected devices</span>
+                <div id="ble-device-list" class="ble-device-list" aria-live="polite"></div>
               </div>
             </div>
 
