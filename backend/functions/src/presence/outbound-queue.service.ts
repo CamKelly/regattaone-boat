@@ -5,6 +5,9 @@ import {
   OutboundPresenceMessage,
 } from '@regattaone/shared';
 import { Firestore, Timestamp } from 'firebase-admin/firestore';
+import { logFunction } from '../logging';
+
+const FN = 'outboundQueue';
 
 export const OUTBOUND_QUEUE_COLLECTION = 'deviceOutboundQueue';
 export const OUTBOUND_MESSAGES_SUBCOLLECTION = 'messages';
@@ -63,6 +66,12 @@ export function mapOutboundMessage(
   };
 }
 
+function stripUndefined<T extends Record<string, unknown>>(data: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(data).filter((entry): entry is [string, NonNullable<T[keyof T]>] => entry[1] !== undefined),
+  ) as Partial<T>;
+}
+
 export class OutboundQueueService {
   constructor(private readonly db: Firestore) {}
 
@@ -93,10 +102,20 @@ export class OutboundQueueService {
       sourceDeviceUid: input.sourceDeviceUid,
     };
 
-    await this.messageRef(input.targetNotehubDeviceUid, messageId).set({
-      ...record,
-      nextRetryAt: Timestamp.fromDate(new Date(record.nextRetryAt)),
-      createdAt: Timestamp.fromDate(new Date(record.createdAt)),
+    await this.messageRef(input.targetNotehubDeviceUid, messageId).set(
+      stripUndefined({
+        ...record,
+        nextRetryAt: Timestamp.fromDate(new Date(record.nextRetryAt)),
+        createdAt: Timestamp.fromDate(new Date(record.createdAt)),
+      }),
+    );
+
+    logFunction(FN, 'success', 'Enqueued presence message', {
+      messageId,
+      targetDeviceUid: input.targetNotehubDeviceUid,
+      eventType: input.eventType,
+      status: record.status,
+      sourceDeviceUid: input.sourceDeviceUid,
     });
 
     return record;
@@ -114,6 +133,8 @@ export class OutboundQueueService {
       },
       { merge: true },
     );
+
+    logFunction(FN, 'success', 'Marked message sent', { deviceUid, messageId, sentAt });
   }
 
   async markAcked(deviceUid: string, messageId: string): Promise<void> {
@@ -125,6 +146,8 @@ export class OutboundQueueService {
       },
       { merge: true },
     );
+
+    logFunction(FN, 'success', 'Marked message acked', { deviceUid, messageId, ackedAt });
   }
 
   async markRetry(
@@ -146,6 +169,15 @@ export class OutboundQueueService {
       },
       { merge: true },
     );
+
+    logFunction(FN, status === 'failed' ? 'warn' : 'success', 'Updated message retry state', {
+      deviceUid,
+      messageId,
+      status,
+      attemptCount,
+      nextRetryAt,
+      error,
+    });
   }
 
   async getMessage(

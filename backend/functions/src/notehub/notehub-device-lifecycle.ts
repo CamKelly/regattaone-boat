@@ -11,6 +11,9 @@ import { Firestore, Timestamp } from 'firebase-admin/firestore';
 import { logger } from 'firebase-functions';
 import type { Request } from 'firebase-functions/v2/https';
 import type { Response } from 'express';
+import { logFunction } from '../logging';
+
+const FN = 'notehubDeviceLifecycle';
 
 function readAuthToken(authorizationHeader: string | undefined): string | null {
   if (!authorizationHeader) {
@@ -76,13 +79,22 @@ export async function upsertNotehubDevice(
   const normalized = normalizeNotehubRoutePayload(payload);
 
   if (!isNotehubBoatIdPayload(normalized)) {
-    logger.warn('Ignoring Notehub payload', {
+    logFunction(FN, 'skip', 'Ignoring unsupported Notehub payload', {
       device: normalized.device,
       file: normalized.file,
       reason: normalized.body?.['reason'],
     });
     return null;
   }
+
+  logFunction(FN, 'start', 'Processing boat.qo lifecycle event', {
+    device: normalized.device,
+    file: normalized.file,
+    reason: normalized.body?.['reason'],
+    boatId: normalized.body?.['id'],
+    deviceType: normalized.body?.['type'] ?? normalized.body?.['deviceType'],
+    product: normalized.product,
+  });
 
   const docRef = db.collection('devices').doc(normalized.device!);
   const snap = await docRef.get();
@@ -95,14 +107,21 @@ export async function upsertNotehubDevice(
     });
 
     await docRef.set(toFirestoreDevice(record));
-    logger.info('Created Notehub device document', {
+    logFunction(FN, 'success', 'Created device document', {
       path: docRef.path,
       reason: record.reason,
+      boatId: record.boatId,
+      deviceId: record.deviceId,
+      deviceType: record.deviceType,
+      online: record.online,
+      lastSeen: record.lastSeen,
+      product: record.product,
     });
     return record;
   }
 
   const update = buildNotehubDeviceUpdate(normalized, now);
+  const existing = snap.data() as NotehubDeviceRecord;
 
   await docRef.set(
     {
@@ -119,15 +138,17 @@ export async function upsertNotehubDevice(
     { merge: true },
   );
 
-  logger.info('Updated Notehub device document', {
+  logFunction(FN, 'success', 'Updated device document', {
     path: docRef.path,
     reason: update.reason,
     boatId: update.boatId,
+    deviceId: update.deviceId,
     deviceType: update.deviceType,
     online: update.online,
+    lastSeen: update.lastSeen,
+    wasOnline: (existing as NotehubDeviceRecord).online === true,
   });
 
-  const existing = snap.data() as NotehubDeviceRecord;
   return {
     ...existing,
     reason: update.reason,
@@ -158,17 +179,36 @@ export function createNotehubDeviceLifecycleHandler(db: Firestore, expectedToken
 
     const payload = parseRequestPayload(req);
 
+    logFunction(FN, 'start', 'Received Notehub webhook', {
+      file: payload.file,
+      device: payload.device,
+      reason: payload.body?.['reason'],
+    });
+
     try {
       const device = await upsertNotehubDevice(db, payload);
 
       if (!device) {
+        logFunction(FN, 'skip', 'Webhook completed with ignored payload', {
+          file: payload.file,
+          device: payload.device,
+        });
         res.status(202).json({ ignored: true });
         return;
       }
 
+      logFunction(FN, 'success', 'Webhook processed', {
+        device: device.notehubDeviceUid,
+        boatId: device.boatId,
+        online: device.online,
+      });
       res.status(200).json({ ok: true, device });
     } catch (error) {
-      logger.error('Failed to upsert Notehub device', error);
+      logFunction(FN, 'error', 'Failed to upsert device', {
+        device: payload.device,
+        file: payload.file,
+        error: error instanceof Error ? error.message : String(error),
+      });
       res.status(500).json({ error: 'Internal error' });
     }
   };

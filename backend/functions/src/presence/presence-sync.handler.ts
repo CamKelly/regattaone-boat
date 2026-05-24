@@ -8,9 +8,11 @@ import {
   toCompactPresencePayload,
 } from '@regattaone/shared';
 import { Firestore } from 'firebase-admin/firestore';
-import { logger } from 'firebase-functions';
 import { NotehubService } from '../services/notehub.service';
 import { EnqueuePresenceMessageInput, OutboundQueueService } from './outbound-queue.service';
+import { logFunction } from '../logging';
+
+const FN = 'syncDevicePresence';
 
 export type PresenceChangeKind =
   | 'came_online'
@@ -42,6 +44,24 @@ export async function fetchOnlinePeers(
     .filter((peer): peer is DevicePresenceDocument => {
       return peer !== null && shouldNotifyPeer(peer, source);
     });
+}
+
+/** Notehub lifecycle reasons that should be evaluated for presence even when online stays true. */
+const LIFECYCLE_PRESENCE_REASONS = new Set(['boot', 'set', 'changed']);
+
+export function isNewLifecycleEvent(
+  before: FirebaseFirestore.DocumentData,
+  after: FirebaseFirestore.DocumentData,
+): boolean {
+  const beforeEventId = String(before['lastEventId'] ?? '');
+  const afterEventId = String(after['lastEventId'] ?? '');
+  const reason = String(after['reason'] ?? '');
+
+  return (
+    afterEventId.length > 0 &&
+    afterEventId !== beforeEventId &&
+    LIFECYCLE_PRESENCE_REASONS.has(reason)
+  );
 }
 
 export function detectPresenceChange(
@@ -87,6 +107,18 @@ export function detectPresenceChange(
     return { kind: 'device_id_changed', device: after, before, after };
   }
 
+  // Device already online — re-announce on each new boot note from Notehub.
+  if (
+    isOnline &&
+    wasOnline &&
+    afterData &&
+    beforeData &&
+    isNewLifecycleEvent(beforeData, afterData) &&
+    String(afterData['reason'] ?? '') === 'boot'
+  ) {
+    return { kind: 'came_online', device: after, before, after };
+  }
+
   return null;
 }
 
@@ -106,6 +138,11 @@ export function buildDeliveriesForChange(
   ) => {
     const targetProjectUid = target.product ?? projectUid;
     if (!targetProjectUid) {
+      logFunction(FN, 'warn', 'Skipped delivery — target missing Notehub product UID', {
+        targetDeviceUid: target.notehubDeviceUid,
+        eventType,
+        sourceDeviceUid,
+      });
       return;
     }
 
@@ -173,7 +210,15 @@ export async function deliverPresenceMessage(
   notehub: NotehubService,
   queue: OutboundQueueService,
   delivery: PendingPresenceDelivery,
-): Promise<void> {
+): Promise<'sent' | 'failed'> {
+  logFunction(FN, 'start', 'Delivering presence message', {
+    targetDeviceUid: delivery.targetNotehubDeviceUid,
+    sourceDeviceUid: delivery.sourceDeviceUid,
+    eventType: delivery.eventType,
+    projectUid: delivery.projectUid,
+    compactPayload: delivery.compactPayload,
+  });
+
   const message = await queue.enqueueMessage(delivery);
   const result = await notehub.sendPresenceNotification(
     delivery.projectUid,
@@ -183,7 +228,13 @@ export async function deliverPresenceMessage(
 
   if (result.success) {
     await queue.markSent(delivery.targetNotehubDeviceUid, message.id);
-    return;
+    logFunction(FN, 'success', 'Presence message sent to Notehub', {
+      messageId: message.id,
+      targetDeviceUid: delivery.targetNotehubDeviceUid,
+      eventType: delivery.eventType,
+      compactPayload: delivery.compactPayload,
+    });
+    return 'sent';
   }
 
   await queue.markRetry(
@@ -192,6 +243,14 @@ export async function deliverPresenceMessage(
     1,
     result.error ?? 'Unknown Notehub send error',
   );
+
+  logFunction(FN, 'warn', 'Presence message send failed — queued for retry', {
+    messageId: message.id,
+    targetDeviceUid: delivery.targetNotehubDeviceUid,
+    eventType: delivery.eventType,
+    error: result.error,
+  });
+  return 'failed';
 }
 
 export async function processPresenceChange(
@@ -204,24 +263,37 @@ export async function processPresenceChange(
   const peers = await fetchOnlinePeers(db, change.device);
   const deliveries = buildDeliveriesForChange(change, peers, defaultProjectUid);
 
+  logFunction(FN, 'start', 'Built presence deliveries', {
+    kind: change.kind,
+    sourceDeviceUid: change.device.notehubDeviceUid,
+    peerCount: peers.length,
+    peerDeviceIds: peers.map((peer) => peer.deviceId),
+    deliveryCount: deliveries.length,
+  });
+
   if (deliveries.length === 0) {
-    logger.info('No presence deliveries required', {
+    logFunction(FN, 'skip', 'No deliveries required for transition', {
       kind: change.kind,
       deviceUid: change.device.notehubDeviceUid,
+      peerCount: peers.length,
     });
     return 0;
   }
 
-  logger.info('Dispatching presence deliveries', {
+  const results = await Promise.all(
+    deliveries.map((delivery) => deliverPresenceMessage(notehub, queue, delivery)),
+  );
+
+  const sentCount = results.filter((result) => result === 'sent').length;
+  const failedCount = results.filter((result) => result === 'failed').length;
+
+  logFunction(FN, 'success', 'Finished dispatching presence deliveries', {
     kind: change.kind,
     deviceUid: change.device.notehubDeviceUid,
     deliveryCount: deliveries.length,
-    peerCount: peers.length,
+    sentCount,
+    failedCount,
   });
-
-  await Promise.all(
-    deliveries.map((delivery) => deliverPresenceMessage(notehub, queue, delivery)),
-  );
 
   return deliveries.length;
 }

@@ -11,6 +11,7 @@ import { createNotehubService } from './services/notehub.service';
 import { createDevicePresenceSyncHandler, retryPendingPresenceMessages } from './presence/device-presence-sync';
 import { createNotehubPresenceAckHandler } from './presence/notehub-presence-ack';
 import { OutboundQueueService } from './presence/outbound-queue.service';
+import { logFunction } from './logging';
 
 const notehubWebhookToken = defineSecret('NOTEHUB_WEBHOOK_TOKEN');
 const notehubPat = defineSecret('NOTEHUB_PAT');
@@ -22,6 +23,7 @@ const notehubProjectUid = defineString('NOTEHUB_PROJECT_UID', {
 initializeApp();
 
 const db = getFirestore();
+db.settings({ ignoreUndefinedProperties: true });
 
 function createConfiguredNotehubService() {
   return createNotehubService({
@@ -97,11 +99,19 @@ export const syncDevicePresence = onDocumentWritten(
     secrets: [notehubPat],
   },
   async (event) => {
-    const notehub = createConfiguredNotehubService();
-    const queue = new OutboundQueueService(db);
-    const defaultProjectUid = notehubProjectUid.value() || undefined;
-    const handler = createDevicePresenceSyncHandler(db, notehub, queue, defaultProjectUid);
-    await handler(event);
+    try {
+      const notehub = createConfiguredNotehubService();
+      const queue = new OutboundQueueService(db);
+      const defaultProjectUid = notehubProjectUid.value() || undefined;
+      const handler = createDevicePresenceSyncHandler(db, notehub, queue, defaultProjectUid);
+      await handler(event);
+    } catch (error) {
+      logFunction('syncDevicePresence', 'error', 'Unhandled presence sync failure', {
+        deviceId: event.params.deviceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   },
 );
 
@@ -122,8 +132,15 @@ export const processPresenceMessageRetries = onSchedule(
     secrets: [notehubPat],
   },
   async () => {
-    const notehub = createConfiguredNotehubService();
-    const queue = new OutboundQueueService(db);
-    await retryPendingPresenceMessages(notehub, queue);
+    try {
+      const notehub = createConfiguredNotehubService();
+      const queue = new OutboundQueueService(db);
+      await retryPendingPresenceMessages(notehub, queue);
+    } catch (error) {
+      logFunction('processPresenceMessageRetries', 'error', 'Retry sweep failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   },
 );

@@ -4,7 +4,7 @@ import {
   PRESENCE_INBOUND_NOTEFILE,
   PRESENCE_ACK_NOTEFILE,
 } from '@regattaone/shared';
-import { logger } from 'firebase-functions';
+import { logFunction } from '../logging';
 
 export interface NotehubServiceConfig {
   personalAccessToken: string;
@@ -21,6 +21,64 @@ export interface PresenceAckEvent {
   messageId: string;
   receivedAt: number;
   ok: boolean;
+}
+
+/** notehub-js rejects with a plain object `{ status, body, error }`, not an Error. */
+export function formatNotehubApiError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object') {
+    const apiError = error as {
+      status?: number;
+      statusText?: string;
+      body?: { err?: string; message?: string; code?: number };
+      error?: { message?: string };
+    };
+
+    const parts: string[] = [];
+    if (typeof apiError.status === 'number') {
+      parts.push(`HTTP ${apiError.status}`);
+    }
+
+    const bodyMessage = apiError.body?.err ?? apiError.body?.message;
+    if (bodyMessage) {
+      parts.push(String(bodyMessage));
+    } else if (apiError.error?.message) {
+      parts.push(apiError.error.message);
+    }
+
+    if (parts.length > 0) {
+      return parts.join(': ');
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  return String(error);
+}
+
+function notehubApiErrorDetails(error: unknown): Record<string, unknown> {
+  if (!error || typeof error !== 'object') {
+    return {};
+  }
+
+  const apiError = error as {
+    status?: number;
+    statusText?: string;
+    body?: unknown;
+  };
+
+  return {
+    ...(typeof apiError.status === 'number' ? { httpStatus: apiError.status } : {}),
+    ...(apiError.statusText ? { httpStatusText: apiError.statusText } : {}),
+    ...(apiError.body !== undefined ? { httpBody: apiError.body } : {}),
+  };
 }
 
 export class NotehubService {
@@ -56,6 +114,13 @@ export class NotehubService {
     noteInput.body = payload as unknown as Record<string, unknown>;
 
     try {
+      logFunction('notehubService', 'start', 'Sending presence.qi note', {
+        projectUid: this.resolveProjectUid(projectUid),
+        deviceUid,
+        notefile: PRESENCE_INBOUND_NOTEFILE,
+        compactPayload: payload,
+      });
+
       await this.deviceApi.addQiNote(
         this.resolveProjectUid(projectUid),
         deviceUid,
@@ -63,19 +128,25 @@ export class NotehubService {
         noteInput,
       );
 
-      logger.info('Sent presence notification to device', {
+      logFunction('notehubService', 'success', 'presence.qi note accepted by Notehub API', {
+        projectUid: this.resolveProjectUid(projectUid),
         deviceUid,
         messageId: payload.mid,
         type: payload.t,
+        compactPayload: payload,
       });
 
       return { success: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error('Failed to send presence notification', {
+      const message = formatNotehubApiError(error);
+      logFunction('notehubService', 'error', 'Notehub addQiNote failed', {
+        projectUid,
         deviceUid,
         messageId: payload.mid,
+        type: payload.t,
+        compactPayload: payload,
         error: message,
+        ...notehubApiErrorDetails(error),
       });
       return { success: false, error: message };
     }
@@ -115,10 +186,11 @@ export class NotehubService {
         ok,
       };
     } catch (error) {
-      logger.warn('Unable to poll Notehub presence ack', {
+      logFunction('notehubService', 'warn', 'Unable to poll Notehub presence ack', {
         deviceUid,
         messageId,
-        error: error instanceof Error ? error.message : String(error),
+        error: formatNotehubApiError(error),
+        ...notehubApiErrorDetails(error),
       });
       return null;
     }

@@ -6,6 +6,9 @@ import type { Request } from 'firebase-functions/v2/https';
 import type { Response } from 'express';
 import { handlePresenceAckWebhook } from './device-presence-sync';
 import { OutboundQueueService } from './outbound-queue.service';
+import { logFunction } from '../logging';
+
+const FN = 'notehubPresenceAck';
 
 function readAuthToken(authorizationHeader: string | undefined): string | null {
   if (!authorizationHeader) {
@@ -72,10 +75,24 @@ export function createNotehubPresenceAckHandler(db: Firestore, expectedToken: st
     }
 
     try {
-      const result = await handlePresenceAckWebhook(queue, parseRequestPayload(req));
+      const payload = parseRequestPayload(req);
+      logFunction(FN, 'start', 'Received Notehub webhook', {
+        file: (payload as { file?: string }).file,
+        device: (payload as { device?: string }).device,
+      });
+
+      const result = await handlePresenceAckWebhook(queue, payload);
+
+      logFunction(FN, 'success', 'Webhook handled', {
+        ignored: result.ignored ?? false,
+        messageId: result.messageId,
+      });
+
       res.status(result.ignored ? 202 : 200).json(result);
     } catch (error) {
-      logger.error('Failed to process Notehub presence ack', error);
+      logFunction(FN, 'error', 'Failed to process webhook', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       res.status(500).json({ error: 'Internal error' });
     }
   };
