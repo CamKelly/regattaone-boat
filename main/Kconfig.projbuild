@@ -38,6 +38,38 @@ menu "RegattaOne — Blues Notecard (LoRa, I2C)"
         default 7 if IDF_TARGET_ESP32C3
         default 11
 
+    config REGATTAONE_PRESENCE_SYNC_ENABLE
+        bool "Enable device presence sync (presence.qi / presence_ack.qo)"
+        depends on REGATTAONE_NOTECARD_ENABLE
+        default y
+        help
+            Poll Notehub inbound presence.qi, apply peer deltas locally, and ack on presence_ack.qo.
+
+    config PRESENCE_POLL_INTERVAL_SEC
+        int "Presence hub.sync + poll interval (seconds)"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default 300
+        range 60 86400
+
+    config PRESENCE_ACK_PORT
+        int "Notehub port for presence_ack.qo template"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default 12
+        range 1 99
+
+    config PRESENCE_MAX_PEERS
+        int "Max tracked peer devices"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default 32
+        range 4 128
+
+    config NOTEHUB_PRODUCT_UID
+        string "Notehub product UID for hub.set (empty = skip)"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default ""
+        help
+            e.g. com.company.project:product. Leave empty if the Notecard is already provisioned.
+
 endmenu
 
 menu "RegattaOne — REYAX RYUW122 (UWB UART)"

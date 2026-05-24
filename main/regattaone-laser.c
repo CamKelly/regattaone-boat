@@ -16,6 +16,7 @@
 #include "boat_id.h"
 #include "device_type.h"
 #include "boat_note.h"
+#include "presence_sync.h"
 #include "blues_notecard.h"
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
@@ -140,6 +141,7 @@ void app_main(void)
         } else {
             ESP_LOGI(TAG, "Blues Notecard I2C (%s bus)", bus ? "shared SEN0140" : "standalone");
             boat_notehub_report_async(BOAT_NOTE_BOOT);
+            presence_sync_start();
         }
     }
 #endif
