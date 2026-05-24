@@ -24,6 +24,7 @@ Presence sync reads these fields on Notehub device documents:
 | `online: false → true` | `DEVICE_ONLINE` | `ONLINE_DEVICE_SNAPSHOT` |
 | `online: true → false` | `DEVICE_OFFLINE` | — |
 | `deviceId` changed | `DEVICE_ID_CHANGED` | — |
+| `deviceType` changed (while online) | `DEVICE_ONLINE` (updated type) | — |
 | document deleted | `DEVICE_REMOVED` | — |
 
 Compact inbound payload example:

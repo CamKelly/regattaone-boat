@@ -18,6 +18,7 @@ export type PresenceChangeKind =
   | 'came_online'
   | 'went_offline'
   | 'device_id_changed'
+  | 'device_type_changed'
   | 'removed';
 
 export interface PresenceChangeContext {
@@ -64,6 +65,10 @@ export function isNewLifecycleEvent(
   );
 }
 
+function normalizeDeviceType(deviceType: DevicePresenceDocument['deviceType']): string {
+  return deviceType?.trim() ?? '';
+}
+
 export function detectPresenceChange(
   beforeData: FirebaseFirestore.DocumentData | undefined,
   afterData: FirebaseFirestore.DocumentData | undefined,
@@ -105,6 +110,14 @@ export function detectPresenceChange(
 
   if (before.deviceId !== after.deviceId && after.deviceId.trim().length > 0) {
     return { kind: 'device_id_changed', device: after, before, after };
+  }
+
+  if (
+    isOnline &&
+    after.deviceId.trim().length > 0 &&
+    normalizeDeviceType(before.deviceType) !== normalizeDeviceType(after.deviceType)
+  ) {
+    return { kind: 'device_type_changed', device: after, before, after };
   }
 
   // Device already online — re-announce on each new boot note from Notehub.
@@ -189,6 +202,15 @@ export function buildDeliveriesForChange(
         enqueue(peer, 'DEVICE_ID_CHANGED', {
           oldDeviceId: change.before?.deviceId ?? '',
           newDeviceId: change.after?.deviceId ?? change.device.deviceId,
+        });
+      }
+      break;
+    }
+    case 'device_type_changed': {
+      for (const peer of peers) {
+        enqueue(peer, 'DEVICE_ONLINE', {
+          deviceId: change.device.deviceId,
+          deviceType: change.device.deviceType,
         });
       }
       break;
