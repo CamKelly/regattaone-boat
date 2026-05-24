@@ -1,0 +1,23 @@
+{
+  "name": "regattaone-boat-backend",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "client",
+    "functions"
+  ],
+  "scripts": {
+    "build": "npm run build -w @regattaone/shared && npm run build -w client && npm run build -w functions",
+    "build:client": "npm run build -w client",
+    "build:functions": "npm run build -w functions",
+    "serve:client": "npm run start -w client",
+    "serve:functions": "npm run serve -w functions",
+    "deploy": "firebase deploy"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "firebase-functions": "^7.2.5"
+  }
+}

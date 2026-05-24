@@ -48,8 +48,16 @@ cmake_install.cmake
 install_manifest.txt
 CTestTestfile.cmake
 
-# Node (web app)
+# Node (web app + backend)
 node_modules/
+backend/functions/lib/
+backend/functions/vendor/
+backend/shared/dist/
+backend/client/dist/
+backend/.firebase/
+backend/**/.env.*
+backend/**/.env
+!backend/**/.env.example
 
 # Python environment files
 *.pyc

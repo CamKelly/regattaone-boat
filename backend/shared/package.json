@@ -1,0 +1,14 @@
+{
+  "name": "@regattaone/shared",
+  "version": "0.0.1",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "typescript": "~5.8.2"
+  }
+}

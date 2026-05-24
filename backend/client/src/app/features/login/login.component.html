@@ -1,0 +1,87 @@
+<div class="login-page">
+  <nz-card class="login-card" nzTitle="RegattaOne Boat">
+    <p class="login-subtitle">Sign in to manage anchors, tags, and race course devices.</p>
+
+    <nz-tabs>
+      <nz-tab nzTitle="Sign in">
+        <form nz-form [formGroup]="signInForm" (ngSubmit)="onSignIn()">
+          <nz-form-item>
+            <nz-form-label [nzSpan]="24" nzRequired>Email</nz-form-label>
+            <nz-form-control [nzSpan]="24" nzErrorTip="Enter a valid email address.">
+              <input nz-input type="email" formControlName="email" autocomplete="email" />
+            </nz-form-control>
+          </nz-form-item>
+
+          <nz-form-item>
+            <nz-form-label [nzSpan]="24" nzRequired>Password</nz-form-label>
+            <nz-form-control [nzSpan]="24" nzErrorTip="Password is required.">
+              <input
+                nz-input
+                type="password"
+                formControlName="password"
+                autocomplete="current-password"
+              />
+            </nz-form-control>
+          </nz-form-item>
+
+          <button
+            nz-button
+            nzType="primary"
+            nzHtmlType="submit"
+            nzBlock
+            [nzLoading]="loading.signIn"
+            [disabled]="signInForm.invalid"
+          >
+            Sign in
+          </button>
+        </form>
+      </nz-tab>
+
+      <nz-tab nzTitle="Create account">
+        <form nz-form [formGroup]="signUpForm" (ngSubmit)="onSignUp()">
+          <nz-form-item>
+            <nz-form-label [nzSpan]="24" nzRequired>Email</nz-form-label>
+            <nz-form-control [nzSpan]="24" nzErrorTip="Enter a valid email address.">
+              <input nz-input type="email" formControlName="email" autocomplete="email" />
+            </nz-form-control>
+          </nz-form-item>
+
+          <nz-form-item>
+            <nz-form-label [nzSpan]="24" nzRequired>Password</nz-form-label>
+            <nz-form-control [nzSpan]="24" nzErrorTip="Use at least 6 characters.">
+              <input
+                nz-input
+                type="password"
+                formControlName="password"
+                autocomplete="new-password"
+              />
+            </nz-form-control>
+          </nz-form-item>
+
+          <nz-form-item>
+            <nz-form-label [nzSpan]="24" nzRequired>Confirm password</nz-form-label>
+            <nz-form-control [nzSpan]="24" nzErrorTip="Confirm your password.">
+              <input
+                nz-input
+                type="password"
+                formControlName="confirmPassword"
+                autocomplete="new-password"
+              />
+            </nz-form-control>
+          </nz-form-item>
+
+          <button
+            nz-button
+            nzType="primary"
+            nzHtmlType="submit"
+            nzBlock
+            [nzLoading]="loading.signUp"
+            [disabled]="signUpForm.invalid"
+          >
+            Create account
+          </button>
+        </form>
+      </nz-tab>
+    </nz-tabs>
+  </nz-card>
+</div>

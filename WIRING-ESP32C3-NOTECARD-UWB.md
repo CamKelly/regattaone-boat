@@ -4,7 +4,7 @@ This document describes how to connect a **Seeed Studio XIAO ESP32-C3** to a **B
 
 Firmware defaults match `main/Kconfig.projbuild` (ESP32-C3 targets). After wiring, set the same GPIO numbers in **menuconfig** if you use different pins.
 
-**References**
+## References
 
 - [Seeed XIAO ESP32C3 wiki / pinout](https://wiki.seeedstudio.com/xiao_esp32c3/)
 - [Blues Notecard for LoRa](https://shop.blues.com/products/notecard-lora)

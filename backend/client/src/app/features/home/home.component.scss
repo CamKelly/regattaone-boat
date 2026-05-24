@@ -1,0 +1,61 @@
+.app-layout {
+  min-height: 100vh;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: #001529;
+}
+
+.brand {
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.user-email {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.app-content {
+  padding: 24px;
+  background: #f5f5f5;
+}
+
+.content-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  gap: 24px;
+}
+
+.section-copy {
+  margin-bottom: 16px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.position-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .position-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -12,6 +12,7 @@ BLE advertised name: **`RegattaOne-Boat`**.
 | ----- | ---- |
 | **Firmware** (`main/`) | NimBLE GATT **0xFEF0**; optional **SEN0140** IMU task (**0xFEF1**); **Blues Notecard** serial-over-I2C (**0xFEF7** write / **0xFEF8** notify); **RYUW122** UART lines → **0xFEF9** notify; optional **MSP430** paths (**default off** in menuconfig). |
 | **Web app** (`web/`) | **Web Bluetooth**: connect by service UUID, **Send to Notecard**, live **response** and **UWB** logs (no IMU / Three.js in the maintained UI). |
+| **Backend** (`backend/`) | Firebase Cloud Functions, Firestore rules, Notehub webhooks, device presence sync, and admin PWA (`backend/client/`). |
 | **Wiring** | See **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)** for Seeed **XIAO ESP32-C3** ↔ Notecarrier / Notecard ↔ RYUW122. |
 
 Hardware references: [Notecard for LoRa](https://shop.blues.com/products/notecard-lora), [Notecarrier B](https://shop.blues.com/products/carr-b), [RYUW122_Lite](https://reyax.com/products/RYUW122_Lite).
@@ -110,6 +111,33 @@ A legacy **Vite** snapshot lives in **`web-vite-legacy/`**; day-to-day developme
 
 ---
 
+## Backend (Firebase + Notehub)
+
+Cloud Functions, Firestore, and the admin PWA live under **`backend/`**. Run Firebase CLI commands from that directory:
+
+```bash
+cd backend
+npm install
+npm run build -w @regattaone/shared
+firebase deploy --only functions,firestore
+```
+
+| Doc | Topic |
+| --- | ----- |
+| [backend/README.md](backend/README.md) | Setup, emulators, deploy |
+| [backend/docs/notehub-setup.md](backend/docs/notehub-setup.md) | `boat.qo` lifecycle webhook |
+| [backend/docs/device-presence-sync.md](backend/docs/device-presence-sync.md) | `presence.qi` / `presence_ack.qo` |
+
+Firmware notefiles consumed by the backend:
+
+| Notefile | Direction | Purpose |
+| -------- | --------- | ------- |
+| `boat.qo` | Device → cloud | Boot / ID / type (`notehubDeviceLifecycle`) |
+| `presence_ack.qo` | Device → cloud | Presence delivery ack (`notehubPresenceAck`) |
+| `presence.qi` | Cloud → device | Presence deltas (read by firmware `presence_sync`) |
+
+---
+
 ## Optional: SEN0140 IMU (legacy)
 
 If the **SEN0140** 10-DOF breakout is wired on the same I2C bus as the Notecard, firmware can still run the IMU task and stream **0xFEF1**. Pin defaults for **ESP32-C3 (XIAO)** are **GPIO6 SDA / GPIO7 SCL** (menuconfig). More detail: **[WIRING-SEN0140.md](WIRING-SEN0140.md)**.
@@ -133,7 +161,12 @@ regattaone-boat/
 │   ├── sen0140_10dof.c / .h     # Optional IMU
 │   ├── msp430_*.c / .h          # Optional MSP430 (off by default)
 │   └── Kconfig.projbuild
-├── web/                           # Angular app (boat UI)
+├── web/                           # Angular app (BLE boat UI)
+├── backend/                       # Firebase functions, Firestore, admin PWA
+│   ├── client/                    # Angular admin PWA (hosted on Firebase)
+│   ├── functions/                 # Cloud Functions (Notehub, presence sync)
+│   ├── shared/                    # @regattaone/shared types
+│   └── docs/                      # Notehub + presence setup
 ├── web-vite-legacy/               # Old Vite client (reference)
 ├── WIRING-ESP32C3-NOTECARD-UWB.md # Primary wiring guide
 ├── WIRING-SEN0140.md             # Optional IMU wiring

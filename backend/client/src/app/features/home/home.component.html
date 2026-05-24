@@ -1,0 +1,55 @@
+<nz-layout class="app-layout">
+  <nz-header class="app-header">
+    <div class="brand">RegattaOne Boat</div>
+    <div class="header-actions">
+      @if (user$ | async; as user) {
+        <span class="user-email">{{ user.email }}</span>
+        <button nz-button nzType="default" (click)="signOut()">Sign out</button>
+      }
+    </div>
+  </nz-header>
+
+  <nz-content class="app-content">
+    <div class="content-inner">
+      <nz-card nzTitle="Devices" class="devices-card">
+        <p class="section-copy">
+          Notecard devices synced from Notehub. Each device is keyed by its Notehub UID and updated
+          when the hardware boots or its boat ID is set or changed.
+        </p>
+
+        @if (devices().length === 0) {
+          <nz-empty nzNotFoundContent="No devices yet. Waiting for Notehub events."></nz-empty>
+        } @else {
+          <nz-table [nzData]="devices()" [nzFrontPagination]="false" nzSize="middle">
+            <thead>
+              <tr>
+                <th>Boat ID</th>
+                <th>Type</th>
+                <th>Notehub device</th>
+                <th>Last event</th>
+                <th>Transport</th>
+                <th>Last updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (device of devices(); track device.notehubDeviceUid) {
+                <tr>
+                  <td>{{ device.boatId || '—' }}</td>
+                  <td>{{ deviceTypeLabel(device) }}</td>
+                  <td class="mono">{{ device.notehubDeviceUid }}</td>
+                  <td>
+                    <nz-tag [nzColor]="reasonColor(device.reason)">
+                      {{ reasonLabel(device.reason) }}
+                    </nz-tag>
+                  </td>
+                  <td>{{ transportLabel(device) }}</td>
+                  <td>{{ device.lastUpdatedAt | date: 'medium' }}</td>
+                </tr>
+              }
+            </tbody>
+          </nz-table>
+        }
+      </nz-card>
+    </div>
+  </nz-content>
+</nz-layout>

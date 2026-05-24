@@ -1,0 +1,26 @@
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(160deg, #f0f5ff 0%, #ffffff 45%, #e6f4ff 100%);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+}
+
+.login-subtitle {
+  margin: 0 0 24px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+form {
+  margin-top: 16px;
+}
+
+button[nz-button] {
+  margin-top: 8px;
+}
