@@ -7,7 +7,7 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 
-#include "device_type_note.h"
+#include "boat_note.h"
 
 static const char *TAG = "device_type";
 static const char *NVS_NS = "boat";
@@ -164,7 +164,7 @@ esp_err_t device_type_set(device_type_t type)
     s_type_in_nvs = true;
     ESP_LOGI(TAG, "saved type \"%s\"", str);
     if (type_changed) {
-        device_type_notehub_report_async(had_type ? DEVICE_TYPE_NOTE_CHANGED : DEVICE_TYPE_NOTE_SET);
+        boat_notehub_report_async(had_type ? BOAT_NOTE_CHANGED : BOAT_NOTE_SET);
     }
     return ESP_OK;
 }

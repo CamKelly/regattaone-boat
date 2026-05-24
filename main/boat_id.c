@@ -3,7 +3,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "boat_id_note.h"
+#include "boat_note.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -116,7 +116,7 @@ esp_err_t boat_id_set(const char *id, size_t len)
     refresh_ble_name();
     ESP_LOGI(TAG, "saved id \"%s\" ble_name \"%s\"", s_boat_id, s_ble_name);
     if (id_changed) {
-        boat_id_notehub_report_async(had_id ? BOAT_ID_NOTE_CHANGED : BOAT_ID_NOTE_SET);
+        boat_notehub_report_async(had_id ? BOAT_NOTE_CHANGED : BOAT_NOTE_SET);
     }
     return ESP_OK;
 }
