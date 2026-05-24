@@ -51,6 +51,7 @@ static presence_peer_t s_peers[CONFIG_PRESENCE_MAX_PEERS];
 static size_t s_peer_count;
 static bool s_ack_template_registered;
 static bool s_hub_configured;
+static bool s_product_uid_warned;
 
 static bool response_has_err(const char *rsp)
 {
@@ -87,6 +88,31 @@ static const char *json_body_object(const char *json)
     }
     p = strchr(p, '{');
     return p;
+}
+
+/** Resolve note body; unwrap Notehub NoteInput {body:{payload}} if needed. */
+static const char *presence_payload_from_note_rsp(const char *json)
+{
+    if (json == NULL) {
+        return NULL;
+    }
+
+    const char *body = json_body_object(json);
+    if (body == NULL) {
+        if (strstr(json, "\"t\":") != NULL) {
+            return strchr(json, '{');
+        }
+        return NULL;
+    }
+
+    if (strstr(body, "\"t\":") == NULL) {
+        const char *inner = json_body_object(body);
+        if (inner != NULL && strstr(inner, "\"t\":") != NULL) {
+            return inner;
+        }
+    }
+
+    return body;
 }
 
 static bool json_get_string(const char *json, const char *key, char *out, size_t out_cap)
@@ -415,6 +441,36 @@ static bool presence_send_ack(const char *mid, bool ok)
     return true;
 }
 
+static int presence_qi_pending_count(void)
+{
+    char req[80];
+    int n = snprintf(req, sizeof(req), "{\"req\":\"file.changes\",\"file\":\"" PRESENCE_INBOUND_FILE "\"}\n");
+    if (n <= 0 || (size_t)n >= sizeof(req)) {
+        return -1;
+    }
+
+    char *rsp = NULL;
+    esp_err_t err = nc_transact_buf(req, (size_t)n, &rsp);
+    if (err != ESP_OK || response_has_err(rsp)) {
+        ESP_LOGW(TAG, "file.changes failed: %s", rsp ? rsp : esp_err_to_name(err));
+        free(rsp);
+        return -1;
+    }
+
+    int total = 0;
+    const char *file_section = strstr(rsp, PRESENCE_INBOUND_FILE);
+    if (file_section != NULL) {
+        const char *total_key = strstr(file_section, "\"total\":");
+        if (total_key != NULL) {
+            total = (int)strtol(total_key + 8, NULL, 10);
+        }
+    }
+
+    ESP_LOGI(TAG, "file.changes " PRESENCE_INBOUND_FILE " total=%d", total);
+    free(rsp);
+    return total;
+}
+
 static bool presence_hub_sync(void)
 {
     char req[48];
@@ -435,9 +491,27 @@ static bool presence_hub_sync(void)
         free(rsp);
         return false;
     }
-    ESP_LOGI(TAG, "hub.sync ok");
+    if (rsp != NULL && rsp[0] != '\0' && strcmp(rsp, "{}\n") != 0 && strcmp(rsp, "{}") != 0) {
+        ESP_LOGI(TAG, "hub.sync ok: %s", rsp);
+    } else {
+        ESP_LOGI(TAG, "hub.sync ok");
+    }
     free(rsp);
     return true;
+}
+
+static void presence_log_sync_status(void)
+{
+    char req[] = "{\"req\":\"hub.sync.status\"}\n";
+    char *rsp = NULL;
+    esp_err_t err = nc_transact_buf(req, sizeof(req) - 1U, &rsp);
+    if (err != ESP_OK || response_has_err(rsp)) {
+        ESP_LOGW(TAG, "hub.sync.status failed: %s", rsp ? rsp : esp_err_to_name(err));
+        free(rsp);
+        return;
+    }
+    ESP_LOGI(TAG, "hub.sync.status: %s", rsp);
+    free(rsp);
 }
 
 static bool presence_hub_configure(void)
@@ -448,13 +522,24 @@ static bool presence_hub_configure(void)
 
     const char *product = CONFIG_NOTEHUB_PRODUCT_UID;
     if (product[0] == '\0') {
+        if (!s_product_uid_warned) {
+            ESP_LOGW(TAG, "NOTEHUB_PRODUCT_UID not set — skipping hub.set (no inbound presence.qi)");
+            s_product_uid_warned = true;
+        }
         return true;
     }
 
     char req[256];
-    int n = snprintf(req, sizeof(req),
-                     "{\"req\":\"hub.set\",\"product\":\"%s\",\"mode\":\"periodic\",\"outbound\":360,\"inbound\":%d}\n",
-                     product, CONFIG_PRESENCE_POLL_INTERVAL_SEC);
+    int n;
+#if CONFIG_PRESENCE_HUB_CONTINUOUS
+    n = snprintf(req, sizeof(req),
+                 "{\"req\":\"hub.set\",\"product\":\"%s\",\"mode\":\"continuous\",\"sync\":true}\n",
+                 product);
+#else
+    n = snprintf(req, sizeof(req),
+                 "{\"req\":\"hub.set\",\"product\":\"%s\",\"mode\":\"periodic\",\"outbound\":360,\"inbound\":%d}\n",
+                 product, CONFIG_PRESENCE_POLL_INTERVAL_SEC);
+#endif
     if (n <= 0 || (size_t)n >= sizeof(req)) {
         return false;
     }
@@ -469,11 +554,15 @@ static bool presence_hub_configure(void)
 
     free(rsp);
     s_hub_configured = true;
+#if CONFIG_PRESENCE_HUB_CONTINUOUS
+    ESP_LOGI(TAG, "hub.set product=%s mode=continuous", product);
+#else
     ESP_LOGI(TAG, "hub.set product=%s inbound=%ds", product, CONFIG_PRESENCE_POLL_INTERVAL_SEC);
+#endif
     return true;
 }
 
-static void presence_drain_inbound(void)
+static size_t presence_drain_once(void)
 {
     size_t drained = 0U;
 
@@ -494,18 +583,17 @@ static void presence_drain_inbound(void)
         if (response_has_err(rsp)) {
             if (!response_err_is_empty_queue(rsp)) {
                 ESP_LOGW(TAG, "note.get rejected: %s", rsp);
-            } else if (drained == 0U) {
-                ESP_LOGI(TAG, "presence.qi queue empty");
             }
             free(rsp);
             break;
         }
 
         drained++;
+        ESP_LOGI(TAG, "note.get ok: %s", rsp);
 
-        const char *body = json_body_object(rsp);
+        const char *body = presence_payload_from_note_rsp(rsp);
         if (body == NULL) {
-            ESP_LOGW(TAG, "note.get missing body: %s", rsp);
+            ESP_LOGW(TAG, "note.get missing presence payload: %s", rsp);
             free(rsp);
             break;
         }
@@ -538,8 +626,37 @@ static void presence_drain_inbound(void)
         free(rsp);
     }
 
-    if (drained > 0U) {
-        ESP_LOGI(TAG, "drained %u presence.qi note(s)", (unsigned)drained);
+    return drained;
+}
+
+static void presence_drain_inbound(void)
+{
+    size_t total_drained = 0U;
+    int idle_attempts = 0;
+
+    while (idle_attempts < CONFIG_PRESENCE_DRAIN_IDLE_ATTEMPTS) {
+        if (idle_attempts > 0) {
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            (void)presence_hub_sync();
+            presence_log_sync_status();
+        }
+
+        (void)presence_qi_pending_count();
+
+        size_t drained = presence_drain_once();
+        if (drained > 0U) {
+            total_drained += drained;
+            idle_attempts = 0;
+            continue;
+        }
+
+        idle_attempts++;
+    }
+
+    if (total_drained == 0U) {
+        ESP_LOGI(TAG, "presence.qi queue empty (LoRa inbound may still be pending at Notehub)");
+    } else {
+        ESP_LOGI(TAG, "drained %u presence.qi note(s)", (unsigned)total_drained);
     }
 }
 
@@ -554,6 +671,7 @@ static void presence_poll_task(void *arg)
         ESP_LOGI(TAG, "poll: sync + drain " PRESENCE_INBOUND_FILE);
         (void)presence_hub_configure();
         (void)presence_hub_sync();
+        presence_log_sync_status();
         presence_drain_inbound();
         vTaskDelay(pdMS_TO_TICKS((TickType_t)CONFIG_PRESENCE_POLL_INTERVAL_SEC * 1000));
     }

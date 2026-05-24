@@ -51,6 +51,23 @@ menu "RegattaOne — Blues Notecard (LoRa, I2C)"
         default 300
         range 60 86400
 
+    config PRESENCE_DRAIN_IDLE_ATTEMPTS
+        int "Inbound drain retries after hub.sync (LoRa needs more)"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default 20
+        range 1 60
+        help
+            After hub.sync, retry note.get this many times (3 s apart) waiting for
+            LoRaWAN downlink. 20 attempts ≈ 60 s of waiting per poll.
+
+    config PRESENCE_HUB_CONTINUOUS
+        bool "Use continuous hub mode (faster LoRa inbound, more power)"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default y
+        help
+            continuous + sync:true keeps the Notecard checking Notehub more
+            aggressively. Recommended for LoRaWAN (NOTE-LWUS) presence testing.
+
     config PRESENCE_ACK_PORT
         int "Notehub port for presence_ack.qo template"
         depends on REGATTAONE_PRESENCE_SYNC_ENABLE
@@ -66,9 +83,11 @@ menu "RegattaOne — Blues Notecard (LoRa, I2C)"
     config NOTEHUB_PRODUCT_UID
         string "Notehub product UID for hub.set (empty = skip)"
         depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default ""
+        default "com.ellph.camkelly:regattaone"
         help
-            e.g. com.company.project:product. Leave empty if the Notecard is already provisioned.
+            Blues product UID for hub.set, e.g. com.company.project:product.
+            Must match the Notecard's Notehub product (see Notehub device Events).
+            Leave empty only if the Notecard is already provisioned via another tool.
 
 endmenu
 
