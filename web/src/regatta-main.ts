@@ -1,6 +1,7 @@
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
   BLE_BOAT_ID_CHAR_UUID,
+  BLE_DEVICE_TYPE_CHAR_UUID,
   BLE_IMU_CHAR_UUID,
   BLE_NOTECARD_REQ_CHAR_UUID,
   BLE_NOTECARD_RSP_CHAR_UUID,
@@ -9,6 +10,9 @@ import {
   BLE_UWB_LINE_CHAR_UUID,
   BOAT_ID_MAX_LEN,
   BOAT_ID_BLE_NAME_MAX_LEN,
+  type DeviceType,
+  deviceTypeLabel,
+  parseDeviceType,
 } from "./lib/protocol";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
@@ -37,8 +41,11 @@ interface BleBoatSession {
   charUwbLine: BluetoothRemoteGATTCharacteristic | null;
   charUwbAt: BluetoothRemoteGATTCharacteristic | null;
   charBoatId: BluetoothRemoteGATTCharacteristic | null;
+  charDeviceType: BluetoothRemoteGATTCharacteristic | null;
   boatId: string;
   boatIdDraft: string;
+  deviceType: DeviceType;
+  deviceTypeDraft: DeviceType;
   notecardRspAcc: number[];
   uwbLineLogText: string;
   notecardJsonDraft: string;
@@ -86,6 +93,78 @@ function getActiveSession(): BleBoatSession | null {
 function sessionDisplayName(session: BleBoatSession): string {
   const id = session.boatId.trim();
   return id.length > 0 ? id : session.name;
+}
+
+async function readDeviceTypeFromDevice(session: BleBoatSession): Promise<void> {
+  if (!session.charDeviceType || !session.gatt.connected) {
+    return;
+  }
+  try {
+    const val = await session.charDeviceType.readValue();
+    const raw = new TextDecoder().decode(val).replace(/\0/g, "").trim();
+    const type = parseDeviceType(raw);
+    if (type) {
+      session.deviceType = type;
+      session.deviceTypeDraft = type;
+    }
+  } catch (e) {
+    console.warn("BLE device type read failed", session.name, e);
+  }
+}
+
+async function saveDeviceTypeToDevice(): Promise<void> {
+  const session = getActiveSession();
+  const select = document.querySelector<HTMLSelectElement>("#device-type-select");
+  const statusEl = document.querySelector("#device-type-status");
+  if (!session?.charDeviceType || !select) {
+    if (statusEl) {
+      statusEl.textContent = "Device type requires firmware with characteristic 0xFEFC.";
+    }
+    return;
+  }
+  const type = parseDeviceType(select.value);
+  if (!type) {
+    if (statusEl) {
+      statusEl.textContent = "Choose a valid device type.";
+    }
+    return;
+  }
+  try {
+    await gattWrite(session, "type", new TextEncoder().encode(type));
+    session.deviceType = type;
+    session.deviceTypeDraft = type;
+    if (statusEl) {
+      statusEl.textContent = `Saved: ${deviceTypeLabel(type)}`;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (statusEl) {
+      statusEl.textContent = `Save failed: ${msg}`;
+    }
+  }
+}
+
+function syncDeviceTypeUi(session: BleBoatSession | null): void {
+  const select = document.querySelector<HTMLSelectElement>("#device-type-select");
+  const saveBtn = document.querySelector<HTMLButtonElement>("#device-type-save");
+  const statusEl = document.querySelector("#device-type-status");
+  const canEdit = session !== null && session.gatt.connected && session.charDeviceType !== null;
+  if (select) {
+    select.disabled = !canEdit;
+    select.value = session?.deviceTypeDraft ?? "boat";
+  }
+  if (saveBtn) {
+    saveBtn.disabled = !canEdit;
+  }
+  if (statusEl) {
+    if (!session) {
+      statusEl.textContent = "Connect a device to set its type.";
+    } else if (!session.charDeviceType) {
+      statusEl.textContent = "Flash firmware with device type support (0xFEFC) to enable.";
+    } else {
+      statusEl.textContent = `Stored on device: ${deviceTypeLabel(session.deviceType)}`;
+    }
+  }
 }
 
 async function readBoatIdFromDevice(session: BleBoatSession): Promise<void> {
@@ -247,6 +326,7 @@ function syncActionButtons(): void {
     uwbInput.disabled = !canWrite || session.charUwbAt === null;
   }
   syncBoatIdUi(session);
+  syncDeviceTypeUi(session);
 }
 
 async function runGattOp<T>(session: BleBoatSession, op: () => Promise<T>): Promise<T> {
@@ -281,6 +361,7 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   session.charUwbLine = null;
   session.charUwbAt = null;
   session.charBoatId = null;
+  session.charDeviceType = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
 
@@ -320,6 +401,12 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     session.charBoatId = null;
     console.warn("BLE boat ID unavailable", session.name, e);
   }
+  try {
+    session.charDeviceType = await svc.getCharacteristic(BLE_DEVICE_TYPE_CHAR_UUID);
+  } catch (e) {
+    session.charDeviceType = null;
+    console.warn("BLE device type unavailable", session.name, e);
+  }
 }
 
 async function activateSession(session: BleBoatSession): Promise<boolean> {
@@ -341,6 +428,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
     }
     await setSessionNotifications(session, true);
     await readBoatIdFromDevice(session);
+    await readDeviceTypeFromDevice(session);
     return session.gatt.connected;
   } catch (e) {
     console.error("BLE activate failed", session.name, e);
@@ -360,6 +448,7 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charUwbLine = null;
   session.charUwbAt = null;
   session.charBoatId = null;
+  session.charDeviceType = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
   if (session.gatt.connected) {
@@ -437,7 +526,7 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
   }
 }
 
-type GattWriteTarget = "notecard" | "uwb" | "boatid";
+type GattWriteTarget = "notecard" | "uwb" | "boatid" | "type";
 
 function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BluetoothRemoteGATTCharacteristic | null {
   if (target === "notecard") {
@@ -445,6 +534,9 @@ function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget
   }
   if (target === "uwb") {
     return session.charUwbAt;
+  }
+  if (target === "type") {
+    return session.charDeviceType;
   }
   return session.charBoatId;
 }
@@ -538,6 +630,11 @@ function saveUiToSession(session: BleBoatSession): void {
   session.uwbAtDraft = uwbInput?.value ?? "";
   const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
   session.boatIdDraft = boatIdInput?.value ?? session.boatIdDraft;
+  const typeSelect = document.querySelector<HTMLSelectElement>("#device-type-select");
+  const typeParsed = typeSelect ? parseDeviceType(typeSelect.value) : null;
+  if (typeParsed) {
+    session.deviceTypeDraft = typeParsed;
+  }
 }
 
 function loadSessionToUi(session: BleBoatSession): void {
@@ -819,8 +916,11 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
     charUwbLine: null,
     charUwbAt: null,
     charBoatId: null,
+    charDeviceType: null,
     boatId: "",
     boatIdDraft: "",
+    deviceType: "boat",
+    deviceTypeDraft: "boat",
     notecardRspAcc: [],
     uwbLineLogText: "",
     notecardJsonDraft: "",
@@ -864,6 +964,7 @@ async function connectBle(): Promise<void> {
         BLE_UWB_LINE_CHAR_UUID,
         BLE_UWB_AT_CHAR_UUID,
         BLE_BOAT_ID_CHAR_UUID,
+        BLE_DEVICE_TYPE_CHAR_UUID,
       ],
     });
 
@@ -957,6 +1058,17 @@ export function startRegattaApp(): void {
     }
   });
 
+  document.querySelector("#device-type-save")?.addEventListener("click", () => void saveDeviceTypeToDevice());
+  document.querySelector<HTMLSelectElement>("#device-type-select")?.addEventListener("change", (ev) => {
+    const session = getActiveSession();
+    if (session && ev.target instanceof HTMLSelectElement) {
+      const type = parseDeviceType(ev.target.value);
+      if (type) {
+        session.deviceTypeDraft = type;
+      }
+    }
+  });
+
   document.querySelector("#boat-id-save")?.addEventListener("click", () => void saveBoatIdToDevice());
   document.querySelector<HTMLInputElement>("#boat-id-input")?.addEventListener("input", (ev) => {
     const session = getActiveSession();
@@ -970,6 +1082,7 @@ export function startRegattaApp(): void {
   console.info(`RegattaOne Boat web BLE ${WEB_BLE_REV}`);
   clearUiPanels();
   syncBoatIdUi(null);
+  syncDeviceTypeUi(null);
   renderDeviceSelector();
   updateBleToolbar();
   syncActionButtons();

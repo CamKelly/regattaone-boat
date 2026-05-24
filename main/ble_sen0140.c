@@ -25,6 +25,7 @@
 
 #include "ble_sen0140.h"
 #include "boat_id.h"
+#include "device_type.h"
 #if CONFIG_REGATTAONE_NOTECARD_ENABLE
 #include "blues_notecard.h"
 #endif
@@ -56,6 +57,8 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_UWB_AT_UUID        0xfefa
 /** Read/write: user-assigned boat id (UTF-8, max 32 chars, persisted in NVS). */
 #define SEN0140_GATT_BOAT_ID_UUID       0xfefb
+/** Read/write: device type — port | starboard | fixed_dgps_mark | waypoint | boat. */
+#define SEN0140_GATT_DEVICE_TYPE_UUID     0xfefc
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 200U
@@ -343,6 +346,42 @@ static int gatt_svr_access_boat_id(uint16_t conn_handle, uint16_t attr_handle, s
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+static int gatt_svr_access_device_type(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                       void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const char *type = device_type_to_string(device_type_get());
+        size_t n = strlen(type);
+        return os_mbuf_append(ctxt->om, type, (uint16_t)n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (om_len > DEVICE_TYPE_STR_MAX) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        char buf[DEVICE_TYPE_STR_MAX + 1U];
+        if (om_len > 0U) {
+            if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+        }
+        buf[om_len] = '\0';
+        device_type_t type;
+        if (!device_type_from_string(buf, om_len, &type)) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (device_type_set(type) != ESP_OK) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
 static void ble_apply_gap_name(void)
 {
     const char *name = boat_id_ble_name();
@@ -527,6 +566,11 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                 {
                     .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_BOAT_ID_UUID),
                     .access_cb = gatt_svr_access_boat_id,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                },
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_DEVICE_TYPE_UUID),
+                    .access_cb = gatt_svr_access_device_type,
                     .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
                 },
                 {
@@ -744,7 +788,8 @@ esp_err_t ble_sen0140_init(void)
              SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_UART_CHR_UUID,
              SEN0140_GATT_BSL_CHR_UUID, SEN0140_GATT_FW_CHR_UUID, SEN0140_GATT_PROG_STATUS_CHR_UUID,
              SEN0140_GATT_GPIO_CHR_UUID, SEN0140_GATT_NOTECARD_REQ_UUID, SEN0140_GATT_NOTECARD_RSP_UUID,
-             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID, SEN0140_GATT_BOAT_ID_UUID);
+             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID, SEN0140_GATT_BOAT_ID_UUID,
+             SEN0140_GATT_DEVICE_TYPE_UUID);
     return ESP_OK;
 }
 

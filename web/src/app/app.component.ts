@@ -74,6 +74,23 @@ import { startRegattaApp } from "../regatta-main";
               </div>
             </div>
 
+            <div class="ui-toolbar-row ui-toolbar-row--device-type">
+              <div class="ble-device-picker-wrap">
+                <label class="imu-stream-label" for="device-type-select">Device type <code>0xFEFC</code></label>
+                <div class="ble-device-picker-row">
+                  <select id="device-type-select" class="boat-id-input device-type-select" disabled>
+                    <option value="port">Port</option>
+                    <option value="starboard">Starboard</option>
+                    <option value="fixed_dgps_mark">Fixed DGPS mark</option>
+                    <option value="waypoint">Waypoint</option>
+                    <option value="boat">Boat</option>
+                  </select>
+                  <button type="button" id="device-type-save" class="regatta-ble-btn" disabled>Save type</button>
+                </div>
+                <p id="device-type-status" class="hint boat-id-status">Connect a device to set its type.</p>
+              </div>
+            </div>
+
             <section class="boat-section" aria-labelledby="imu-heading">
               <h2 id="imu-heading" class="radio-h2">SEN0140 IMU <code>0xFEF1</code></h2>
               <p id="imu-meta" class="hint imu-meta-line">Connect to stream accel, gyro, mag, temperature, and pressure.</p>

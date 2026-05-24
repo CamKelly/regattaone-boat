@@ -67,6 +67,22 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         help
             RYUW122 may need hundreds of ms after power before UART responds.
 
+    choice DEVICE_DEFAULT_TYPE
+        prompt "Default device type (NVS overrides after BLE save)"
+        default DEVICE_DEFAULT_TYPE_BOAT
+
+        config DEVICE_DEFAULT_TYPE_PORT
+            bool "Port"
+        config DEVICE_DEFAULT_TYPE_STARBOARD
+            bool "Starboard"
+        config DEVICE_DEFAULT_TYPE_FIXED_DGPS_MARK
+            bool "Fixed DGPS mark"
+        config DEVICE_DEFAULT_TYPE_WAYPOINT
+            bool "Waypoint"
+        config DEVICE_DEFAULT_TYPE_BOAT
+            bool "Boat"
+    endchoice
+
     config RYUW122_UART_TX_GPIO
         int "UWB module RX ← ESP TX (GPIO)"
         range 0 21 if IDF_TARGET_ESP32C3

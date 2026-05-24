@@ -161,7 +161,9 @@ select.ble-device-select:disabled {
   white-space: nowrap;
 }
 
-.boat-id-input {
+.boat-id-input,
+.device-role-select,
+.device-type-select {
   flex: 1 1 12rem;
   min-width: 10rem;
   max-width: 100%;
@@ -175,7 +177,9 @@ select.ble-device-select:disabled {
   font-size: 0.88rem;
 }
 
-.boat-id-input:disabled {
+.boat-id-input:disabled,
+.device-role-select:disabled,
+.device-type-select:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }

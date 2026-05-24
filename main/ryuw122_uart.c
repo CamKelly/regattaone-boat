@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
@@ -17,6 +18,7 @@ static const char *TAG = "ryuw122";
 
 #define RYUW_BUF 256
 #define RYUW_IDLE_FLUSH_READS 25
+#define RYUW_AT_RSP_MAX 384
 
 static int s_uart_baud;
 static int s_tx_gpio;
@@ -25,6 +27,36 @@ static int s_rx_gpio;
 /** Set after BLE/web AT write; task reads harder until line idle. */
 static volatile bool s_post_tx_drain;
 
+static SemaphoreHandle_t s_uart_mtx;
+static SemaphoreHandle_t s_at_done;
+static char s_at_rsp[RYUW_AT_RSP_MAX];
+static size_t s_at_rsp_len;
+static bool s_at_ok;
+static bool s_at_err;
+
+static void ryuw122_at_append_line(const char *line)
+{
+    if (!line || s_at_done == NULL) {
+        return;
+    }
+    if (strstr(line, "+OK") != NULL) {
+        s_at_ok = true;
+    }
+    if (strstr(line, "+ERR") != NULL) {
+        s_at_err = true;
+    }
+    const size_t n = strlen(line);
+    if (s_at_rsp_len + n + 2U < sizeof(s_at_rsp)) {
+        memcpy(s_at_rsp + s_at_rsp_len, line, n);
+        s_at_rsp_len += n;
+        s_at_rsp[s_at_rsp_len++] = '\n';
+        s_at_rsp[s_at_rsp_len] = '\0';
+    }
+    if (s_at_ok || s_at_err) {
+        xSemaphoreGive(s_at_done);
+    }
+}
+
 static void ryuw122_emit_line(char *line, size_t *li)
 {
     if (*li == 0U) {
@@ -32,6 +64,9 @@ static void ryuw122_emit_line(char *line, size_t *li)
     }
     line[*li] = '\0';
     ESP_LOGI(TAG, "RX: %s", line);
+    if (s_at_done != NULL) {
+        ryuw122_at_append_line(line);
+    }
     ble_sen0140_uwb_line_notify((const uint8_t *)line, *li);
     *li = 0;
 }
@@ -170,6 +205,22 @@ esp_err_t ryuw122_uart_start(void)
     s_uart_baud = CONFIG_RYUW122_UART_BAUD;
     s_post_tx_drain = false;
 
+    s_uart_mtx = xSemaphoreCreateMutex();
+    s_at_done = xSemaphoreCreateBinary();
+    if (s_uart_mtx == NULL || s_at_done == NULL) {
+        ESP_LOGE(TAG, "mutex/semaphore create failed");
+        if (s_uart_mtx) {
+            vSemaphoreDelete(s_uart_mtx);
+            s_uart_mtx = NULL;
+        }
+        if (s_at_done) {
+            vSemaphoreDelete(s_at_done);
+            s_at_done = NULL;
+        }
+        uart_driver_delete(CONFIG_RYUW122_UART_PORT_NUM);
+        return ESP_ERR_NO_MEM;
+    }
+
     ESP_LOGI(TAG, "UART%d: TX=GPIO%d RX=GPIO%d", CONFIG_RYUW122_UART_PORT_NUM, CONFIG_RYUW122_UART_TX_GPIO,
              CONFIG_RYUW122_UART_RX_GPIO);
 
@@ -199,15 +250,75 @@ esp_err_t ryuw122_uart_write(const uint8_t *data, size_t len)
     if (!data || len == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (s_uart_mtx == NULL || xSemaphoreTake(s_uart_mtx, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
     const int n = uart_write_bytes(CONFIG_RYUW122_UART_PORT_NUM, (const char *)data, len);
     if (n < 0 || (size_t)n != len) {
         ESP_LOGW(TAG, "uart_write %u bytes → %d", (unsigned)len, n);
+        xSemaphoreGive(s_uart_mtx);
         return ESP_FAIL;
     }
     (void)uart_wait_tx_done(CONFIG_RYUW122_UART_PORT_NUM, pdMS_TO_TICKS(200));
     ESP_LOGI(TAG, "TX %.*s", (int)len, (const char *)data);
     s_post_tx_drain = true;
+    xSemaphoreGive(s_uart_mtx);
     return ESP_OK;
+}
+
+esp_err_t ryuw122_uart_at_cmd(const char *cmd, uint32_t timeout_ms)
+{
+    if (!cmd || s_uart_mtx == NULL || s_at_done == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_uart_mtx, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    char line[128];
+    size_t n = strlen(cmd);
+    if (n >= sizeof(line) - 3U) {
+        xSemaphoreGive(s_uart_mtx);
+        return ESP_ERR_INVALID_ARG;
+    }
+    memcpy(line, cmd, n);
+    if (n < 2U || line[n - 2U] != '\r' || line[n - 1U] != '\n') {
+        if (n > 0U && line[n - 1U] == '\n') {
+            line[n - 1U] = '\r';
+            line[n++] = '\n';
+        } else {
+            line[n++] = '\r';
+            line[n++] = '\n';
+        }
+    }
+
+    s_at_rsp_len = 0;
+    s_at_rsp[0] = '\0';
+    s_at_ok = false;
+    s_at_err = false;
+    xSemaphoreTake(s_at_done, 0);
+
+    const int w = uart_write_bytes(CONFIG_RYUW122_UART_PORT_NUM, line, n);
+    if (w < 0) {
+        xSemaphoreGive(s_uart_mtx);
+        return ESP_FAIL;
+    }
+    (void)uart_wait_tx_done(CONFIG_RYUW122_UART_PORT_NUM, pdMS_TO_TICKS(300));
+    s_post_tx_drain = true;
+
+    const TickType_t wait = pdMS_TO_TICKS(timeout_ms > 0U ? timeout_ms : 3000U);
+    if (xSemaphoreTake(s_at_done, wait) != pdTRUE) {
+        ESP_LOGW(TAG, "AT timeout: %s", cmd);
+        xSemaphoreGive(s_uart_mtx);
+        return ESP_ERR_TIMEOUT;
+    }
+
+    const esp_err_t res = s_at_ok && !s_at_err ? ESP_OK : ESP_FAIL;
+    if (res != ESP_OK) {
+        ESP_LOGW(TAG, "AT failed: %s → %s", cmd, s_at_rsp);
+    }
+    xSemaphoreGive(s_uart_mtx);
+    return res;
 }
 
 #else
@@ -221,6 +332,13 @@ esp_err_t ryuw122_uart_write(const uint8_t *data, size_t len)
 {
     (void)data;
     (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t ryuw122_uart_at_cmd(const char *cmd, uint32_t timeout_ms)
+{
+    (void)cmd;
+    (void)timeout_ms;
     return ESP_ERR_NOT_SUPPORTED;
 }
 
