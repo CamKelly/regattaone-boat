@@ -67,9 +67,13 @@ static bool response_err_is_empty_queue(const char *rsp)
            strstr(rsp, "no notes available") != NULL;
 }
 
-static esp_err_t nc_transact_literal(const char *json_line, char **response_out)
+static esp_err_t nc_transact_buf(const char *req, size_t req_len, char **response_out)
 {
-    return blues_notecard_transaction(json_line, strlen(json_line), response_out);
+    if (req_len == 0U || req[req_len - 1U] != '\n') {
+        ESP_LOGW(TAG, "internal: request must end with newline");
+        return ESP_ERR_INVALID_ARG;
+    }
+    return blues_notecard_transaction(req, req_len, response_out);
 }
 
 static const char *json_body_object(const char *json)
@@ -321,7 +325,12 @@ static void log_presence_event(const presence_event_t *evt)
                  (unsigned)s_peer_count);
         break;
     case PRESENCE_EVT_SNAPSHOT:
-        ESP_LOGI(TAG, "ONLINE_DEVICE_SNAPSHOT mid=%s peers=%u", evt->mid, (unsigned)s_peer_count);
+        ESP_LOGI(TAG, "ONLINE_DEVICE_SNAPSHOT mid=%s peer_count=%u", evt->mid, (unsigned)s_peer_count);
+        for (size_t i = 0U; i < s_peer_count; i++) {
+            ESP_LOGI(TAG, "  peer[%u] id=%s dt=%s online=%s", (unsigned)i, s_peers[i].device_id,
+                     s_peers[i].device_type[0] != '\0' ? s_peers[i].device_type : "-",
+                     s_peers[i].online ? "true" : "false");
+        }
         break;
     default:
         break;
@@ -408,8 +417,14 @@ static bool presence_send_ack(const char *mid, bool ok)
 
 static bool presence_hub_sync(void)
 {
+    char req[48];
+    int n = snprintf(req, sizeof(req), "{\"req\":\"hub.sync\",\"sync\":true}\n");
+    if (n <= 0 || (size_t)n >= sizeof(req)) {
+        return false;
+    }
+
     char *rsp = NULL;
-    esp_err_t err = nc_transact_literal("{\"req\":\"hub.sync\"}\n", &rsp);
+    esp_err_t err = nc_transact_buf(req, (size_t)n, &rsp);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "hub.sync failed (%s)", esp_err_to_name(err));
         free(rsp);
@@ -420,6 +435,7 @@ static bool presence_hub_sync(void)
         free(rsp);
         return false;
     }
+    ESP_LOGI(TAG, "hub.sync ok");
     free(rsp);
     return true;
 }
@@ -459,6 +475,8 @@ static bool presence_hub_configure(void)
 
 static void presence_drain_inbound(void)
 {
+    size_t drained = 0U;
+
     for (;;) {
         char req[96];
         int n = snprintf(req, sizeof(req), "{\"req\":\"note.get\",\"file\":\"" PRESENCE_INBOUND_FILE "\",\"delete\":true}\n");
@@ -467,7 +485,7 @@ static void presence_drain_inbound(void)
         }
 
         char *rsp = NULL;
-        esp_err_t err = blues_notecard_transaction(req, (size_t)n, &rsp);
+        esp_err_t err = nc_transact_buf(req, (size_t)n, &rsp);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "note.get failed (%s)", esp_err_to_name(err));
             free(rsp);
@@ -476,10 +494,14 @@ static void presence_drain_inbound(void)
         if (response_has_err(rsp)) {
             if (!response_err_is_empty_queue(rsp)) {
                 ESP_LOGW(TAG, "note.get rejected: %s", rsp);
+            } else if (drained == 0U) {
+                ESP_LOGI(TAG, "presence.qi queue empty");
             }
             free(rsp);
             break;
         }
+
+        drained++;
 
         const char *body = json_body_object(rsp);
         if (body == NULL) {
@@ -515,15 +537,21 @@ static void presence_drain_inbound(void)
 
         free(rsp);
     }
+
+    if (drained > 0U) {
+        ESP_LOGI(TAG, "drained %u presence.qi note(s)", (unsigned)drained);
+    }
 }
 
 static void presence_poll_task(void *arg)
 {
     (void)arg;
 
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    /* Let boat_note finish its first template + boot note before we hub.sync. */
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
     for (;;) {
+        ESP_LOGI(TAG, "poll: sync + drain " PRESENCE_INBOUND_FILE);
         (void)presence_hub_configure();
         (void)presence_hub_sync();
         presence_drain_inbound();

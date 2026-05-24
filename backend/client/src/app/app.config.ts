@@ -7,7 +7,9 @@ import {
 import { provideRouter } from '@angular/router';
 import { provideAnimationsAsync } from '@angular/platform-browser/animations/async';
 import { provideServiceWorker } from '@angular/service-worker';
+import { RightOutline } from '@ant-design/icons-angular/icons';
 import { en_US, provideNzI18n } from 'ng-zorro-antd/i18n';
+import { provideNzIcons } from 'ng-zorro-antd/icon';
 import { routes } from './app.routes';
 import { provideFirebase } from './core/firebase/firebase.config';
 import { FirebaseService } from './core/firebase/firebase.service';
@@ -24,6 +26,7 @@ export const appConfig: ApplicationConfig = {
     provideRouter(routes),
     provideAnimationsAsync(),
     provideNzI18n(en_US),
+    provideNzIcons([RightOutline]),
     provideFirebase(),
     {
       provide: APP_INITIALIZER,

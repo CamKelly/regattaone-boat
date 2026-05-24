@@ -25,7 +25,8 @@ service cloud.firestore {
     }
 
     match /deviceOutboundQueue/{deviceUid}/messages/{messageId} {
-      allow read, write: if false;
+      allow read, delete: if isSignedIn();
+      allow create, update: if false;
     }
   }
 }

@@ -8,21 +8,25 @@ import { switchMap } from 'rxjs/operators';
 import { NzButtonModule } from 'ng-zorro-antd/button';
 import { NzCardModule } from 'ng-zorro-antd/card';
 import { NzEmptyModule } from 'ng-zorro-antd/empty';
+import { NzIconModule } from 'ng-zorro-antd/icon';
 import { NzLayoutModule } from 'ng-zorro-antd/layout';
 import { NzMessageService } from 'ng-zorro-antd/message';
 import { NzTableModule } from 'ng-zorro-antd/table';
 import { NzTagModule } from 'ng-zorro-antd/tag';
 import { AuthService } from '../../core/auth/auth.service';
 import { DeviceService } from '../../core/devices/device.service';
+import { DeviceOutboundMessagesComponent } from './device-outbound-messages.component';
 
 @Component({
   selector: 'app-home',
   imports: [
     AsyncPipe,
     DatePipe,
+    DeviceOutboundMessagesComponent,
     NzButtonModule,
     NzCardModule,
     NzEmptyModule,
+    NzIconModule,
     NzLayoutModule,
     NzTableModule,
     NzTagModule,
@@ -38,6 +42,7 @@ export class HomeComponent {
   private readonly destroyRef = inject(DestroyRef);
 
   protected readonly devices = signal<NotehubDeviceRecord[]>([]);
+  protected readonly expandedDeviceUid = signal<string | null>(null);
 
   protected readonly user$ = this.authService.authState$;
 
@@ -60,6 +65,14 @@ export class HomeComponent {
           this.message.error('Unable to load devices. Check the browser console for details.');
         },
       });
+  }
+
+  protected toggleDeviceDetails(deviceUid: string): void {
+    this.expandedDeviceUid.update((current) => (current === deviceUid ? null : deviceUid));
+  }
+
+  protected isExpanded(deviceUid: string): boolean {
+    return this.expandedDeviceUid() === deviceUid;
   }
 
   protected reasonLabel(reason: NotehubBoatIdReason): string {

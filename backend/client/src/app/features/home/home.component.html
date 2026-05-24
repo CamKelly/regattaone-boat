@@ -23,6 +23,7 @@
           <nz-table [nzData]="devices()" [nzFrontPagination]="false" nzSize="middle">
             <thead>
               <tr>
+                <th nzWidth="40px"></th>
                 <th>Boat ID</th>
                 <th>Type</th>
                 <th>Notehub device</th>
@@ -33,7 +34,19 @@
             </thead>
             <tbody>
               @for (device of devices(); track device.notehubDeviceUid) {
-                <tr>
+                <tr class="device-row" [class.device-row-expanded]="isExpanded(device.notehubDeviceUid)">
+                  <td class="expand-cell">
+                    <button
+                      type="button"
+                      class="expand-btn"
+                      [class.expand-btn-open]="isExpanded(device.notehubDeviceUid)"
+                      (click)="toggleDeviceDetails(device.notehubDeviceUid)"
+                      [attr.aria-expanded]="isExpanded(device.notehubDeviceUid)"
+                      [attr.aria-label]="'Show details for ' + (device.boatId || device.notehubDeviceUid)"
+                    >
+                      <span nz-icon nzType="right" nzTheme="outline"></span>
+                    </button>
+                  </td>
                   <td>{{ device.boatId || '—' }}</td>
                   <td>{{ deviceTypeLabel(device) }}</td>
                   <td class="mono">{{ device.notehubDeviceUid }}</td>
@@ -45,6 +58,29 @@
                   <td>{{ transportLabel(device) }}</td>
                   <td>{{ device.lastUpdatedAt | date: 'medium' }}</td>
                 </tr>
+                @if (isExpanded(device.notehubDeviceUid)) {
+                  <tr class="device-detail-row">
+                    <td colspan="7">
+                      <div class="device-detail-panel">
+                        <div class="device-detail-meta">
+                          <span>
+                            <strong>Online:</strong>
+                            {{ device.online ? 'Yes' : 'No' }}
+                          </span>
+                          <span>
+                            <strong>Last seen:</strong>
+                            {{ device.lastSeen ? (device.lastSeen | date: 'medium') : '—' }}
+                          </span>
+                          <span>
+                            <strong>Product:</strong>
+                            {{ device.product || '—' }}
+                          </span>
+                        </div>
+                        <app-device-outbound-messages [deviceUid]="device.notehubDeviceUid" />
+                      </div>
+                    </td>
+                  </tr>
+                }
               }
             </tbody>
           </nz-table>

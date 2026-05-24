@@ -1,0 +1,104 @@
+<section class="outbound-section">
+  <div class="section-header">
+    <div>
+      <h4 class="section-title">Presence outbound queue</h4>
+      <p class="section-copy">
+        Messages queued for delivery to this device via Notehub <code>presence.qi</code>, newest first.
+      </p>
+    </div>
+
+    @if (!loading() && !loadError() && messages().length > 0) {
+      <div class="queue-actions">
+        <span class="selection-summary">
+          @if (selectedCount() > 0) {
+            {{ selectedCount() }} selected
+          } @else {
+            Select messages to delete
+          }
+        </span>
+        <button
+          nz-button
+          nzType="default"
+          nzDanger
+          nz-popconfirm
+          nzPopconfirmTitle="Delete selected messages from the queue?"
+          nzOkText="Delete"
+          nzOkType="danger"
+          [disabled]="selectedCount() === 0 || deleting()"
+          (nzOnConfirm)="deleteSelected()"
+        >
+          Delete selected
+        </button>
+      </div>
+    }
+  </div>
+
+  @if (loadError()) {
+    <p class="error-copy">Unable to load outbound messages. Deploy updated Firestore rules if needed.</p>
+  } @else if (loading()) {
+    <p class="loading-copy">Loading messages…</p>
+  } @else if (messages().length === 0) {
+    <nz-empty nzNotFoundContent="No outbound messages for this device yet."></nz-empty>
+  } @else {
+    <nz-table
+      [nzData]="messages()"
+      [nzFrontPagination]="false"
+      nzSize="small"
+      class="messages-table"
+    >
+      <thead>
+        <tr>
+          <th nzWidth="48px" class="select-col">
+            <label
+              nz-checkbox
+              [nzChecked]="allSelected()"
+              [nzIndeterminate]="selectionIndeterminate()"
+              [nzDisabled]="deleting()"
+              (nzCheckedChange)="toggleSelectAll($event)"
+            ></label>
+          </th>
+          <th>Status</th>
+          <th>Event</th>
+          <th>Payload</th>
+          <th>Message ID</th>
+          <th>Created</th>
+          <th>Sent</th>
+          <th>Acked</th>
+          <th>Attempts</th>
+          <th>Next retry</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (message of messages(); track message.id) {
+          <tr [class.row-selected]="isSelected(message.id)">
+            <td class="select-col">
+              <label
+                nz-checkbox
+                [nzChecked]="isSelected(message.id)"
+                [nzDisabled]="deleting()"
+                (nzCheckedChange)="toggleSelected(message.id, $event)"
+              ></label>
+            </td>
+            <td>
+              <nz-tag [nzColor]="statusColor(message.status)">
+                {{ statusLabel(message.status) }}
+              </nz-tag>
+            </td>
+            <td>{{ eventTypeLabel(message.eventType) }}</td>
+            <td>{{ payloadSummary(message) }}</td>
+            <td class="mono" nz-tooltip [nzTooltipTitle]="message.id">{{ message.id }}</td>
+            <td>{{ message.createdAt | date: 'medium' }}</td>
+            <td>{{ message.sentAt ? (message.sentAt | date: 'medium') : '—' }}</td>
+            <td>{{ message.ackedAt ? (message.ackedAt | date: 'medium') : '—' }}</td>
+            <td>{{ message.attemptCount }} / {{ message.maxAttempts }}</td>
+            <td>{{ message.status === 'failed' ? '—' : (message.nextRetryAt | date: 'medium') }}</td>
+            <td class="error-cell" nz-tooltip [nzTooltipTitle]="message.lastError ?? ''">
+              {{ message.lastError ?? '—' }}
+            </td>
+          </tr>
+        }
+      </tbody>
+    </nz-table>
+  }
+</section>
