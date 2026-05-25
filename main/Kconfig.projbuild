@@ -56,22 +56,26 @@ menu "RegattaOne — Blues Notecard (LoRa, I2C)"
 
     config PRESENCE_POLL_INTERVAL_SEC
         int "Presence hub.sync + poll interval (seconds)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE && PRESENCE_AUTO_POLL
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
         default 300
         range 60 86400
+        help
+            Used when PRESENCE_AUTO_POLL is enabled (background task) and for
+            hub.set periodic inbound interval when PRESENCE_HUB_CONTINUOUS is off.
 
     config PRESENCE_DRAIN_IDLE_ATTEMPTS
         int "Inbound drain retries after hub.sync (LoRa needs more)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE && PRESENCE_AUTO_POLL
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
         default 20
         range 1 60
         help
             After hub.sync, retry note.get this many times (3 s apart) waiting for
             LoRaWAN downlink. 20 attempts ≈ 60 s of waiting per poll.
+            Only used when PRESENCE_AUTO_POLL is enabled.
 
     config PRESENCE_SYNC_WAIT_SEC
         int "Max seconds to wait for hub.sync completion (LoRa)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE && PRESENCE_AUTO_POLL
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
         default 300
         range 60 600
         help

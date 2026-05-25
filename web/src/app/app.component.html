@@ -1,0 +1,157 @@
+<nz-layout class="app-shell">
+  <nz-header class="app-header">
+    <span class="header-brand">RegattaOne Boat</span>
+    <nz-tag class="header-status" nzColor="default">
+      <span id="ble-status" aria-live="polite">BLE: —</span>
+    </nz-tag>
+    <button nz-button nzType="primary" type="button" id="connect">
+      <span nz-icon nzType="plus" nzTheme="outline"></span>
+      Add device
+    </button>
+  </nz-header>
+
+  <nz-content class="app-content">
+    <div id="ui" class="content-inner">
+      <div id="screen-boat" role="main">
+        <nz-card nzSize="small" nzTitle="Device" class="device-card" [nzBodyStyle]="{ padding: '12px 16px' }">
+          <div nz-row [nzGutter]="[16, 12]">
+            <div nz-col [nzXs]="24" [nzLg]="12">
+              <label class="field-label" for="ble-device-select">Connected device</label>
+              <div nz-row [nzGutter]="8">
+                <div nz-col [nzFlex]="'auto'">
+                  <select id="ble-device-select" class="native-select" disabled aria-live="polite">
+                    <option value="">No devices connected</option>
+                  </select>
+                </div>
+                <div nz-col [nzFlex]="'none'">
+                  <button
+                    nz-button
+                    nzType="default"
+                    type="button"
+                    id="ble-device-disconnect"
+                    disabled
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div nz-col [nzXs]="24" [nzLg]="12">
+              <label class="field-label" for="boat-id-input">Boat ID <code>0xFEFB</code></label>
+              <div nz-row [nzGutter]="8">
+                <div nz-col [nzFlex]="'auto'">
+                  <input
+                    nz-input
+                    id="boat-id-input"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    maxlength="32"
+                    placeholder="e.g. port-bow"
+                    disabled
+                  />
+                </div>
+                <div nz-col [nzFlex]="'none'">
+                  <button nz-button nzType="default" type="button" id="boat-id-save" disabled>Save</button>
+                </div>
+              </div>
+              <p id="boat-id-status" class="field-hint">Connect a device to set its boat ID.</p>
+            </div>
+
+            <div nz-col [nzSpan]="24">
+              <label class="field-label" for="device-type-select">Device type <code>0xFEFC</code></label>
+              <div nz-row [nzGutter]="8">
+                <div nz-col [nzXs]="24" [nzSm]="16" [nzMd]="12" [nzLg]="8">
+                  <select id="device-type-select" class="native-select" disabled>
+                    <option value="port">Port</option>
+                    <option value="starboard">Starboard</option>
+                    <option value="fixed_dgps_mark">Fixed DGPS mark</option>
+                    <option value="waypoint">Waypoint</option>
+                    <option value="boat">Boat</option>
+                  </select>
+                </div>
+                <div nz-col [nzFlex]="'none'">
+                  <button nz-button nzType="default" type="button" id="device-type-save" disabled>Save</button>
+                </div>
+              </div>
+              <p id="device-type-status" class="field-hint">Connect a device to set its type.</p>
+            </div>
+          </div>
+        </nz-card>
+
+        <nz-tabset nzSize="small" nzType="line">
+          <nz-tab nzTitle="IMU · 0xFEF1">
+            <p id="imu-meta" class="imu-meta">
+              Connect to stream accel, gyro, mag, temperature, and pressure.
+            </p>
+            <div class="imu-grid" aria-live="polite">
+              <div class="imu-cell imu-cell--wide">
+                <span class="imu-cell-label">Accelerometer</span>
+                <span id="imu-accel" class="imu-cell-value">—</span>
+              </div>
+              <div class="imu-cell">
+                <span class="imu-cell-label">Gyroscope</span>
+                <span id="imu-gyro" class="imu-cell-value">—</span>
+              </div>
+              <div class="imu-cell">
+                <span class="imu-cell-label">Magnetometer</span>
+                <span id="imu-mag" class="imu-cell-value">—</span>
+              </div>
+              <div class="imu-cell">
+                <span class="imu-cell-label">Temperature</span>
+                <span id="imu-temp" class="imu-cell-value">—</span>
+              </div>
+              <div class="imu-cell">
+                <span class="imu-cell-label">Barometer</span>
+                <span id="imu-baro" class="imu-cell-value">—</span>
+              </div>
+            </div>
+          </nz-tab>
+
+          <nz-tab nzTitle="UWB · 0xFEFA">
+            <p class="tab-hint">
+              AT commands (e.g. <code>AT</code>). Firmware appends <code>CRLF</code> if needed.
+            </p>
+            <div nz-row [nzGutter]="8" class="uwb-input-row">
+              <div nz-col [nzFlex]="'auto'">
+                <input
+                  nz-input
+                  id="uwb-at-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="AT"
+                  disabled
+                />
+              </div>
+              <div nz-col [nzFlex]="'none'">
+                <button nz-button nzType="primary" type="button" id="uwb-at-send" disabled>Send</button>
+              </div>
+            </div>
+            <label class="field-label" for="uwb-line-log">UART log</label>
+            <pre id="uwb-line-log" class="ble-log uwb-line-log" aria-live="polite"></pre>
+          </nz-tab>
+
+          <nz-tab nzTitle="Notecard · 0xFEF7">
+            <p class="tab-hint">JSON request (newline-terminated). Response on <code>0xFEF8</code>.</p>
+            <textarea
+              nz-input
+              id="notecard-json"
+              rows="3"
+              spellcheck="false"
+              placeholder='{"req":"hub.status"}'
+            ></textarea>
+            <div class="notecard-actions">
+              <button nz-button nzType="primary" type="button" id="notecard-send" disabled>
+                Send to Notecard
+              </button>
+            </div>
+            <label class="field-label" for="notecard-rsp-log">Response</label>
+            <pre id="notecard-rsp-log" class="ble-log" aria-live="polite"></pre>
+          </nz-tab>
+        </nz-tabset>
+      </div>
+    </div>
+  </nz-content>
+</nz-layout>

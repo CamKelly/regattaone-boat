@@ -11,6 +11,7 @@
   },
   "private": true,
   "dependencies": {
+    "@angular/animations": "^19.2.20",
     "@angular/common": "^19.2.0",
     "@angular/compiler": "^19.2.0",
     "@angular/core": "^19.2.0",
@@ -18,10 +19,9 @@
     "@angular/platform-browser": "^19.2.0",
     "@angular/platform-browser-dynamic": "^19.2.0",
     "@angular/router": "^19.2.0",
-    "@ionic/angular": "^8.8.3",
-    "@ngrx/store": "^19.2.1",
-    "@ngrx/store-devtools": "^19.2.1",
+    "@ant-design/icons-angular": "^19.0.0",
     "@types/web-bluetooth": "^0.0.21",
+    "ng-zorro-antd": "^19.3.1",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
     "zone.js": "~0.15.0"

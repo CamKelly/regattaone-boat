@@ -458,6 +458,8 @@ static bool presence_send_ack(const char *mid, bool ok)
     return true;
 }
 
+#if CONFIG_PRESENCE_AUTO_POLL
+
 static int presence_qi_pending_count(void)
 {
     char req[80];
@@ -787,6 +789,8 @@ static void presence_poll_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS((TickType_t)CONFIG_PRESENCE_POLL_INTERVAL_SEC * 1000));
     }
 }
+
+#endif /* CONFIG_PRESENCE_AUTO_POLL */
 
 void presence_sync_start(void)
 {

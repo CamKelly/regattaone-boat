@@ -296,6 +296,12 @@ function updateBleToolbar(note?: string): void {
   if (!active.charUwbAt) {
     missing.push("UWB");
   }
+  if (!active.charNotecardReq) {
+    missing.push("Notecard");
+  }
+  if (active.charNotecardReq && !active.notificationsOn) {
+    missing.push("Notecard notify off");
+  }
   if (missing.length > 0) {
     setBleToolbar(`BLE: ${name}${multi} — ${missing.join(", ")} unavailable`);
     return;
@@ -409,6 +415,46 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   }
 }
 
+async function ensureNotecardComms(session: BleBoatSession): Promise<void> {
+  if (!session.charNotecardReq || !session.charNotecardRsp) {
+    await bindSessionCharacteristics(session);
+  }
+  if (session.charNotecardRsp && !session.notificationsOn) {
+    await setCommsNotifications(session, true);
+  }
+}
+
+function appendNotecardRspBytes(session: BleBoatSession, bytes: Uint8Array): void {
+  for (let i = 0; i < bytes.length; i++) {
+    session.notecardRspAcc.push(bytes[i]!);
+  }
+  renderNotecardRsp(session);
+}
+
+async function pollNotecardResponse(session: BleBoatSession, timeoutMs: number): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (session.notecardRspAcc.length > 0) {
+      return;
+    }
+    if (session.charNotecardRsp && session.gatt.connected) {
+      try {
+        const val = await runGattOp(session, () => session.charNotecardRsp!.readValue());
+        if (val.byteLength > 0) {
+          appendNotecardRspBytes(
+            session,
+            new Uint8Array(val.buffer, val.byteOffset, val.byteLength),
+          );
+          return;
+        }
+      } catch {
+        /* read may be unsupported until firmware buffers response */
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
 async function activateSession(session: BleBoatSession): Promise<boolean> {
   session.parked = false;
   try {
@@ -423,10 +469,11 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
         /* optional */
       }
     }
-    if (!session.charImu || !session.charUwbAt) {
+    if (!session.charImu || !session.charUwbAt || !session.charNotecardReq) {
       await bindSessionCharacteristics(session);
     }
     await setSessionNotifications(session, true);
+    await ensureNotecardComms(session);
     await readBoatIdFromDevice(session);
     await readDeviceTypeFromDevice(session);
     return session.gatt.connected;
@@ -461,7 +508,7 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
 }
 
 async function ensureSessionConnected(session: BleBoatSession): Promise<boolean> {
-  if (session.gatt.connected && session.charImu && session.charUwbAt) {
+  if (session.gatt.connected && session.charImu && session.charUwbAt && session.charNotecardReq) {
     return true;
   }
   return activateSession(session);
@@ -840,6 +887,12 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
 async function sendNotecardRequest(): Promise<void> {
   const session = getActiveSession();
   if (!session?.charNotecardReq) {
+    const el = document.querySelector("#notecard-rsp-log");
+    if (el) {
+      el.textContent =
+        "Notecard characteristic 0xFEF7 unavailable.\n" +
+        "Flash firmware with CONFIG_REGATTAONE_NOTECARD_ENABLE=y and reconnect.";
+    }
     return;
   }
   const ta = document.querySelector<HTMLTextAreaElement>("#notecard-json");
@@ -863,14 +916,33 @@ async function sendNotecardRequest(): Promise<void> {
   session.notecardJsonDraft = ta?.value ?? "";
   session.notecardRspAcc.length = 0;
   renderNotecardRsp(session);
+  const rspEl = document.querySelector("#notecard-rsp-log");
+  if (rspEl) {
+    rspEl.textContent = "Sending…";
+  }
   try {
+    await ensureNotecardComms(session);
     await gattWrite(session, "notecard", new TextEncoder().encode(line));
+    if (rspEl) {
+      rspEl.textContent = "Waiting for response on 0xFEF8…";
+    }
+    await pollNotecardResponse(session, 15000);
+    if (session.notecardRspAcc.length === 0 && rspEl) {
+      rspEl.textContent =
+        "No response after 15 s.\n\n" +
+        "Checks:\n" +
+        "• BLE status should not say “Notecard notify off” (reconnect if it does)\n" +
+        "• Try {\"req\":\"hub.status\"} first\n" +
+        "• ESP32 talks to Notecard over I2C — USB on the Notecard is separate (close Notehub serial if open)\n" +
+        "• Flash latest firmware (response read fallback on 0xFEF8)";
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const el = document.querySelector("#notecard-rsp-log");
-    if (el) {
-      el.textContent = `Write error: ${msg}`;
+    if (rspEl) {
+      rspEl.textContent = `Write error: ${msg}`;
     }
+  } finally {
+    updateBleToolbar();
   }
 }
 

@@ -102,6 +102,25 @@ static bool s_notecard_rsp_notify_enabled;
 static bool s_uwb_line_notify_enabled;
 static uint16_t s_seq;
 
+#if CONFIG_REGATTAONE_NOTECARD_ENABLE
+#define NOTECARD_RSP_BUF_MAX 512U
+static char s_notecard_rsp_buf[NOTECARD_RSP_BUF_MAX];
+static size_t s_notecard_rsp_len;
+
+static void notecard_rsp_store(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        s_notecard_rsp_len = 0U;
+        s_notecard_rsp_buf[0] = '\0';
+        return;
+    }
+    size_t n = len < (NOTECARD_RSP_BUF_MAX - 1U) ? len : (NOTECARD_RSP_BUF_MAX - 1U);
+    memcpy(s_notecard_rsp_buf, data, n);
+    s_notecard_rsp_buf[n] = '\0';
+    s_notecard_rsp_len = n;
+}
+#endif
+
 /**
  * Serialize mbuf alloc + `ble_gatts_notify_custom` if additional characteristics are added later.
  */
@@ -420,11 +439,13 @@ static int gatt_svr_access_notecard_req(uint16_t conn_handle, uint16_t attr_hand
     esp_err_t err = blues_notecard_transaction(buf, om_len, &rsp);
     if (err == ESP_OK && rsp != NULL) {
         size_t n = strlen(rsp);
+        notecard_rsp_store((const uint8_t *)rsp, n);
         ble_sen0140_notecard_rsp_notify_chunk((const uint8_t *)rsp, n);
         free(rsp);
         return 0;
     }
     const char *fallback = "{\"err\":\"notecard_tx_failed\"}\n";
+    notecard_rsp_store((const uint8_t *)fallback, strlen(fallback));
     ble_sen0140_notecard_rsp_notify_chunk((const uint8_t *)fallback, strlen(fallback));
     if (rsp) {
         free(rsp);
@@ -443,6 +464,12 @@ static int gatt_svr_access_notecard_rsp(uint16_t conn_handle, uint16_t attr_hand
     (void)attr_handle;
     (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+#if CONFIG_REGATTAONE_NOTECARD_ENABLE
+        if (s_notecard_rsp_len > 0U) {
+            return os_mbuf_append(ctxt->om, s_notecard_rsp_buf, (uint16_t)s_notecard_rsp_len) == 0 ? 0
+                                                                                                     : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+#endif
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;
@@ -900,7 +927,13 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
 
 void ble_sen0140_notecard_rsp_notify_chunk(const uint8_t *data, size_t len)
 {
-    if (!data || len == 0U || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_notecard_rsp_notify_enabled) {
+    if (!data || len == 0U) {
+        return;
+    }
+#if CONFIG_REGATTAONE_NOTECARD_ENABLE
+    notecard_rsp_store(data, len);
+#endif
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_notecard_rsp_notify_enabled) {
         return;
     }
     ble_notify_take();

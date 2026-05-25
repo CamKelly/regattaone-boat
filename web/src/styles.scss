@@ -1,189 +1,25 @@
-@import "@ionic/angular/css/core.css";
-@import "@ionic/angular/css/normalize.css";
-@import "@ionic/angular/css/structure.css";
-@import "@ionic/angular/css/typography.css";
-@import "@ionic/angular/css/padding.css";
+@import "ng-zorro-antd/ng-zorro-antd.min.css";
 @import "./regatta-styles.css";
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  background: #f5f5f5;
+}
 
 app-root {
   display: block;
   height: 100%;
-}
-
-ion-app {
-  display: block;
-  min-height: 100%;
-  height: 100%;
-  background: #0f1419;
-}
-
-.regatta-ion-header {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
-}
-
-.regatta-ion-header ion-toolbar {
-  --background: rgba(10, 14, 18, 0.96);
-  --border-color: rgba(51, 65, 85, 0.45);
-  position: relative;
-}
-
-/* Center title on the viewport, not the flex “remainder”, so changing seq digits don’t shove it sideways */
-.regatta-ion-header ion-toolbar > ion-title {
-  position: absolute;
-  inset-inline-start: 0;
-  inset-inline-end: 0;
-  top: 0;
-  bottom: 0;
-  margin: auto;
-  width: fit-content;
-  max-width: min(42vw, 11rem);
-  pointer-events: none;
-  z-index: 1;
-}
-
-.regatta-ion-header ion-toolbar > ion-title .toolbar-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.regatta-ion-header ion-toolbar .ble-toolbar-status,
-.regatta-ion-header ion-toolbar ion-buttons {
-  position: relative;
-  z-index: 2;
-}
-
-.regatta-ion-header ion-title {
-  font-size: 1rem;
-  font-weight: 700;
-}
-
-.regatta-ble-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-
-.regatta-ble-btn {
-  margin: 0;
-  padding: 8px 12px;
-  border: none;
-  border-radius: 6px;
-  background: #2563eb;
-  color: #fff;
-  font-size: 0.88rem;
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.regatta-ble-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.regatta-ble-btn--secondary {
-  background: #475569;
-}
-
-.regatta-ion-header ion-segment {
-  max-width: 420px;
-  margin: 0 auto;
-}
-
-/* Stack IMU + UART status so long lines (e.g. “notify on · BSL pulse sent”) are not clipped */
-.ble-toolbar-status {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  align-items: flex-start;
-  flex: 0 0 auto;
-  /* Fixed slot width so ion-title center doesn’t shift when seq digit count changes */
-  width: clamp(11rem, 38vw, 26rem);
-  min-width: clamp(11rem, 38vw, 26rem);
-  max-width: clamp(11rem, 38vw, 26rem);
-  padding: 4px 8px 4px 4px;
-  box-sizing: border-box;
-}
-
-.ble-imu-rx,
-.ble-uart-rx {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  padding: 0;
-  margin: 0;
-  font-size: 0.62rem;
-  font-weight: 500;
-  line-height: 1.35;
-  color: #94a3b8;
-  white-space: normal;
-  overflow: visible;
-  word-break: break-word;
-  font-variant-numeric: tabular-nums;
-}
-
-.ble-device-picker-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-}
-
-.ble-device-picker-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-select.ble-device-select {
-  flex: 1 1 12rem;
-  min-width: 10rem;
-  max-width: 100%;
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(71, 85, 105, 0.65);
-  background: rgba(15, 23, 42, 0.85);
-  color: #e2e8f0;
-  font-family: inherit;
-  font-size: 0.88rem;
-}
-
-select.ble-device-select:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.ble-device-disconnect {
-  padding: 8px 12px;
-  font-size: 0.82rem;
-  white-space: nowrap;
-}
-
-.boat-id-input,
-.device-role-select,
-.device-type-select {
-  flex: 1 1 12rem;
-  min-width: 10rem;
-  max-width: 100%;
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(71, 85, 105, 0.65);
-  background: rgba(15, 23, 42, 0.85);
-  color: #e2e8f0;
-  font-family: inherit;
-  font-size: 0.88rem;
-}
-
-.boat-id-input:disabled,
-.device-role-select:disabled,
-.device-type-select:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.boat-id-status {
-  margin: 0;
 }
