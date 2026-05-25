@@ -60,6 +60,15 @@ menu "RegattaOne — Blues Notecard (LoRa, I2C)"
             After hub.sync, retry note.get this many times (3 s apart) waiting for
             LoRaWAN downlink. 20 attempts ≈ 60 s of waiting per poll.
 
+    config PRESENCE_SYNC_WAIT_SEC
+        int "Max seconds to wait for hub.sync completion (LoRa)"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default 300
+        range 60 600
+        help
+            Poll hub.sync.status until sync-end. Do not issue another hub.sync
+            while status is sync in progress — that can prevent LoRa downlink.
+
     config PRESENCE_HUB_CONTINUOUS
         bool "Use continuous hub mode (faster LoRa inbound, more power)"
         depends on REGATTAONE_PRESENCE_SYNC_ENABLE

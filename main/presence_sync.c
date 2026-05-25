@@ -500,6 +500,77 @@ static bool presence_hub_sync(void)
     return true;
 }
 
+static bool presence_sync_status_in_progress(const char *rsp)
+{
+    return rsp != NULL && strstr(rsp, "sync in progress") != NULL;
+}
+
+static bool presence_sync_status_completed(const char *rsp)
+{
+    return rsp != NULL && (strstr(rsp, "{sync-end}") != NULL || strstr(rsp, "completed {sync") != NULL);
+}
+
+static bool presence_fetch_sync_status(char **rsp_out)
+{
+    char req[] = "{\"req\":\"hub.sync.status\"}\n";
+    char *rsp = NULL;
+    esp_err_t err = nc_transact_buf(req, sizeof(req) - 1U, &rsp);
+    if (err != ESP_OK || response_has_err(rsp)) {
+        ESP_LOGW(TAG, "hub.sync.status failed: %s", rsp ? rsp : esp_err_to_name(err));
+        free(rsp);
+        return false;
+    }
+    *rsp_out = rsp;
+    return true;
+}
+
+/** Start hub.sync only when idle; wait for sync-end without re-triggering hub.sync. */
+static bool presence_hub_sync_and_wait(void)
+{
+    char *status = NULL;
+    if (!presence_fetch_sync_status(&status)) {
+        (void)presence_hub_sync();
+    } else if (presence_sync_status_in_progress(status)) {
+        ESP_LOGI(TAG, "hub.sync already in progress — waiting (will NOT re-trigger hub.sync)");
+    } else if (!presence_sync_status_completed(status)) {
+        free(status);
+        status = NULL;
+        (void)presence_hub_sync();
+    }
+    free(status);
+    status = NULL;
+
+    for (int waited = 0; waited < CONFIG_PRESENCE_SYNC_WAIT_SEC; waited++) {
+        if (!presence_fetch_sync_status(&status)) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        if ((waited % 30) == 0 || presence_sync_status_completed(status)) {
+            ESP_LOGI(TAG, "hub.sync.status: %s", status);
+        }
+
+        if (presence_sync_status_completed(status)) {
+            free(status);
+            return true;
+        }
+
+        if (!presence_sync_status_in_progress(status)) {
+            ESP_LOGW(TAG, "hub.sync.status idle before sync-end — may retry next poll");
+            free(status);
+            return false;
+        }
+
+        free(status);
+        status = NULL;
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    ESP_LOGW(TAG, "hub.sync wait timeout (%ds) — LoRa downlink may still complete later",
+             CONFIG_PRESENCE_SYNC_WAIT_SEC);
+    return false;
+}
+
 static void presence_log_sync_status(void)
 {
     char req[] = "{\"req\":\"hub.sync.status\"}\n";
@@ -637,7 +708,7 @@ static void presence_drain_inbound(void)
     while (idle_attempts < CONFIG_PRESENCE_DRAIN_IDLE_ATTEMPTS) {
         if (idle_attempts > 0) {
             vTaskDelay(pdMS_TO_TICKS(3000));
-            (void)presence_hub_sync();
+            /* Do NOT hub.sync here — re-triggering while sync in progress blocks LoRa downlink. */
             presence_log_sync_status();
         }
 
@@ -670,8 +741,14 @@ static void presence_poll_task(void *arg)
     for (;;) {
         ESP_LOGI(TAG, "poll: sync + drain " PRESENCE_INBOUND_FILE);
         (void)presence_hub_configure();
-        (void)presence_hub_sync();
-        presence_log_sync_status();
+
+        /* Notes may already be on-card (e.g. manual BLE hub.sync) — drain before cloud sync. */
+        if (presence_qi_pending_count() > 0) {
+            ESP_LOGI(TAG, "presence.qi already on Notecard — draining before hub.sync");
+            presence_drain_inbound();
+        }
+
+        (void)presence_hub_sync_and_wait();
         presence_drain_inbound();
         vTaskDelay(pdMS_TO_TICKS((TickType_t)CONFIG_PRESENCE_POLL_INTERVAL_SEC * 1000));
     }
