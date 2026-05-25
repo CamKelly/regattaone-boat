@@ -68,6 +68,11 @@ static bool response_err_is_empty_queue(const char *rsp)
            strstr(rsp, "no notes available") != NULL;
 }
 
+static bool response_is_notefile_missing(const char *rsp)
+{
+    return rsp != NULL && response_err_is_empty_queue(rsp);
+}
+
 static esp_err_t nc_transact_buf(const char *req, size_t req_len, char **response_out)
 {
     if (req_len == 0U || req[req_len - 1U] != '\n') {
@@ -113,6 +118,18 @@ static const char *presence_payload_from_note_rsp(const char *json)
     }
 
     return body;
+}
+
+/** note.get on a missing/empty .qi file can return {"info":{...}} with no note body. */
+static bool response_is_empty_note_get(const char *rsp)
+{
+    if (rsp == NULL || response_has_err(rsp)) {
+        return false;
+    }
+    if (presence_payload_from_note_rsp(rsp) != NULL) {
+        return false;
+    }
+    return strstr(rsp, "\"info\":") != NULL || strstr(rsp, "{}\n") != NULL || strcmp(rsp, "{}") == 0;
 }
 
 static bool json_get_string(const char *json, const char *key, char *out, size_t out_cap)
@@ -451,8 +468,18 @@ static int presence_qi_pending_count(void)
 
     char *rsp = NULL;
     esp_err_t err = nc_transact_buf(req, (size_t)n, &rsp);
-    if (err != ESP_OK || response_has_err(rsp)) {
-        ESP_LOGW(TAG, "file.changes failed: %s", rsp ? rsp : esp_err_to_name(err));
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "file.changes failed (%s)", esp_err_to_name(err));
+        free(rsp);
+        return -1;
+    }
+    if (response_is_notefile_missing(rsp)) {
+        ESP_LOGI(TAG, "file.changes " PRESENCE_INBOUND_FILE " not on card yet (no inbound notes synced)");
+        free(rsp);
+        return 0;
+    }
+    if (response_has_err(rsp)) {
+        ESP_LOGW(TAG, "file.changes failed: %s", rsp);
         free(rsp);
         return -1;
     }
@@ -635,7 +662,7 @@ static bool presence_hub_configure(void)
 
 static size_t presence_drain_once(void)
 {
-    size_t drained = 0U;
+    size_t processed = 0U;
 
     for (;;) {
         char req[96];
@@ -658,16 +685,22 @@ static size_t presence_drain_once(void)
             free(rsp);
             break;
         }
-
-        drained++;
-        ESP_LOGI(TAG, "note.get ok: %s", rsp);
-
-        const char *body = presence_payload_from_note_rsp(rsp);
-        if (body == NULL) {
-            ESP_LOGW(TAG, "note.get missing presence payload: %s", rsp);
+        if (response_is_empty_note_get(rsp)) {
+            if (processed == 0U) {
+                ESP_LOGD(TAG, "note.get " PRESENCE_INBOUND_FILE " queue empty on Notecard");
+            }
             free(rsp);
             break;
         }
+
+        const char *body = presence_payload_from_note_rsp(rsp);
+        if (body == NULL) {
+            ESP_LOGW(TAG, "note.get unexpected response (not presence.qi): %s", rsp);
+            free(rsp);
+            break;
+        }
+
+        ESP_LOGI(TAG, "note.get ok: %s", rsp);
 
         presence_event_t evt;
         if (!parse_presence_event(body, &evt)) {
@@ -677,7 +710,7 @@ static size_t presence_drain_once(void)
                 (void)presence_send_ack(fallback_mid, false);
             }
             free(rsp);
-            continue;
+            break;
         }
 
         bool applied = apply_presence_event(&evt);
@@ -689,6 +722,7 @@ static size_t presence_drain_once(void)
         if (applied) {
             log_presence_event(&evt);
             (void)presence_send_ack(evt.mid, true);
+            processed++;
         } else {
             ESP_LOGW(TAG, "failed to apply mid=%s", evt.mid);
             (void)presence_send_ack(evt.mid, false);
@@ -697,7 +731,7 @@ static size_t presence_drain_once(void)
         free(rsp);
     }
 
-    return drained;
+    return processed;
 }
 
 static void presence_drain_inbound(void)
@@ -725,9 +759,9 @@ static void presence_drain_inbound(void)
     }
 
     if (total_drained == 0U) {
-        ESP_LOGI(TAG, "presence.qi queue empty (LoRa inbound may still be pending at Notehub)");
+        ESP_LOGI(TAG, "presence.qi queue empty on Notecard (Notehub may still show pending until downlink completes)");
     } else {
-        ESP_LOGI(TAG, "drained %u presence.qi note(s)", (unsigned)total_drained);
+        ESP_LOGI(TAG, "processed %u presence.qi note(s)", (unsigned)total_drained);
     }
 }
 
