@@ -45,15 +45,24 @@ menu "RegattaOne — Blues Notecard (LoRa, I2C)"
         help
             Poll Notehub inbound presence.qi, apply peer deltas locally, and ack on presence_ack.qo.
 
+    config PRESENCE_AUTO_POLL
+        bool "Automatic presence hub.sync polling (disable for manual BLE testing)"
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        default y
+        help
+            When disabled, firmware does not start the background presence poll task.
+            Use the BLE Notecard JSON box to run hub.sync, file.changes, and note.get manually.
+            boat.qo boot notes still work.
+
     config PRESENCE_POLL_INTERVAL_SEC
         int "Presence hub.sync + poll interval (seconds)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE && PRESENCE_AUTO_POLL
         default 300
         range 60 86400
 
     config PRESENCE_DRAIN_IDLE_ATTEMPTS
         int "Inbound drain retries after hub.sync (LoRa needs more)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE && PRESENCE_AUTO_POLL
         default 20
         range 1 60
         help
@@ -62,7 +71,7 @@ menu "RegattaOne — Blues Notecard (LoRa, I2C)"
 
     config PRESENCE_SYNC_WAIT_SEC
         int "Max seconds to wait for hub.sync completion (LoRa)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
+        depends on REGATTAONE_PRESENCE_SYNC_ENABLE && PRESENCE_AUTO_POLL
         default 300
         range 60 600
         help

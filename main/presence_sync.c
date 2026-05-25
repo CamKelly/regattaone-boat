@@ -790,11 +790,15 @@ static void presence_poll_task(void *arg)
 
 void presence_sync_start(void)
 {
+#if CONFIG_PRESENCE_AUTO_POLL
     if (xTaskCreate(presence_poll_task, "presence", 6144, NULL, 3, NULL) != pdPASS) {
         ESP_LOGW(TAG, "presence task create failed");
     } else {
         ESP_LOGI(TAG, "presence sync started (poll=%ds)", CONFIG_PRESENCE_POLL_INTERVAL_SEC);
     }
+#else
+    ESP_LOGI(TAG, "presence auto-poll disabled — use BLE for manual hub.sync / note.get on " PRESENCE_INBOUND_FILE);
+#endif
 }
 
 size_t presence_peer_count(void)
