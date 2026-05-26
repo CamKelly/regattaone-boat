@@ -128,7 +128,12 @@
                 <button nz-button nzType="primary" type="button" id="uwb-at-send">Send</button>
               </div>
             </div>
-            <label class="field-label" for="uwb-line-log">UART log</label>
+            <div class="log-header">
+              <label class="field-label" for="uwb-line-log">UART log</label>
+              <button nz-button nzType="default" nzSize="small" type="button" id="uwb-log-clear">
+                Clear
+              </button>
+            </div>
             <pre id="uwb-line-log" class="ble-log uwb-line-log" aria-live="polite"></pre>
           </nz-tab>
 
@@ -146,8 +151,13 @@
                 Send to Notecard
               </button>
             </div>
-            <label class="field-label" for="notecard-rsp-log">Response</label>
-            <pre id="notecard-rsp-log" class="ble-log" aria-live="polite"></pre>
+            <div class="log-header">
+              <label class="field-label" for="notecard-rsp-log">Response</label>
+              <button nz-button nzType="default" nzSize="small" type="button" id="notecard-log-clear">
+                Clear
+              </button>
+            </div>
+            <pre id="notecard-rsp-log" class="ble-log notecard-rsp-log" aria-live="polite"></pre>
           </nz-tab>
         </nz-tabset>
       </div>

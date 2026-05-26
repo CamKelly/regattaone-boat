@@ -152,6 +152,16 @@
   word-break: break-word;
 }
 
+.notecard-rsp-log {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 16rem;
+  max-height: min(58vh, 560px);
+  overflow-x: auto;
+  overflow-y: auto;
+}
+
 .uwb-line-log {
   min-height: 6rem;
 }
@@ -168,4 +178,16 @@
 
 .notecard-actions {
   margin: 8px 0;
+}
+
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.log-header .field-label {
+  margin: 0;
 }

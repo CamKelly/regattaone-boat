@@ -16,12 +16,13 @@ import {
 } from "./lib/protocol";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-05-25c";
+const WEB_BLE_REV = "2026-05-25e";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
 
-let imuTabActive = false;
+let imuTabActive = true;
+let regattaAppStarted = false;
 
 interface ImuDisplay {
   accel: string;
@@ -48,6 +49,9 @@ interface BleBoatSession {
   boatIdDraft: string;
   deviceType: DeviceType;
   deviceTypeDraft: DeviceType;
+  /** Completed Notecard log (requests + responses). */
+  notecardLogText: string;
+  /** In-flight response bytes for the current request. */
   notecardRspAcc: number[];
   uwbLineLogText: string;
   notecardJsonDraft: string;
@@ -56,6 +60,12 @@ interface BleBoatSession {
   imu: ImuDisplay;
   notificationsOn: boolean;
   imuNotificationsOn: boolean;
+  /** Incremented per UWB/Notecard request to ignore stale notify/read data. */
+  commsGen: number;
+  activeNotecardGen: number;
+  activeUwbGen: number;
+  notecardBusy: boolean;
+  uwbBusy: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
   gattChain: Promise<void>;
@@ -439,39 +449,88 @@ async function pauseImuForComms(session: BleBoatSession): Promise<boolean> {
 }
 
 async function restoreImuAfterComms(session: BleBoatSession, wasOn: boolean): Promise<void> {
-  if (wasOn && imuTabActive) {
+  if (wasOn) {
     await setImuNotifications(session, true);
   }
 }
 
-function appendNotecardRspBytes(session: BleBoatSession, bytes: Uint8Array): void {
+function appendNotecardRspBytes(session: BleBoatSession, bytes: Uint8Array, gen: number): void {
+  if (gen !== session.activeNotecardGen || bytes.length === 0) {
+    return;
+  }
+  const incoming = new TextDecoder().decode(bytes);
+  if (incoming.length === 0) {
+    return;
+  }
+  const current =
+    session.notecardRspAcc.length > 0
+      ? new TextDecoder().decode(new Uint8Array(session.notecardRspAcc))
+      : "";
+  if (incoming === current) {
+    return;
+  }
   for (let i = 0; i < bytes.length; i++) {
     session.notecardRspAcc.push(bytes[i]!);
   }
   renderNotecardRsp(session);
 }
 
-async function pollNotecardResponse(session: BleBoatSession, timeoutMs: number): Promise<void> {
+function setNotecardRspText(session: BleBoatSession, text: string, gen: number): void {
+  if (gen !== session.activeNotecardGen) {
+    return;
+  }
+  if (text.length === 0) {
+    return;
+  }
+  const current =
+    session.notecardRspAcc.length > 0
+      ? new TextDecoder().decode(new Uint8Array(session.notecardRspAcc))
+      : "";
+  if (current.length === 0) {
+    session.notecardRspAcc = Array.from(new TextEncoder().encode(text));
+  } else if (!current.includes(text) && !text.includes(current)) {
+    session.notecardRspAcc.push(...Array.from(new TextEncoder().encode(text)));
+  } else if (text.length > current.length) {
+    session.notecardRspAcc = Array.from(new TextEncoder().encode(text));
+  }
+  renderNotecardRsp(session);
+}
+
+function appendUwbLineIfNew(session: BleBoatSession, chunk: string, gen: number): void {
+  if (gen !== session.activeUwbGen || chunk.length === 0) {
+    return;
+  }
+  const line = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
+  if (session.uwbLineLogText.endsWith(line)) {
+    return;
+  }
+  appendUwbLog(session, line);
+}
+
+async function pollNotecardResponse(session: BleBoatSession, gen: number, timeoutMs: number): Promise<void> {
   const deadline = performance.now() + timeoutMs;
+  let readFallbackUsed = false;
   while (performance.now() < deadline) {
+    if (gen !== session.activeNotecardGen) {
+      return;
+    }
     if (session.notecardRspAcc.length > 0) {
       return;
     }
-    if (session.charNotecardRsp && session.gatt.connected) {
+    if (!readFallbackUsed && session.charNotecardRsp && session.gatt.connected) {
       try {
         const val = await runGattOp(session, () => session.charNotecardRsp!.readValue());
         if (val.byteLength > 0) {
-          appendNotecardRspBytes(
-            session,
-            new Uint8Array(val.buffer, val.byteOffset, val.byteLength),
-          );
+          const text = new TextDecoder().decode(val);
+          setNotecardRspText(session, text, gen);
+          readFallbackUsed = true;
           return;
         }
       } catch {
-        /* read may be unsupported until firmware buffers response */
+        /* read fallback optional */
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
 }
 
@@ -493,7 +552,8 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
       await bindSessionCharacteristics(session);
     }
     await setCommsNotifications(session, true);
-    await setImuNotifications(session, imuTabActive);
+    imuTabActive = true;
+    await setImuNotifications(session, true);
     await readBoatIdFromDevice(session);
     await readDeviceTypeFromDevice(session);
     return session.gatt.connected;
@@ -534,24 +594,29 @@ async function ensureSessionConnected(session: BleBoatSession): Promise<boolean>
   return activateSession(session);
 }
 
-async function pollUwbResponse(session: BleBoatSession, baselineLen: number, timeoutMs: number): Promise<boolean> {
+async function pollUwbResponse(session: BleBoatSession, gen: number, baselineLen: number, timeoutMs: number): Promise<boolean> {
   const deadline = performance.now() + timeoutMs;
+  let readFallbackUsed = false;
   while (performance.now() < deadline) {
+    if (gen !== session.activeUwbGen) {
+      return false;
+    }
     if (session.uwbLineLogText.length > baselineLen) {
       return true;
     }
-    if (session.charUwbLine && session.gatt.connected) {
+    if (!readFallbackUsed && session.charUwbLine && session.gatt.connected) {
       try {
         const val = await runGattOp(session, () => session.charUwbLine!.readValue());
         if (val.byteLength > 0) {
           const chunk = new TextDecoder().decode(val);
-          if (chunk.length > 0) {
-            appendUwbLog(session, chunk.endsWith("\n") ? chunk : `${chunk}\n`);
+          appendUwbLineIfNew(session, chunk, gen);
+          readFallbackUsed = true;
+          if (session.uwbLineLogText.length > baselineLen) {
             return true;
           }
         }
       } catch {
-        /* read fallback needs latest firmware */
+        /* optional */
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -637,29 +702,42 @@ async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data:
   if (!(await ensureSessionConnected(session))) {
     throw new Error("Device not connected");
   }
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const char = getWriteCharacteristic(session, target);
-    if (!char) {
-      throw new Error("Characteristic unavailable");
-    }
-    try {
-      await runGattOp(session, () => char.writeValue(data));
-      return;
-    } catch (e) {
-      lastErr = e;
-      if (attempt === 0 && session.gatt.connected) {
-        await bindSessionCharacteristics(session);
-        if (session.deviceId === activeSessionId) {
-          updateBleToolbar();
-          await setCommsNotifications(session, true);
-        }
-        continue;
-      }
-      throw e;
-    }
+  const char = getWriteCharacteristic(session, target);
+  if (!char) {
+    throw new Error("Characteristic unavailable");
   }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  await runGattOp(session, () => char.writeValue(data));
+}
+
+function notecardInFlightText(session: BleBoatSession): string {
+  if (session.notecardRspAcc.length === 0) {
+    return "";
+  }
+  return new TextDecoder().decode(new Uint8Array(session.notecardRspAcc));
+}
+
+function notecardDisplayText(session: BleBoatSession): string {
+  return session.notecardLogText + notecardInFlightText(session);
+}
+
+function appendNotecardLog(session: BleBoatSession, chunk: string): void {
+  if (chunk.length === 0) {
+    return;
+  }
+  session.notecardLogText += chunk;
+  if (session.notecardLogText.length > 64000) {
+    session.notecardLogText = session.notecardLogText.slice(-48000);
+  }
+  renderNotecardRsp(session);
+}
+
+function commitNotecardInFlightResponse(session: BleBoatSession): void {
+  const rsp = notecardInFlightText(session);
+  if (rsp.length === 0) {
+    return;
+  }
+  session.notecardRspAcc.length = 0;
+  appendNotecardLog(session, rsp.endsWith("\n") ? rsp : `${rsp}\n`);
 }
 
 function renderNotecardRsp(session: BleBoatSession): void {
@@ -670,7 +748,29 @@ function renderNotecardRsp(session: BleBoatSession): void {
   if (!el) {
     return;
   }
-  el.textContent = new TextDecoder().decode(new Uint8Array(session.notecardRspAcc));
+  el.textContent = notecardDisplayText(session);
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearNotecardLog(session: BleBoatSession | null): void {
+  if (session) {
+    session.notecardLogText = "";
+    session.notecardRspAcc.length = 0;
+  }
+  const el = document.querySelector("#notecard-rsp-log");
+  if (el) {
+    el.textContent = "";
+  }
+}
+
+function clearUwbLog(session: BleBoatSession | null): void {
+  if (session) {
+    session.uwbLineLogText = "";
+  }
+  const el = document.querySelector("#uwb-line-log");
+  if (el) {
+    el.textContent = "";
+  }
 }
 
 function renderUwbLog(session: BleBoatSession): void {
@@ -857,26 +957,21 @@ function createNotifyHandlers(session: BleBoatSession): void {
   session.onNotecardRspNotify = (ev: Event) => {
     const ch = ev.target as BluetoothRemoteGATTCharacteristic;
     const v = ch.value;
-    if (!v) {
+    if (!v || session.activeNotecardGen === 0) {
       return;
     }
     const u8 = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
-    for (let i = 0; i < u8.length; i++) {
-      session.notecardRspAcc.push(u8[i]!);
-    }
-    renderNotecardRsp(session);
+    appendNotecardRspBytes(session, u8, session.activeNotecardGen);
   };
 
   session.onUwbLineNotify = (ev: Event) => {
     const ch = ev.target as BluetoothRemoteGATTCharacteristic;
     const v = ch.value;
-    if (!v) {
+    if (!v || session.activeUwbGen === 0) {
       return;
     }
     const s = new TextDecoder().decode(v);
-    if (s.length > 0) {
-      appendUwbLog(session, s.endsWith("\n") ? s : `${s}\n`);
-    }
+    appendUwbLineIfNew(session, s, session.activeUwbGen);
   };
 
   session.onDisconnected = () => {
@@ -930,6 +1025,9 @@ async function sendNotecardRequest(): Promise<void> {
     }
     return;
   }
+  if (session.notecardBusy) {
+    return;
+  }
   const ta = document.querySelector<HTMLTextAreaElement>("#notecard-json");
   const body = (ta?.value ?? "").trim();
   if (!body) {
@@ -939,48 +1037,48 @@ async function sendNotecardRequest(): Promise<void> {
     JSON.parse(body);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const el = document.querySelector("#notecard-rsp-log");
-    if (el) {
-      el.textContent =
-        `Invalid JSON before send: ${msg}\n` +
-        `Use a colon between key and value, e.g. {"req":"hub.status"}`;
-    }
+    appendNotecardLog(
+      session,
+      `! Invalid JSON: ${msg}\n` + `  Example: {"req":"hub.status"}\n`,
+    );
     return;
   }
   const line = body.endsWith("\n") ? body : `${body}\n`;
+  session.notecardBusy = true;
   session.notecardJsonDraft = ta?.value ?? "";
   session.notecardRspAcc.length = 0;
-  renderNotecardRsp(session);
-  const rspEl = document.querySelector("#notecard-rsp-log");
-  if (rspEl) {
-    rspEl.textContent = "Sending…";
+  const gen = ++session.commsGen;
+  session.activeNotecardGen = gen;
+  session.activeUwbGen = 0;
+  if (session.notecardLogText.length > 0 && !session.notecardLogText.endsWith("\n")) {
+    session.notecardLogText += "\n";
   }
+  appendNotecardLog(session, `>> ${line}`);
   try {
     const imuWasOn = await pauseImuForComms(session);
     try {
       await ensureNotecardComms(session);
       await gattWrite(session, "notecard", new TextEncoder().encode(line));
-      if (rspEl) {
-        rspEl.textContent = "Waiting for response on 0xFEF8…";
-      }
-      await pollNotecardResponse(session, 15000);
-      if (session.notecardRspAcc.length === 0 && rspEl) {
-        rspEl.textContent =
-          "No response after 15 s.\n\n" +
-          "Checks:\n" +
-          "• Reconnect BLE and flash latest firmware\n" +
-          "• Try {\"req\":\"hub.status\"} first\n" +
-          "• IMU streaming can starve BLE — use IMU tab only when needed";
+      await pollNotecardResponse(session, gen, 15000);
+      if (gen === session.activeNotecardGen && session.notecardRspAcc.length === 0) {
+        appendNotecardLog(
+          session,
+          "! No response after 15 s. Try {\"req\":\"hub.status\"} or reconnect.\n",
+        );
       }
     } finally {
       await restoreImuAfterComms(session, imuWasOn);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (rspEl) {
-      rspEl.textContent = `Write error: ${msg}`;
-    }
+    appendNotecardLog(session, `! Write error: ${msg}\n`);
   } finally {
+    session.notecardBusy = false;
+    if (gen === session.activeNotecardGen) {
+      commitNotecardInFlightResponse(session);
+      session.activeNotecardGen = 0;
+      renderNotecardRsp(session);
+    }
     updateBleToolbar();
   }
 }
@@ -996,21 +1094,28 @@ async function sendUwbAt(): Promise<void> {
     }
     return;
   }
+  if (session.uwbBusy) {
+    return;
+  }
   const input = document.querySelector<HTMLInputElement>("#uwb-at-input");
   let cmd = (input?.value ?? "").trim();
   if (!cmd) {
     return;
   }
+  session.uwbBusy = true;
   session.uwbAtDraft = input?.value ?? "";
   appendUwbLog(session, `> ${cmd}\n`);
   const baselineLen = session.uwbLineLogText.length;
+  const gen = ++session.commsGen;
+  session.activeUwbGen = gen;
+  session.activeNotecardGen = 0;
   try {
     const imuWasOn = await pauseImuForComms(session);
     try {
       await ensureUwbComms(session);
       await gattWrite(session, "uwb", new TextEncoder().encode(cmd));
-      const gotReply = await pollUwbResponse(session, baselineLen, 5000);
-      if (!gotReply) {
+      const gotReply = await pollUwbResponse(session, gen, baselineLen, 5000);
+      if (gen === session.activeUwbGen && !gotReply) {
         appendUwbLog(
           session,
           "! No UWB response after 5s (check wiring; flash latest firmware for read fallback).\n",
@@ -1022,6 +1127,11 @@ async function sendUwbAt(): Promise<void> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     appendUwbLog(session, `! BLE write error: ${msg}\n`);
+  } finally {
+    session.uwbBusy = false;
+    if (gen === session.activeUwbGen) {
+      session.activeUwbGen = 0;
+    }
   }
 }
 
@@ -1052,6 +1162,7 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
     boatIdDraft: "",
     deviceType: "boat",
     deviceTypeDraft: "boat",
+    notecardLogText: "",
     notecardRspAcc: [],
     uwbLineLogText: "",
     notecardJsonDraft: "",
@@ -1060,6 +1171,11 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
     imu: defaultImuDisplay(),
     notificationsOn: false,
     imuNotificationsOn: false,
+    commsGen: 0,
+    activeNotecardGen: 0,
+    activeUwbGen: 0,
+    notecardBusy: false,
+    uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
@@ -1145,6 +1261,11 @@ async function disconnectSession(deviceId: string): Promise<void> {
 }
 
 export function startRegattaApp(): void {
+  if (regattaAppStarted) {
+    return;
+  }
+  regattaAppStarted = true;
+
   document.body.dataset["appScreen"] = "boat";
   document.body.dataset["appTab"] = "main";
 
@@ -1153,23 +1274,61 @@ export function startRegattaApp(): void {
   deviceSelectEl = document.querySelector<HTMLSelectElement>("#ble-device-select");
   deviceDisconnectBtn = document.querySelector<HTMLButtonElement>("#ble-device-disconnect");
 
-  document.querySelector("#notecard-send")?.addEventListener("click", () => void sendNotecardRequest());
-  document.querySelector("#uwb-at-send")?.addEventListener("click", () => void sendUwbAt());
-  document.querySelector("#uwb-at-input")?.addEventListener("keydown", (ev) => {
-    if (ev instanceof KeyboardEvent && ev.key === "Enter") {
+  document.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement | null;
+    const btn = target?.closest("button");
+    if (!btn) {
+      return;
+    }
+    if (btn.id === "notecard-send") {
+      void sendNotecardRequest();
+      return;
+    }
+    if (btn.id === "uwb-at-send") {
+      void sendUwbAt();
+      return;
+    }
+    if (btn.id === "uwb-log-clear") {
+      clearUwbLog(getActiveSession());
+      return;
+    }
+    if (btn.id === "notecard-log-clear") {
+      clearNotecardLog(getActiveSession());
+      return;
+    }
+    if (btn.id === "device-type-save") {
+      void saveDeviceTypeToDevice();
+      return;
+    }
+    if (btn.id === "boat-id-save") {
+      void saveBoatIdToDevice();
+    }
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (!(ev instanceof KeyboardEvent) || ev.key !== "Enter") {
+      return;
+    }
+    const target = ev.target;
+    if (target instanceof HTMLInputElement && target.id === "uwb-at-input") {
       void sendUwbAt();
     }
   });
-  document.querySelector<HTMLTextAreaElement>("#notecard-json")?.addEventListener("input", (ev) => {
+  document.addEventListener("input", (ev) => {
     const session = getActiveSession();
-    if (session && ev.target instanceof HTMLTextAreaElement) {
-      session.notecardJsonDraft = ev.target.value;
+    if (!session) {
+      return;
     }
-  });
-  document.querySelector<HTMLInputElement>("#uwb-at-input")?.addEventListener("input", (ev) => {
-    const session = getActiveSession();
-    if (session && ev.target instanceof HTMLInputElement) {
-      session.uwbAtDraft = ev.target.value;
+    const target = ev.target;
+    if (target instanceof HTMLTextAreaElement && target.id === "notecard-json") {
+      session.notecardJsonDraft = target.value;
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.id === "uwb-at-input") {
+      session.uwbAtDraft = target.value;
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.id === "boat-id-input") {
+      session.boatIdDraft = target.value;
     }
   });
 
@@ -1189,7 +1348,6 @@ export function startRegattaApp(): void {
     }
   });
 
-  document.querySelector("#device-type-save")?.addEventListener("click", () => void saveDeviceTypeToDevice());
   document.querySelector<HTMLSelectElement>("#device-type-select")?.addEventListener("change", (ev) => {
     const session = getActiveSession();
     if (session && ev.target instanceof HTMLSelectElement) {
@@ -1197,14 +1355,6 @@ export function startRegattaApp(): void {
       if (type) {
         session.deviceTypeDraft = type;
       }
-    }
-  });
-
-  document.querySelector("#boat-id-save")?.addEventListener("click", () => void saveBoatIdToDevice());
-  document.querySelector<HTMLInputElement>("#boat-id-input")?.addEventListener("input", (ev) => {
-    const session = getActiveSession();
-    if (session && ev.target instanceof HTMLInputElement) {
-      session.boatIdDraft = ev.target.value;
     }
   });
 
