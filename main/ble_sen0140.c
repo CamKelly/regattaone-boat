@@ -102,6 +102,27 @@ static bool s_notecard_rsp_notify_enabled;
 static bool s_uwb_line_notify_enabled;
 static uint16_t s_seq;
 
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+#define UWB_LINE_BUF_MAX 384U
+static char s_uwb_line_buf[UWB_LINE_BUF_MAX];
+static size_t s_uwb_line_len;
+
+static void uwb_line_store(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+    if (s_uwb_line_len > 0U && s_uwb_line_len < (UWB_LINE_BUF_MAX - 1U)) {
+        s_uwb_line_buf[s_uwb_line_len++] = '\n';
+    }
+    size_t room = UWB_LINE_BUF_MAX - 1U - s_uwb_line_len;
+    size_t n = len < room ? len : room;
+    memcpy(s_uwb_line_buf + s_uwb_line_len, data, n);
+    s_uwb_line_len += n;
+    s_uwb_line_buf[s_uwb_line_len] = '\0';
+}
+#endif
+
 #if CONFIG_REGATTAONE_NOTECARD_ENABLE
 #define NOTECARD_RSP_BUF_MAX 512U
 static char s_notecard_rsp_buf[NOTECARD_RSP_BUF_MAX];
@@ -482,6 +503,12 @@ static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, 
     (void)attr_handle;
     (void)arg;
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+        if (s_uwb_line_len > 0U) {
+            return os_mbuf_append(ctxt->om, s_uwb_line_buf, (uint16_t)s_uwb_line_len) == 0 ? 0
+                                                                                             : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+#endif
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;
@@ -519,6 +546,8 @@ static int gatt_svr_access_uwb_at(uint16_t conn_handle, uint16_t attr_handle, st
             buf[n++] = '\n';
         }
     }
+    s_uwb_line_len = 0U;
+    s_uwb_line_buf[0] = '\0';
     esp_err_t err = ryuw122_uart_write(buf, n);
     return (err == ESP_OK) ? 0 : BLE_ATT_ERR_UNLIKELY;
 #else
@@ -873,6 +902,16 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
         return;
     }
 
+    /* Comms responses share the NimBLE mbuf pool — throttle IMU while UWB/Notecard notify is on. */
+    static TickType_t s_last_imu_notify;
+    if (s_uwb_line_notify_enabled || s_notecard_rsp_notify_enabled) {
+        const TickType_t now = xTaskGetTickCount();
+        if (now - s_last_imu_notify < pdMS_TO_TICKS(200)) {
+            return;
+        }
+        s_last_imu_notify = now;
+    }
+
     sen0140_ble_imu_pkt_t pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.version = SEN0140_BLE_VER;
@@ -957,7 +996,13 @@ void ble_sen0140_notecard_rsp_notify_chunk(const uint8_t *data, size_t len)
 
 void ble_sen0140_uwb_line_notify(const uint8_t *data, size_t len)
 {
-    if (!data || len == 0U || s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_uwb_line_notify_enabled) {
+    if (!data || len == 0U) {
+        return;
+    }
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+    uwb_line_store(data, len);
+#endif
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_uwb_line_notify_enabled) {
         return;
     }
     ble_notify_take();

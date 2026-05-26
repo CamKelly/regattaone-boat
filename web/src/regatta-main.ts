@@ -16,10 +16,12 @@ import {
 } from "./lib/protocol";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-05-23a";
+const WEB_BLE_REV = "2026-05-25c";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
+
+let imuTabActive = false;
 
 interface ImuDisplay {
   accel: string;
@@ -321,15 +323,14 @@ function syncActionButtons(): void {
   const ncSend = document.querySelector<HTMLButtonElement>("#notecard-send");
   const uwbSend = document.querySelector<HTMLButtonElement>("#uwb-at-send");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  const canWrite = session !== null && session.gatt.connected;
   if (ncSend) {
-    ncSend.disabled = !canWrite || session.charNotecardReq === null;
+    ncSend.disabled = false;
   }
   if (uwbSend) {
-    uwbSend.disabled = !canWrite || session.charUwbAt === null;
+    uwbSend.disabled = false;
   }
   if (uwbInput) {
-    uwbInput.disabled = !canWrite || session.charUwbAt === null;
+    uwbInput.disabled = false;
   }
   syncBoatIdUi(session);
   syncDeviceTypeUi(session);
@@ -419,8 +420,27 @@ async function ensureNotecardComms(session: BleBoatSession): Promise<void> {
   if (!session.charNotecardReq || !session.charNotecardRsp) {
     await bindSessionCharacteristics(session);
   }
-  if (session.charNotecardRsp && !session.notificationsOn) {
-    await setCommsNotifications(session, true);
+  await setCommsNotifications(session, true);
+}
+
+async function ensureUwbComms(session: BleBoatSession): Promise<void> {
+  if (!session.charUwbAt || !session.charUwbLine) {
+    await bindSessionCharacteristics(session);
+  }
+  await setCommsNotifications(session, true);
+}
+
+async function pauseImuForComms(session: BleBoatSession): Promise<boolean> {
+  const wasOn = session.imuNotificationsOn;
+  if (wasOn) {
+    await setImuNotifications(session, false);
+  }
+  return wasOn;
+}
+
+async function restoreImuAfterComms(session: BleBoatSession, wasOn: boolean): Promise<void> {
+  if (wasOn && imuTabActive) {
+    await setImuNotifications(session, true);
   }
 }
 
@@ -469,11 +489,11 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
         /* optional */
       }
     }
-    if (!session.charImu || !session.charUwbAt || !session.charNotecardReq) {
+    if (!session.charImu || !session.charUwbAt) {
       await bindSessionCharacteristics(session);
     }
-    await setSessionNotifications(session, true);
-    await ensureNotecardComms(session);
+    await setCommsNotifications(session, true);
+    await setImuNotifications(session, imuTabActive);
     await readBoatIdFromDevice(session);
     await readDeviceTypeFromDevice(session);
     return session.gatt.connected;
@@ -508,10 +528,35 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
 }
 
 async function ensureSessionConnected(session: BleBoatSession): Promise<boolean> {
-  if (session.gatt.connected && session.charImu && session.charUwbAt && session.charNotecardReq) {
+  if (session.gatt.connected && session.charImu && session.charUwbAt) {
     return true;
   }
   return activateSession(session);
+}
+
+async function pollUwbResponse(session: BleBoatSession, baselineLen: number, timeoutMs: number): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    if (session.uwbLineLogText.length > baselineLen) {
+      return true;
+    }
+    if (session.charUwbLine && session.gatt.connected) {
+      try {
+        const val = await runGattOp(session, () => session.charUwbLine!.readValue());
+        if (val.byteLength > 0) {
+          const chunk = new TextDecoder().decode(val);
+          if (chunk.length > 0) {
+            appendUwbLog(session, chunk.endsWith("\n") ? chunk : `${chunk}\n`);
+            return true;
+          }
+        }
+      } catch {
+        /* read fallback needs latest firmware */
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return session.uwbLineLogText.length > baselineLen;
 }
 
 async function setImuNotifications(session: BleBoatSession, enabled: boolean): Promise<void> {
@@ -592,39 +637,29 @@ async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data:
   if (!(await ensureSessionConnected(session))) {
     throw new Error("Device not connected");
   }
-  const imuWasOn = session.imuNotificationsOn;
-  if (imuWasOn) {
-    await setImuNotifications(session, false);
-  }
-  try {
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const char = getWriteCharacteristic(session, target);
-      if (!char) {
-        throw new Error("Characteristic unavailable");
-      }
-      try {
-        await runGattOp(session, () => char.writeValue(data));
-        return;
-      } catch (e) {
-        lastErr = e;
-        if (attempt === 0 && session.gatt.connected) {
-          await bindSessionCharacteristics(session);
-          if (session.deviceId === activeSessionId) {
-            updateBleToolbar();
-            await setCommsNotifications(session, true);
-          }
-          continue;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const char = getWriteCharacteristic(session, target);
+    if (!char) {
+      throw new Error("Characteristic unavailable");
+    }
+    try {
+      await runGattOp(session, () => char.writeValue(data));
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0 && session.gatt.connected) {
+        await bindSessionCharacteristics(session);
+        if (session.deviceId === activeSessionId) {
+          updateBleToolbar();
+          await setCommsNotifications(session, true);
         }
-        throw e;
+        continue;
       }
-    }
-    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
-  } finally {
-    if (imuWasOn && session.deviceId === activeSessionId && session.gatt.connected) {
-      await setImuNotifications(session, true);
+      throw e;
     }
   }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 function renderNotecardRsp(session: BleBoatSession): void {
@@ -921,20 +956,24 @@ async function sendNotecardRequest(): Promise<void> {
     rspEl.textContent = "Sending…";
   }
   try {
-    await ensureNotecardComms(session);
-    await gattWrite(session, "notecard", new TextEncoder().encode(line));
-    if (rspEl) {
-      rspEl.textContent = "Waiting for response on 0xFEF8…";
-    }
-    await pollNotecardResponse(session, 15000);
-    if (session.notecardRspAcc.length === 0 && rspEl) {
-      rspEl.textContent =
-        "No response after 15 s.\n\n" +
-        "Checks:\n" +
-        "• BLE status should not say “Notecard notify off” (reconnect if it does)\n" +
-        "• Try {\"req\":\"hub.status\"} first\n" +
-        "• ESP32 talks to Notecard over I2C — USB on the Notecard is separate (close Notehub serial if open)\n" +
-        "• Flash latest firmware (response read fallback on 0xFEF8)";
+    const imuWasOn = await pauseImuForComms(session);
+    try {
+      await ensureNotecardComms(session);
+      await gattWrite(session, "notecard", new TextEncoder().encode(line));
+      if (rspEl) {
+        rspEl.textContent = "Waiting for response on 0xFEF8…";
+      }
+      await pollNotecardResponse(session, 15000);
+      if (session.notecardRspAcc.length === 0 && rspEl) {
+        rspEl.textContent =
+          "No response after 15 s.\n\n" +
+          "Checks:\n" +
+          "• Reconnect BLE and flash latest firmware\n" +
+          "• Try {\"req\":\"hub.status\"} first\n" +
+          "• IMU streaming can starve BLE — use IMU tab only when needed";
+      }
+    } finally {
+      await restoreImuAfterComms(session, imuWasOn);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -949,6 +988,12 @@ async function sendNotecardRequest(): Promise<void> {
 async function sendUwbAt(): Promise<void> {
   const session = getActiveSession();
   if (!session?.charUwbAt) {
+    const el = document.querySelector("#uwb-line-log");
+    if (el) {
+      el.textContent = session
+        ? "! UWB characteristic 0xFEFA unavailable.\n"
+        : "! Connect a BLE device first.\n";
+    }
     return;
   }
   const input = document.querySelector<HTMLInputElement>("#uwb-at-input");
@@ -958,8 +1003,22 @@ async function sendUwbAt(): Promise<void> {
   }
   session.uwbAtDraft = input?.value ?? "";
   appendUwbLog(session, `> ${cmd}\n`);
+  const baselineLen = session.uwbLineLogText.length;
   try {
-    await gattWrite(session, "uwb", new TextEncoder().encode(cmd));
+    const imuWasOn = await pauseImuForComms(session);
+    try {
+      await ensureUwbComms(session);
+      await gattWrite(session, "uwb", new TextEncoder().encode(cmd));
+      const gotReply = await pollUwbResponse(session, baselineLen, 5000);
+      if (!gotReply) {
+        appendUwbLog(
+          session,
+          "! No UWB response after 5s (check wiring; flash latest firmware for read fallback).\n",
+        );
+      }
+    } finally {
+      await restoreImuAfterComms(session, imuWasOn);
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     appendUwbLog(session, `! BLE write error: ${msg}\n`);
@@ -1150,6 +1209,24 @@ export function startRegattaApp(): void {
   });
 
   connectBtn.addEventListener("click", () => void connectBle());
+
+  document.querySelector("#ble-tabs")?.addEventListener("click", (ev) => {
+    const tab = (ev.target as HTMLElement | null)?.closest(".ant-tabs-tab");
+    if (!tab) {
+      return;
+    }
+    const label = tab.textContent ?? "";
+    const wantImu = label.includes("IMU");
+    if (wantImu === imuTabActive) {
+      return;
+    }
+    imuTabActive = wantImu;
+    const session = getActiveSession();
+    if (!session?.gatt.connected) {
+      return;
+    }
+    void setImuNotifications(session, imuTabActive);
+  });
 
   console.info(`RegattaOne Boat web BLE ${WEB_BLE_REV}`);
   clearUiPanels();
