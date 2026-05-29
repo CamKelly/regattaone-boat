@@ -1,6 +1,7 @@
 {
   "cmake.cmakePath": "/opt/homebrew/bin/cmake",
   "C_Cpp.intelliSenseEngine": "default",
+  "openscad.launchPath": "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD",
   "idf.openOcdConfigs": [
     "board/esp32c3-builtin.cfg"
   ],
