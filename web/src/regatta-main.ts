@@ -1223,7 +1223,7 @@ async function sendUwbAt(): Promise<void> {
       if (gen === session.activeUwbGen && !gotReply) {
         appendUwbLog(
           session,
-          "! No UWB response after 5s (check wiring; flash latest firmware for read fallback).\n",
+          "! No UWB response after 5s — check wiring (ESP TX→module RX GPIO17), baud 115200, 3.3V GND.\n",
         );
       }
     } finally {

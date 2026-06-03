@@ -34,6 +34,54 @@ static size_t s_at_rsp_len;
 static bool s_at_ok;
 static bool s_at_err;
 
+static bool ryuw122_byte_is_printable(uint8_t b)
+{
+    return b == '\r' || b == '\n' || b == '\t' || (b >= 0x20U && b <= 0x7eU);
+}
+
+/** REYAX AT replies are ASCII and contain +OK or +ERR when the link is correct. */
+static bool ryuw122_buf_looks_like_at_reply(const uint8_t *buf, int len)
+{
+    if (!buf || len <= 0) {
+        return false;
+    }
+    int printable = 0;
+    for (int i = 0; i < len; i++) {
+        if (ryuw122_byte_is_printable(buf[i])) {
+            printable++;
+        }
+    }
+    if (printable * 4 < len * 3) {
+        return false;
+    }
+    char tmp[129];
+    const int n = len > 127 ? 127 : len;
+    memcpy(tmp, buf, (size_t)n);
+    tmp[n] = '\0';
+    return strstr(tmp, "+OK") != NULL || strstr(tmp, "+ERR") != NULL || strstr(tmp, "OK") != NULL;
+}
+
+static bool ryuw122_line_is_printable(const char *line, size_t len)
+{
+    if (!line || len == 0U) {
+        return false;
+    }
+    for (size_t i = 0; i < len; i++) {
+        if (!ryuw122_byte_is_printable((uint8_t)line[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void ryuw122_apply_uart(int tx_gpio, int rx_gpio, int baud)
+{
+    (void)uart_set_pin(CONFIG_RYUW122_UART_PORT_NUM, tx_gpio, rx_gpio, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    (void)uart_set_baudrate(CONFIG_RYUW122_UART_PORT_NUM, baud);
+    uart_flush(CONFIG_RYUW122_UART_PORT_NUM);
+    uart_flush_input(CONFIG_RYUW122_UART_PORT_NUM);
+}
+
 static void ryuw122_at_append_line(const char *line)
 {
     if (!line || s_at_done == NULL) {
@@ -62,6 +110,12 @@ static void ryuw122_emit_line(char *line, size_t *li)
     if (*li == 0U) {
         return;
     }
+    if (!ryuw122_line_is_printable(line, *li)) {
+        ESP_LOGW(TAG, "RX garbage (%u bytes) — check TX/RX swap and baud (115200 default)", (unsigned)*li);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, line, *li, ESP_LOG_WARN);
+        *li = 0;
+        return;
+    }
     line[*li] = '\0';
     ESP_LOGI(TAG, "RX: %s", line);
     if (s_at_done != NULL) {
@@ -73,36 +127,31 @@ static void ryuw122_emit_line(char *line, size_t *li)
 
 static bool ryuw122_send_at_probe(int tx_gpio, int rx_gpio, int baud)
 {
-    if (uart_set_pin(CONFIG_RYUW122_UART_PORT_NUM, tx_gpio, rx_gpio, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE) !=
-        ESP_OK) {
-        return false;
-    }
-    if (uart_set_baudrate(CONFIG_RYUW122_UART_PORT_NUM, baud) != ESP_OK) {
-        return false;
-    }
-    uart_flush(CONFIG_RYUW122_UART_PORT_NUM);
-    uart_flush_input(CONFIG_RYUW122_UART_PORT_NUM);
+    ryuw122_apply_uart(tx_gpio, rx_gpio, baud);
 
     static const char at[] = "AT\r\n";
     if (uart_write_bytes(CONFIG_RYUW122_UART_PORT_NUM, at, sizeof(at) - 1U) < 0) {
         return false;
     }
     (void)uart_wait_tx_done(CONFIG_RYUW122_UART_PORT_NUM, pdMS_TO_TICKS(300));
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(80));
 
     uint8_t buf[128];
-    const int len = uart_read_bytes(CONFIG_RYUW122_UART_PORT_NUM, buf, sizeof(buf), pdMS_TO_TICKS(600));
-    if (len <= 0) {
+    const int len = uart_read_bytes(CONFIG_RYUW122_UART_PORT_NUM, buf, sizeof(buf), pdMS_TO_TICKS(800));
+    if (len <= 0 || !ryuw122_buf_looks_like_at_reply(buf, len)) {
+        if (len > 0) {
+            ESP_LOGD(TAG, "probe reject TX=%d RX=%d @ %d (%d bytes)", tx_gpio, rx_gpio, baud, len);
+            ESP_LOG_BUFFER_HEXDUMP(TAG, buf, (size_t)len, ESP_LOG_DEBUG);
+        }
         return false;
     }
-    ESP_LOGI(TAG, "AT OK: TX=GPIO%d RX=GPIO%d @ %d — %d byte(s)", tx_gpio, rx_gpio, baud, len);
-    ESP_LOG_BUFFER_HEXDUMP(TAG, buf, (size_t)len, ESP_LOG_INFO);
+    ESP_LOGI(TAG, "AT OK: TX=GPIO%d RX=GPIO%d @ %d — %.*s", tx_gpio, rx_gpio, baud, len, (const char *)buf);
     return true;
 }
 
 static bool ryuw122_autoprobe(void)
 {
-    static const int bauds[] = {115200, 9600};
+    static const int bauds[] = {115200, 57600, 9600};
     const struct {
         int tx;
         int rx;
@@ -117,6 +166,7 @@ static bool ryuw122_autoprobe(void)
                 s_tx_gpio = layouts[li].tx;
                 s_rx_gpio = layouts[li].rx;
                 s_uart_baud = bauds[bi];
+                ryuw122_apply_uart(s_tx_gpio, s_rx_gpio, s_uart_baud);
                 if (li > 0U) {
                     ESP_LOGW(TAG, "TX/RX were swapped — use ESP TX=GPIO%d, RX=GPIO%d", s_tx_gpio, s_rx_gpio);
                 }
@@ -143,7 +193,13 @@ static void ryuw122_task(void *arg)
             if (li > 0U) {
                 idle_reads++;
                 if (idle_reads >= RYUW_IDLE_FLUSH_READS) {
-                    ryuw122_emit_line(line, &li);
+                    if (ryuw122_line_is_printable(line, li)) {
+                        ryuw122_emit_line(line, &li);
+                    } else {
+                        ESP_LOGW(TAG, "discarding idle UART noise (%u bytes)", (unsigned)li);
+                        ESP_LOG_BUFFER_HEXDUMP(TAG, line, li, ESP_LOG_WARN);
+                        li = 0;
+                    }
                     idle_reads = 0;
                 }
             }
@@ -229,10 +285,11 @@ esp_err_t ryuw122_uart_start(void)
     }
 
     if (!ryuw122_autoprobe()) {
-        ESP_LOGW(TAG, "No AT reply at boot");
-        (void)uart_set_pin(CONFIG_RYUW122_UART_PORT_NUM, CONFIG_RYUW122_UART_TX_GPIO,
-                           CONFIG_RYUW122_UART_RX_GPIO, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-        (void)uart_set_baudrate(CONFIG_RYUW122_UART_PORT_NUM, CONFIG_RYUW122_UART_BAUD);
+        ESP_LOGW(TAG, "No valid AT reply at boot — using menuconfig TX/RX @ %d baud", CONFIG_RYUW122_UART_BAUD);
+        ryuw122_apply_uart(CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
+        s_tx_gpio = CONFIG_RYUW122_UART_TX_GPIO;
+        s_rx_gpio = CONFIG_RYUW122_UART_RX_GPIO;
+        s_uart_baud = CONFIG_RYUW122_UART_BAUD;
     }
 
     const uint32_t stack = 4096;
