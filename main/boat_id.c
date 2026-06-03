@@ -5,21 +5,64 @@
 
 #include "boat_note.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
 static const char *TAG = "boat_id";
 static const char *NVS_NS = "boat";
 static const char *NVS_KEY = "id";
+static const char *NVS_ADV_KEY = "adv";
+
+static const char ADV_ALPHABET[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
 static char s_boat_id[BOAT_ID_MAX_LEN + 1U];
+static char s_default_adv_name[BOAT_ID_RANDOM_ADV_LEN + 1U];
 static char s_ble_name[BOAT_ID_BLE_NAME_MAX_LEN + 1U];
+
+static void generate_random_adv_name(char *out, size_t len)
+{
+    const size_t alphabet_len = sizeof(ADV_ALPHABET) - 1U;
+    for (size_t i = 0; i < len; i++) {
+        out[i] = ADV_ALPHABET[esp_random() % alphabet_len];
+    }
+    out[len] = '\0';
+}
+
+static esp_err_t load_or_create_default_adv_name(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        generate_random_adv_name(s_default_adv_name, BOAT_ID_RANDOM_ADV_LEN);
+        return err;
+    }
+
+    size_t len = sizeof(s_default_adv_name);
+    err = nvs_get_str(h, NVS_ADV_KEY, s_default_adv_name, &len);
+    if (err == ESP_OK && strlen(s_default_adv_name) == BOAT_ID_RANDOM_ADV_LEN) {
+        nvs_close(h);
+        return ESP_OK;
+    }
+
+    generate_random_adv_name(s_default_adv_name, BOAT_ID_RANDOM_ADV_LEN);
+    err = nvs_set_str(h, NVS_ADV_KEY, s_default_adv_name);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "assigned default adv name \"%s\"", s_default_adv_name);
+    }
+    return err;
+}
 
 static void refresh_ble_name(void)
 {
     const char *id = s_boat_id;
     if (id[0] == '\0') {
-        strncpy(s_ble_name, BOAT_ID_DEFAULT_BLE_NAME, sizeof(s_ble_name) - 1U);
+        strncpy(s_ble_name, s_default_adv_name, sizeof(s_ble_name) - 1U);
     } else {
         strncpy(s_ble_name, id, BOAT_ID_BLE_NAME_MAX_LEN);
     }
@@ -43,10 +86,17 @@ static bool is_valid_boat_id(const char *id, size_t len)
 esp_err_t boat_id_init(void)
 {
     s_boat_id[0] = '\0';
+    s_default_adv_name[0] = '\0';
+
+    esp_err_t adv_err = load_or_create_default_adv_name();
+    if (adv_err != ESP_OK && s_default_adv_name[0] == '\0') {
+        generate_random_adv_name(s_default_adv_name, BOAT_ID_RANDOM_ADV_LEN);
+    }
 
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READONLY, &h);
     if (err != ESP_OK) {
+        refresh_ble_name();
         return ESP_OK;
     }
 
@@ -57,6 +107,9 @@ esp_err_t boat_id_init(void)
         ESP_LOGI(TAG, "loaded id \"%s\"", s_boat_id);
     }
     refresh_ble_name();
+    if (s_boat_id[0] == '\0') {
+        ESP_LOGI(TAG, "ble adv name \"%s\" (no user id)", s_ble_name);
+    }
     return ESP_OK;
 }
 

@@ -311,7 +311,7 @@ function syncBoatIdUi(session: BleBoatSession | null): void {
     } else if (session.boatId) {
       statusEl.textContent = `Stored on device: ${session.boatId}`;
     } else {
-      statusEl.textContent = "No ID set — assign one to use as the BLE name (shown when adding/connecting).";
+      statusEl.textContent = `No custom ID — BLE advertises as "${session.name}" until you assign one.`;
     }
   }
 }
@@ -1304,7 +1304,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     device: dev,
     gatt: asWebGatt(gatt),
     nativeBle: false,
-    name: dev.name ?? "RegattaOne-Boat",
+    name: dev.name ?? "Boat",
     charImu: null,
     charLoraTx: null,
     charLoraLine: null,

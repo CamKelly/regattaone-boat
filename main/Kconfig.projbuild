@@ -1,3 +1,25 @@
+if IDF_TARGET_ESP32S3
+
+menu "RegattaOne — ESP32-S3 board"
+
+    choice REGATTAONE_ESP32S3_BOARD
+        prompt "Board pin map"
+        default REGATTAONE_S3_BOARD_DEVKIT_MINI
+        help
+            Default GPIO map for your ESP32-S3 module. Individual pins remain
+            editable in the RegattaOne menus below. After switching boards, use
+            scripts/idf-s3.sh (recommended) or delete sdkconfig and reconfigure.
+
+        config REGATTAONE_S3_BOARD_DEVKIT_MINI
+            bool "ESP32-S3-DevKitM-1 / WEMOS LOLIN Mini (ESP32-S3-MINI-1 module)"
+        config REGATTAONE_S3_BOARD_WAVESHARE_ZERO
+            bool "Waveshare ESP32-S3-Zero (ESP32-S3FH4R2)"
+    endchoice
+
+endmenu
+
+endif
+
 menu "RegattaOne — SX1262 LoRa (SPI, RadioLib)"
 
     config REGATTAONE_SX1262_ENABLE
@@ -22,6 +44,7 @@ menu "RegattaOne — SX1262 LoRa (SPI, RadioLib)"
         range 0 48 if IDF_TARGET_ESP32S3
         range 0 21 if IDF_TARGET_ESP32C3
         range 0 48
+        default 13 if REGATTAONE_S3_BOARD_DEVKIT_MINI || REGATTAONE_S3_BOARD_WAVESHARE_ZERO
         default 13 if IDF_TARGET_ESP32S3
         default 6 if IDF_TARGET_ESP32C3
 
@@ -146,10 +169,12 @@ menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
         int "GPS PPS input GPIO (-1 to disable)"
         depends on REGATTAONE_GPS_ENABLE
         range -1 48
-        default 21 if IDF_TARGET_ESP32S3
+        default 21 if REGATTAONE_S3_BOARD_DEVKIT_MINI
+        default 16 if REGATTAONE_S3_BOARD_WAVESHARE_ZERO
         default 10 if IDF_TARGET_ESP32C3
         help
-            1 Hz pulse-per-second from the GPS module. ESP32-S3 Mini: GPIO21 (IO21).
+            1 Hz pulse-per-second from the GPS module.
+            DevKit Mini: GPIO21 (IO21). Waveshare Zero: GPIO16 — GPIO21 is the onboard WS2812.
             Leave at -1 if your module has no PPS output wired.
 
 endmenu
@@ -368,7 +393,8 @@ menu "RegattaOne — SEN0140 I2C pins"
         help
             ESP32-C3: only GPIO 0–21 exist on the chip.
             Seeed XIAO ESP32-C3: SoC GPIO6 is the pad labeled D4 (often SDA on silk), NOT pad D6 (D6 is UART TX / GPIO21).
-            ESP32-S3 Mini: GPIO10 = header IO10 (SDA), GPIO11 = header IO11 (SCL) on typical WEMOS/LOLIN boards.
+            ESP32-S3 DevKit Mini: GPIO10 = header IO10 (SDA), GPIO11 = IO11 (SCL).
+            Waveshare ESP32-S3-Zero: GP10 / GP11 on the right edge.
             Set to match your wiring, then idf.py build.
 
     config SEN0140_I2C_SCL_GPIO
@@ -382,6 +408,6 @@ menu "RegattaOne — SEN0140 I2C pins"
         help
             ESP32-C3: only GPIO 0–21.
             Seeed XIAO ESP32-C3: SoC GPIO7 is the pad labeled D5 (often SCL), NOT pad D7 (D7 is UART RX / GPIO20).
-            ESP32-S3 Mini: GPIO11 = header IO11 (SCL).
+            ESP32-S3 DevKit Mini / Waveshare Zero: GPIO11 = header GP11 (SCL).
 
 endmenu

@@ -5,7 +5,7 @@
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.port": "/dev/tty.usbmodem21101",
+  "idf.port": "/dev/tty.usbmodem1101",
   "idf.enableSerialPortChipIdRequest": false,
   "idf.currentSetup": "/Users/cameronkelly/.espressif/v6.0/esp-idf",
   "idf.pythonBinPath": "/Users/cameronkelly/.espressif/python_env/idf6.0_py3.12_env/bin/python",
@@ -14,7 +14,8 @@
     "OPENOCD_SCRIPTS": "/Users/cameronkelly/.espressif/tools/openocd-esp32/v0.11.0-esp32-20220706/openocd-esp32/share/openocd/scripts",
     "ESP_ROM_ELF_DIR": "/Users/cameronkelly/.espressif/tools/esp-rom-elfs/20220823/",
     "IDF_COMPONENT_MANAGER": "0",
-    "IDF_TARGET": "esp32s3"
+    "IDF_TARGET": "esp32s3",
+    "OPENOCD_USB_ADAPTER_LOCATION": "1-1"
   },
   "clangd.path": "/Users/cameronkelly/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",
   "clangd.arguments": [

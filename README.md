@@ -1,8 +1,8 @@
 # RegattaOne Boat
 
-ESP-IDF **firmware** for **ESP32-S3 Mini** (primary) or **ESP32-C3** that bridges an **SX1262 LoRa** module (SPI / RadioLib), a **GPS** (NMEA 0183 UART + PPS), a **REYAX RYUW122_Lite** UWB module (UART), optional **SEN0140** IMU (I2C), and **Chrome over Web Bluetooth** on the same NimBLE GATT service. An **Angular + Ionic** web app connects to the device and shows **UWB UART** lines (Notecard JSON UI remains for legacy ESP32-C3 builds).
+ESP-IDF **firmware** for **ESP32-S3** (**DevKitM-1 / WEMOS Mini** or **Waveshare ESP32-S3-Zero**) or **ESP32-C3** that bridges an **SX1262 LoRa** module (SPI / RadioLib), a **GPS** (NMEA 0183 UART + PPS), a **REYAX RYUW122_Lite** UWB module (UART), optional **SEN0140** IMU (I2C), and **Chrome over Web Bluetooth** on the same NimBLE GATT service. An **Angular + Ionic** web app connects to the device and shows **UWB UART** lines (Notecard JSON UI remains for legacy ESP32-C3 builds).
 
-BLE advertised name: **`RegattaOne-Boat`**.
+BLE advertised name: random **4-character** code (A–Z, a–z, 0–9), persisted in NVS until you assign a boat ID.
 
 ---
 
@@ -13,7 +13,7 @@ BLE advertised name: **`RegattaOne-Boat`**.
 | **Firmware** (`main/`) | NimBLE GATT **0xFEF0**; optional **SEN0140** IMU task (**0xFEF1**); **SX1262** LoRa SPI (RadioLib, menuconfig); **GPS** NMEA UART + PPS; **RYUW122** UART lines → **0xFEF9** notify; legacy **Blues Notecard** I2C (**0xFEF7** / **0xFEF8**, C3 only); optional **MSP430** paths (**default off** on S3). |
 | **Web app** (`web/`) | **Web Bluetooth**: connect by service UUID, live **UWB** logs (Notecard tab for legacy C3). |
 | **Backend** (`backend/`) | Firebase Cloud Functions, Firestore rules, Notehub webhooks (legacy Notecard), device presence sync, and admin PWA (`backend/client/`). |
-| **Wiring** | **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** — ESP32-S3 Mini ↔ SX1262 ↔ GPS ↔ RYUW122 ↔ SEN0140. C3 + Notecard: **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)**. |
+| **Wiring** | **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** — DevKit Mini or Waveshare Zero ↔ SX1262 ↔ GPS ↔ RYUW122 ↔ SEN0140. C3 + Notecard: **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)**. |
 
 ---
 
@@ -38,16 +38,23 @@ BLE advertised name: **`RegattaOne-Boat`**.
 From the **repository root**:
 
 ```bash
-# Pick chip (ESP32-S3 Mini is the current target)
-idf.py set-target esp32s3
-# or: idf.py set-target esp32c3
+# ESP32-S3 — pick board (see WIRING-ESP32S3-LORA-GPS.md)
+./scripts/idf-s3.sh devkit-mini set-target esp32s3      # DevKitM-1 / WEMOS Mini
+# ./scripts/idf-s3.sh waveshare-zero set-target esp32s3 # Waveshare ESP32-S3-Zero
 
+./scripts/idf-s3.sh devkit-mini build
+./scripts/idf-s3.sh devkit-mini -p PORT flash monitor
+
+# ESP32-C3 (legacy Notecard path):
+idf.py set-target esp32c3
 idf.py build
 idf.py -p PORT flash monitor
 ```
 
+When **switching S3 boards**, delete `sdkconfig` first so pin defaults refresh.
+
 - **`components/RadioLib/`** — vendored [RadioLib](https://github.com/jgromes/RadioLib) v7.6.0 (ESP-IDF discovers it automatically; no component manager needed).
-- **Pins:** **Component config → RegattaOne** in `idf.py menuconfig` — SEN0140 I2C, SX1262 SPI, GPS UART/PPS, RYUW122 UART, legacy Notecard (C3), MSP430 (if enabled).
+- **Pins:** **Component config → RegattaOne — ESP32-S3 board** (or board fragments via `scripts/idf-s3.sh`), then per-peripheral GPIO menus.
 
 After changing target: if CMake complains, run **`idf.py fullclean`** once, then **`idf.py set-target …`** and **`idf.py build`** again.
 
@@ -96,7 +103,7 @@ npm install
 npm run dev
 ```
 
-Open **Chrome** at **`http://localhost:5173`** (or the URL printed by `ng serve`). Click **Connect Bluetooth**, pick **`RegattaOne-Boat`** (or any device advertising service **`0xFEF0`**), then use **Send to Notecard** and watch the **UWB** log.
+Open **Chrome** at **`http://localhost:5173`** (or the URL printed by `ng serve`). Click **Connect Bluetooth**, pick your device (4-char name or custom boat ID, service **`0xFEF0`**), then use the **LoRa** / **GPS** / **UWB** tabs as wired.
 
 Production build:
 

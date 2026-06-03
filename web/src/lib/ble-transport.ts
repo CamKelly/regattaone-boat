@@ -170,7 +170,7 @@ export async function requestBleDevice(optionalServiceUuids: string[]): Promise<
   });
   return {
     deviceId: dev.deviceId,
-    name: dev.name?.trim() || "RegattaOne-Boat",
+    name: dev.name?.trim() || "Boat",
   };
 }
 

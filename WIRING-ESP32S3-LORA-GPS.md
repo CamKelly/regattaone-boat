@@ -1,12 +1,41 @@
-# Wiring: ESP32-S3 Mini ↔ SX1262 LoRa ↔ GPS ↔ REYAX RYUW122 ↔ SEN0140 IMU
+# Wiring: ESP32-S3 ↔ SX1262 LoRa ↔ GPS ↔ REYAX RYUW122 ↔ SEN0140 IMU
 
-This document describes the **ESP32-S3 Mini** (WEMOS/LOLIN-style module on **ESP32-S3-MINI-1**) pin plan used by firmware defaults in `sdkconfig.defaults.esp32s3`. The Blues **Notecard** is replaced by an **SX1262** LoRa module over **SPI** (RadioLib). A **GPS** module provides **NMEA 0183** on UART plus **PPS**. The **REYAX RYUW122** UWB module stays on UART. The **SEN0140** IMU stays on I2C.
+This document describes pin plans for **two ESP32-S3 carriers** supported by firmware:
+
+| Board | Module | Select in build |
+| ----- | ------ | ---------------- |
+| **ESP32-S3-DevKitM-1** / WEMOS LOLIN Mini | **ESP32-S3-MINI-1** | `scripts/idf-s3.sh devkit-mini …` |
+| **Waveshare ESP32-S3-Zero** | **ESP32-S3FH4R2** (4 MB flash, 2 MB PSRAM) | `scripts/idf-s3.sh waveshare-zero …` |
+
+The Blues **Notecard** is replaced by an **SX1262** LoRa module over **SPI** (RadioLib). **GPS** uses **NMEA 0183** on UART plus **PPS**. **REYAX RYUW122** UWB stays on UART. **SEN0140** IMU stays on I2C.
 
 **Logic level:** 3.3 V only on all module I/O.
 
 ---
 
-## Pin summary (firmware defaults)
+## Choosing a board at build time
+
+**Recommended** — helper script sets `SDKCONFIG_DEFAULTS` and runs `idf.py`:
+
+```bash
+# First time (or after switching boards — delete sdkconfig first):
+rm -f sdkconfig
+./scripts/idf-s3.sh devkit-mini set-target esp32s3
+./scripts/idf-s3.sh devkit-mini build flash monitor
+
+# Waveshare ESP32-S3-Zero:
+rm -f sdkconfig
+./scripts/idf-s3.sh waveshare-zero set-target esp32s3
+./scripts/idf-s3.sh waveshare-zero build flash monitor
+```
+
+**Alternative** — `idf.py menuconfig` → **Component config → RegattaOne — ESP32-S3 board**, then adjust pins under the other RegattaOne menus.
+
+When switching boards, delete **`sdkconfig`** (or run `idf.py fullclean`) so stale GPIO values are not kept.
+
+---
+
+## Pin summary — DevKit Mini (default)
 
 | Function | Signal | SoC GPIO | Header (typical) | Notes |
 | -------- | ------ | -------- | ---------------- | ----- |
@@ -21,11 +50,34 @@ This document describes the **ESP32-S3 Mini** (WEMOS/LOLIN-style module on **ESP
 | | BUSY | **6** | IO6 | Required for SX1262 |
 | **GPS UART** | ESP TX → GPS RX | **4** | IO4 | UART2 |
 | | ESP RX ← GPS TX | **5** | IO5 | NMEA 0183 |
-| **GPS PPS** | 1 Hz pulse in | **21** | IO21 | Optional; set `GPS_PPS_GPIO=-1` if unwired |
+| **GPS PPS** | 1 Hz pulse in | **21** | IO21 | Optional; `-1` if unwired |
 | **UWB UART** | ESP TX → module RX | **17** | IO17 | UART1, RYUW122 |
 | | ESP RX ← module TX | **18** | IO18 | |
 
-All values are set in **`idf.py menuconfig`** → **Component config → RegattaOne**.
+---
+
+## Pin summary — Waveshare ESP32-S3-Zero
+
+Right-edge **GP12–GP14 / GP9–GP7 / GP10–GP11** match the DevKit Mini LoRa + IMU cluster. Left-edge **GP4 / GP5** suit GPS UART. **GP17 / GP18** are bottom pads for UWB.
+
+| Function | Signal | SoC GPIO | Zero label | Notes |
+| -------- | ------ | -------- | ---------- | ----- |
+| **IMU I2C** | SDA | **10** | GP10 | Right edge |
+| | SCL | **11** | GP11 | |
+| **LoRa SPI** | MOSI | **13** | GP13 | Same as DevKit Mini |
+| | MISO | **14** | GP14 | |
+| | SCLK | **12** | GP12 | SPI2 / FSPI |
+| | CS | **9** | GP9 | |
+| | RESET | **8** | GP8 | |
+| | DIO1 | **7** | GP7 | |
+| | BUSY | **6** | GP6 | |
+| **GPS UART** | ESP TX → GPS RX | **4** | GP4 | Left edge |
+| | ESP RX ← GPS TX | **5** | GP5 | UART2 |
+| **GPS PPS** | 1 Hz pulse in | **16** | GP16 | **Not GP21** — onboard WS2812 RGB |
+| **UWB UART** | ESP TX → module RX | **17** | GP17 | Bottom pad |
+| | ESP RX ← module TX | **18** | GP18 | Bottom pad |
+
+**Zero-specific:** **GP21** drives the onboard **WS2812** LED — do not use for PPS or peripherals. **GP45** is a strapping pin (bottom pad). **TX/RX** silkscreen pins are UART0 / USB-serial — leave for console.
 
 ---
 
@@ -90,23 +142,28 @@ Same as [WIRING-SEN0140.md](WIRING-SEN0140.md) — **GPIO10 SDA**, **GPIO11 SCL*
 
 ---
 
-## GPIOs to avoid on ESP32-S3 Mini
+## GPIOs to avoid on ESP32-S3
 
 | GPIO | Reason |
 | ---- | ------ |
 | **19, 20** | USB D− / D+ (native USB) |
 | **26–32** | In-package flash / PSRAM (do not use as GPIO) |
-| **0, 3, 45, 46** | Strapping — avoid if possible |
-| **43, 44** | USB Serial/JTAG (console) |
+| **0, 3, 45, 46** | Strapping — avoid if possible (GP45 exposed on Zero bottom) |
+| **43, 44** | USB Serial/JTAG (console; Zero **TX/RX** header) |
+| **21** | Waveshare Zero onboard **WS2812** — use GP16 for GPS PPS instead |
 
 ---
 
 ## Build
 
 ```bash
-idf.py set-target esp32s3
-idf.py build
-idf.py -p PORT flash monitor
+# DevKit Mini (ESP32-S3-MINI-1 carrier):
+./scripts/idf-s3.sh devkit-mini set-target esp32s3
+./scripts/idf-s3.sh devkit-mini build flash monitor
+
+# Waveshare ESP32-S3-Zero:
+./scripts/idf-s3.sh waveshare-zero set-target esp32s3
+./scripts/idf-s3.sh waveshare-zero build flash monitor
 ```
 
 After changing pins, run **`idf.py menuconfig`** → **RegattaOne** and rebuild.
