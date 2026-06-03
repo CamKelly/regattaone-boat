@@ -1,10 +1,28 @@
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
+  applyNmeaLine,
+  defaultGpsFix,
+  estimateHorizontalAccuracyM,
+  fixQualityLabel,
+  fixTypeLabel,
+  formatAccuracyM,
+  formatAltitudeM,
+  formatCoordDeg,
+  formatCourseDeg,
+  formatDop,
+  formatSpeedKnots,
+  formatUtc,
+  openStreetMapEmbedUrl,
+  openStreetMapUrl,
+  type GpsFix,
+} from "./lib/nmea-parse";
+import {
   BLE_BOAT_ID_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
+  BLE_GPS_LINE_CHAR_UUID,
   BLE_IMU_CHAR_UUID,
-  BLE_NOTECARD_REQ_CHAR_UUID,
-  BLE_NOTECARD_RSP_CHAR_UUID,
+  BLE_LORA_LINE_CHAR_UUID,
+  BLE_LORA_TX_CHAR_UUID,
   BLE_SERVICE_UUID,
   BLE_UWB_AT_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
@@ -16,7 +34,7 @@ import {
 } from "./lib/protocol";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-05-25e";
+const WEB_BLE_REV = "2026-06-02b";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -39,8 +57,9 @@ interface BleBoatSession {
   gatt: BluetoothRemoteGATTServer;
   name: string;
   charImu: BluetoothRemoteGATTCharacteristic | null;
-  charNotecardReq: BluetoothRemoteGATTCharacteristic | null;
-  charNotecardRsp: BluetoothRemoteGATTCharacteristic | null;
+  charLoraTx: BluetoothRemoteGATTCharacteristic | null;
+  charLoraLine: BluetoothRemoteGATTCharacteristic | null;
+  charGpsLine: BluetoothRemoteGATTCharacteristic | null;
   charUwbLine: BluetoothRemoteGATTCharacteristic | null;
   charUwbAt: BluetoothRemoteGATTCharacteristic | null;
   charBoatId: BluetoothRemoteGATTCharacteristic | null;
@@ -49,28 +68,28 @@ interface BleBoatSession {
   boatIdDraft: string;
   deviceType: DeviceType;
   deviceTypeDraft: DeviceType;
-  /** Completed Notecard log (requests + responses). */
-  notecardLogText: string;
-  /** In-flight response bytes for the current request. */
-  notecardRspAcc: number[];
+  loraLineLogText: string;
+  gpsFix: GpsFix;
+  gpsMapLat: number | null;
+  gpsMapLon: number | null;
   uwbLineLogText: string;
-  notecardJsonDraft: string;
+  loraTxDraft: string;
   uwbAtDraft: string;
   lastImuWallMs: number;
   imu: ImuDisplay;
   notificationsOn: boolean;
   imuNotificationsOn: boolean;
-  /** Incremented per UWB/Notecard request to ignore stale notify/read data. */
+  /** Incremented per UWB request to ignore stale notify/read data. */
   commsGen: number;
-  activeNotecardGen: number;
   activeUwbGen: number;
-  notecardBusy: boolean;
+  loraBusy: boolean;
   uwbBusy: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
   gattChain: Promise<void>;
   onImuNotify: (ev: Event) => void;
-  onNotecardRspNotify: (ev: Event) => void;
+  onLoraLineNotify: (ev: Event) => void;
+  onGpsLineNotify: (ev: Event) => void;
   onUwbLineNotify: (ev: Event) => void;
   onDisconnected: () => void;
 }
@@ -308,11 +327,11 @@ function updateBleToolbar(note?: string): void {
   if (!active.charUwbAt) {
     missing.push("UWB");
   }
-  if (!active.charNotecardReq) {
-    missing.push("Notecard");
+  if (!active.charLoraTx) {
+    missing.push("LoRa");
   }
-  if (active.charNotecardReq && !active.notificationsOn) {
-    missing.push("Notecard notify off");
+  if (!active.charGpsLine) {
+    missing.push("GPS");
   }
   if (missing.length > 0) {
     setBleToolbar(`BLE: ${name}${multi} — ${missing.join(", ")} unavailable`);
@@ -330,17 +349,21 @@ function setText(id: string, text: string): void {
 
 function syncActionButtons(): void {
   const session = getActiveSession();
-  const ncSend = document.querySelector<HTMLButtonElement>("#notecard-send");
+  const loraSend = document.querySelector<HTMLButtonElement>("#lora-tx-send");
   const uwbSend = document.querySelector<HTMLButtonElement>("#uwb-at-send");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  if (ncSend) {
-    ncSend.disabled = false;
+  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
+  if (loraSend) {
+    loraSend.disabled = false;
   }
   if (uwbSend) {
     uwbSend.disabled = false;
   }
   if (uwbInput) {
     uwbInput.disabled = false;
+  }
+  if (loraInput) {
+    loraInput.disabled = false;
   }
   syncBoatIdUi(session);
   syncDeviceTypeUi(session);
@@ -365,7 +388,8 @@ async function runGattOp<T>(session: BleBoatSession, op: () => Promise<T>): Prom
 
 function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charImu?.removeEventListener("characteristicvaluechanged", session.onImuNotify);
-  session.charNotecardRsp?.removeEventListener("characteristicvaluechanged", session.onNotecardRspNotify);
+  session.charLoraLine?.removeEventListener("characteristicvaluechanged", session.onLoraLineNotify);
+  session.charGpsLine?.removeEventListener("characteristicvaluechanged", session.onGpsLineNotify);
   session.charUwbLine?.removeEventListener("characteristicvaluechanged", session.onUwbLineNotify);
 }
 
@@ -373,8 +397,9 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   await setSessionNotifications(session, false);
   detachCharacteristicListeners(session);
   session.charImu = null;
-  session.charNotecardReq = null;
-  session.charNotecardRsp = null;
+  session.charLoraTx = null;
+  session.charLoraLine = null;
+  session.charGpsLine = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
   session.charBoatId = null;
@@ -402,15 +427,21 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     console.warn("BLE UWB RX unavailable", session.name, e);
   }
   try {
-    session.charNotecardReq = await svc.getCharacteristic(BLE_NOTECARD_REQ_CHAR_UUID);
+    session.charLoraTx = await svc.getCharacteristic(BLE_LORA_TX_CHAR_UUID);
   } catch (e) {
-    console.warn("BLE Notecard req unavailable", session.name, e);
+    console.warn("BLE LoRa TX unavailable", session.name, e);
   }
   try {
-    session.charNotecardRsp = await svc.getCharacteristic(BLE_NOTECARD_RSP_CHAR_UUID);
-    session.charNotecardRsp.addEventListener("characteristicvaluechanged", session.onNotecardRspNotify);
+    session.charLoraLine = await svc.getCharacteristic(BLE_LORA_LINE_CHAR_UUID);
+    session.charLoraLine.addEventListener("characteristicvaluechanged", session.onLoraLineNotify);
   } catch (e) {
-    console.warn("BLE Notecard rsp unavailable", session.name, e);
+    console.warn("BLE LoRa RX unavailable", session.name, e);
+  }
+  try {
+    session.charGpsLine = await svc.getCharacteristic(BLE_GPS_LINE_CHAR_UUID);
+    session.charGpsLine.addEventListener("characteristicvaluechanged", session.onGpsLineNotify);
+  } catch (e) {
+    console.warn("BLE GPS NMEA unavailable", session.name, e);
   }
   try {
     session.charBoatId = await svc.getCharacteristic(BLE_BOAT_ID_CHAR_UUID);
@@ -426,8 +457,8 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   }
 }
 
-async function ensureNotecardComms(session: BleBoatSession): Promise<void> {
-  if (!session.charNotecardReq || !session.charNotecardRsp) {
+async function ensureLoraComms(session: BleBoatSession): Promise<void> {
+  if (!session.charLoraTx || !session.charLoraLine) {
     await bindSessionCharacteristics(session);
   }
   await setCommsNotifications(session, true);
@@ -454,46 +485,157 @@ async function restoreImuAfterComms(session: BleBoatSession, wasOn: boolean): Pr
   }
 }
 
-function appendNotecardRspBytes(session: BleBoatSession, bytes: Uint8Array, gen: number): void {
-  if (gen !== session.activeNotecardGen || bytes.length === 0) {
+function ingestGpsNmea(session: BleBoatSession, chunk: string): void {
+  const trimmed = chunk.trim();
+  if (trimmed.length === 0) {
     return;
   }
-  const incoming = new TextDecoder().decode(bytes);
-  if (incoming.length === 0) {
-    return;
-  }
-  const current =
-    session.notecardRspAcc.length > 0
-      ? new TextDecoder().decode(new Uint8Array(session.notecardRspAcc))
-      : "";
-  if (incoming === current) {
-    return;
-  }
-  for (let i = 0; i < bytes.length; i++) {
-    session.notecardRspAcc.push(bytes[i]!);
-  }
-  renderNotecardRsp(session);
+  applyNmeaLine(session.gpsFix, trimmed);
+  renderGpsDisplay(session);
 }
 
-function setNotecardRspText(session: BleBoatSession, text: string, gen: number): void {
-  if (gen !== session.activeNotecardGen) {
+function renderGpsDisplay(session: BleBoatSession): void {
+  if (session.deviceId !== activeSessionId) {
     return;
   }
-  if (text.length === 0) {
+  const fix = session.gpsFix;
+  const acc = estimateHorizontalAccuracyM(fix.hdop);
+
+  if (fix.updatedAtMs === 0) {
+    setText("gps-meta", "Waiting for NMEA sentences…");
+  } else if (fix.fixValid && fix.lat !== null && fix.lon !== null) {
+    setText("gps-meta", `Fix OK · last ${fix.lastSentence ?? "?"} · updated ${Math.max(0, Math.round(performance.now() - fix.updatedAtMs))} ms ago`);
+  } else {
+    setText("gps-meta", `No valid fix · last ${fix.lastSentence ?? "?"} · ${fixQualityLabel(fix.fixQuality)}`);
+  }
+
+  if (fix.lat !== null && fix.lon !== null) {
+    setText(
+      "gps-position",
+      `${formatCoordDeg(fix.lat, true)}\n${formatCoordDeg(fix.lon, false)}`,
+    );
+  } else {
+    setText("gps-position", "—");
+  }
+
+  const fixParts = [fixQualityLabel(fix.fixQuality)];
+  if (fix.fixType !== null) {
+    fixParts.push(fixTypeLabel(fix.fixType));
+  }
+  if (fix.fixMode) {
+    fixParts.push(fix.fixMode === "A" ? "auto" : fix.fixMode === "M" ? "manual" : fix.fixMode);
+  }
+  setText("gps-fix", fix.fixValid ? fixParts.join(" · ") : `No fix · ${fixParts.join(" · ")}`);
+  setText("gps-accuracy", formatAccuracyM(acc));
+  setText("gps-sog", formatSpeedKnots(fix.sogKnots));
+  setText("gps-cog", formatCourseDeg(fix.cogDeg));
+  setText("gps-altitude", formatAltitudeM(fix.altitudeM, fix.geoidSepM));
+  setText(
+    "gps-sats",
+    fix.satsUsed !== null || fix.satsInView !== null
+      ? `${fix.satsUsed ?? "—"} used · ${fix.satsInView ?? "—"} in view`
+      : "—",
+  );
+  setText(
+    "gps-dop",
+    `${formatDop(fix.hdop)} / ${formatDop(fix.vdop)} / ${formatDop(fix.pdop)}`,
+  );
+  setText("gps-utc", formatUtc(fix.utcTime, fix.utcDate));
+  setText(
+    "gps-magvar",
+    fix.magneticVariationDeg !== null ? `${fix.magneticVariationDeg.toFixed(1)}°` : "—",
+  );
+
+  updateGpsMap(session, fix);
+}
+
+function updateGpsMap(session: BleBoatSession, fix: GpsFix): void {
+  const iframe = document.querySelector<HTMLIFrameElement>("#gps-map");
+  const hint = document.querySelector<HTMLElement>("#gps-map-hint");
+  const link = document.querySelector<HTMLAnchorElement>("#gps-map-link");
+  if (!iframe || !hint || !link) {
     return;
   }
-  const current =
-    session.notecardRspAcc.length > 0
-      ? new TextDecoder().decode(new Uint8Array(session.notecardRspAcc))
-      : "";
-  if (current.length === 0) {
-    session.notecardRspAcc = Array.from(new TextEncoder().encode(text));
-  } else if (!current.includes(text) && !text.includes(current)) {
-    session.notecardRspAcc.push(...Array.from(new TextEncoder().encode(text)));
-  } else if (text.length > current.length) {
-    session.notecardRspAcc = Array.from(new TextEncoder().encode(text));
+
+  if (!fix.fixValid || fix.lat === null || fix.lon === null) {
+    iframe.removeAttribute("src");
+    hint.hidden = false;
+    link.hidden = true;
+    session.gpsMapLat = null;
+    session.gpsMapLon = null;
+    return;
   }
-  renderNotecardRsp(session);
+
+  const lat = fix.lat;
+  const lon = fix.lon;
+  const moved =
+    session.gpsMapLat === null ||
+    session.gpsMapLon === null ||
+    Math.abs(lat - session.gpsMapLat) > 1e-5 ||
+    Math.abs(lon - session.gpsMapLon) > 1e-5;
+
+  if (moved) {
+    iframe.src = openStreetMapEmbedUrl(lat, lon);
+    link.href = openStreetMapUrl(lat, lon);
+    link.hidden = false;
+    hint.hidden = true;
+    session.gpsMapLat = lat;
+    session.gpsMapLon = lon;
+  }
+}
+
+function clearGpsDisplay(session: BleBoatSession | null): void {
+  if (session) {
+    session.gpsFix = defaultGpsFix();
+    session.gpsMapLat = null;
+    session.gpsMapLon = null;
+  }
+  const iframe = document.querySelector<HTMLIFrameElement>("#gps-map");
+  const hint = document.querySelector<HTMLElement>("#gps-map-hint");
+  const link = document.querySelector<HTMLAnchorElement>("#gps-map-link");
+  if (iframe) {
+    iframe.removeAttribute("src");
+  }
+  if (hint) {
+    hint.hidden = false;
+  }
+  if (link) {
+    link.hidden = true;
+    link.href = "#";
+  }
+  setText("gps-meta", "Waiting for NMEA fix…");
+  for (const id of [
+    "gps-position",
+    "gps-fix",
+    "gps-accuracy",
+    "gps-sog",
+    "gps-cog",
+    "gps-altitude",
+    "gps-sats",
+    "gps-dop",
+    "gps-utc",
+    "gps-magvar",
+  ]) {
+    setText(id, "—");
+  }
+}
+
+function appendStreamLine(session: BleBoatSession, field: "loraLineLogText", chunk: string): void {
+  if (chunk.length === 0) {
+    return;
+  }
+  const line = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
+  const current = session[field];
+  if (current.endsWith(line)) {
+    return;
+  }
+  session[field] += line;
+  if (session[field].length > 64000) {
+    session[field] = session[field].slice(-48000);
+  }
+  if (field === "loraLineLogText") {
+    renderLoraLog(session);
+  }
 }
 
 function appendUwbLineIfNew(session: BleBoatSession, chunk: string, gen: number): void {
@@ -505,33 +647,6 @@ function appendUwbLineIfNew(session: BleBoatSession, chunk: string, gen: number)
     return;
   }
   appendUwbLog(session, line);
-}
-
-async function pollNotecardResponse(session: BleBoatSession, gen: number, timeoutMs: number): Promise<void> {
-  const deadline = performance.now() + timeoutMs;
-  let readFallbackUsed = false;
-  while (performance.now() < deadline) {
-    if (gen !== session.activeNotecardGen) {
-      return;
-    }
-    if (session.notecardRspAcc.length > 0) {
-      return;
-    }
-    if (!readFallbackUsed && session.charNotecardRsp && session.gatt.connected) {
-      try {
-        const val = await runGattOp(session, () => session.charNotecardRsp!.readValue());
-        if (val.byteLength > 0) {
-          const text = new TextDecoder().decode(val);
-          setNotecardRspText(session, text, gen);
-          readFallbackUsed = true;
-          return;
-        }
-      } catch {
-        /* read fallback optional */
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
 }
 
 async function activateSession(session: BleBoatSession): Promise<boolean> {
@@ -570,8 +685,9 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   await setSessionNotifications(session, false);
   detachCharacteristicListeners(session);
   session.charImu = null;
-  session.charNotecardReq = null;
-  session.charNotecardRsp = null;
+  session.charLoraTx = null;
+  session.charLoraLine = null;
+  session.charGpsLine = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
   session.charBoatId = null;
@@ -662,8 +778,11 @@ async function setCommsNotifications(session: BleBoatSession, enabled: boolean):
   if (session.charUwbLine) {
     ops.push(enabled ? session.charUwbLine.startNotifications() : session.charUwbLine.stopNotifications());
   }
-  if (session.charNotecardRsp) {
-    ops.push(enabled ? session.charNotecardRsp.startNotifications() : session.charNotecardRsp.stopNotifications());
+  if (session.charLoraLine) {
+    ops.push(enabled ? session.charLoraLine.startNotifications() : session.charLoraLine.stopNotifications());
+  }
+  if (session.charGpsLine) {
+    ops.push(enabled ? session.charGpsLine.startNotifications() : session.charGpsLine.stopNotifications());
   }
   const results = await Promise.allSettled(ops);
   const failed = results.some((r) => r.status === "rejected");
@@ -683,11 +802,11 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
   }
 }
 
-type GattWriteTarget = "notecard" | "uwb" | "boatid" | "type";
+type GattWriteTarget = "lora" | "uwb" | "boatid" | "type";
 
 function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BluetoothRemoteGATTCharacteristic | null {
-  if (target === "notecard") {
-    return session.charNotecardReq;
+  if (target === "lora") {
+    return session.charLoraTx;
   }
   if (target === "uwb") {
     return session.charUwbAt;
@@ -709,58 +828,30 @@ async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data:
   await runGattOp(session, () => char.writeValue(data));
 }
 
-function notecardInFlightText(session: BleBoatSession): string {
-  if (session.notecardRspAcc.length === 0) {
-    return "";
-  }
-  return new TextDecoder().decode(new Uint8Array(session.notecardRspAcc));
-}
-
-function notecardDisplayText(session: BleBoatSession): string {
-  return session.notecardLogText + notecardInFlightText(session);
-}
-
-function appendNotecardLog(session: BleBoatSession, chunk: string): void {
-  if (chunk.length === 0) {
-    return;
-  }
-  session.notecardLogText += chunk;
-  if (session.notecardLogText.length > 64000) {
-    session.notecardLogText = session.notecardLogText.slice(-48000);
-  }
-  renderNotecardRsp(session);
-}
-
-function commitNotecardInFlightResponse(session: BleBoatSession): void {
-  const rsp = notecardInFlightText(session);
-  if (rsp.length === 0) {
-    return;
-  }
-  session.notecardRspAcc.length = 0;
-  appendNotecardLog(session, rsp.endsWith("\n") ? rsp : `${rsp}\n`);
-}
-
-function renderNotecardRsp(session: BleBoatSession): void {
-  if (session.deviceId !== activeSessionId) {
-    return;
-  }
-  const el = document.querySelector("#notecard-rsp-log");
-  if (!el) {
-    return;
-  }
-  el.textContent = notecardDisplayText(session);
-  el.scrollTop = el.scrollHeight;
-}
-
-function clearNotecardLog(session: BleBoatSession | null): void {
+function clearLoraLog(session: BleBoatSession | null): void {
   if (session) {
-    session.notecardLogText = "";
-    session.notecardRspAcc.length = 0;
+    session.loraLineLogText = "";
   }
-  const el = document.querySelector("#notecard-rsp-log");
+  const el = document.querySelector("#lora-line-log");
   if (el) {
     el.textContent = "";
   }
+}
+
+function renderLoraLog(session: BleBoatSession): void {
+  if (session.deviceId !== activeSessionId) {
+    return;
+  }
+  const el = document.querySelector("#lora-line-log");
+  if (!el) {
+    return;
+  }
+  el.textContent = session.loraLineLogText;
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendLoraLog(session: BleBoatSession, chunk: string): void {
+  appendStreamLine(session, "loraLineLogText", chunk);
 }
 
 function clearUwbLog(session: BleBoatSession | null): void {
@@ -806,9 +897,9 @@ function renderImuDisplay(session: BleBoatSession): void {
 }
 
 function saveUiToSession(session: BleBoatSession): void {
-  const ncTa = document.querySelector<HTMLTextAreaElement>("#notecard-json");
+  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  session.notecardJsonDraft = ncTa?.value ?? "";
+  session.loraTxDraft = loraInput?.value ?? "";
   session.uwbAtDraft = uwbInput?.value ?? "";
   const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
   session.boatIdDraft = boatIdInput?.value ?? session.boatIdDraft;
@@ -820,16 +911,17 @@ function saveUiToSession(session: BleBoatSession): void {
 }
 
 function loadSessionToUi(session: BleBoatSession): void {
-  const ncTa = document.querySelector<HTMLTextAreaElement>("#notecard-json");
+  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  if (ncTa) {
-    ncTa.value = session.notecardJsonDraft;
+  if (loraInput) {
+    loraInput.value = session.loraTxDraft;
   }
   if (uwbInput) {
     uwbInput.value = session.uwbAtDraft;
   }
   renderImuDisplay(session);
-  renderNotecardRsp(session);
+  renderLoraLog(session);
+  renderGpsDisplay(session);
   renderUwbLog(session);
   updateBleToolbar();
   syncActionButtons();
@@ -843,22 +935,23 @@ function clearUiPanels(): void {
   setText("imu-temp", imu.temp);
   setText("imu-baro", imu.baro);
   setText("imu-meta", imu.meta);
-  const ncTa = document.querySelector<HTMLTextAreaElement>("#notecard-json");
+  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  if (ncTa) {
-    ncTa.value = "";
+  if (loraInput) {
+    loraInput.value = "";
   }
   if (uwbInput) {
     uwbInput.value = "";
   }
-  const ncRsp = document.querySelector("#notecard-rsp-log");
+  const loraLog = document.querySelector("#lora-line-log");
   const uwbLog = document.querySelector("#uwb-line-log");
-  if (ncRsp) {
-    ncRsp.textContent = "";
+  if (loraLog) {
+    loraLog.textContent = "";
   }
   if (uwbLog) {
     uwbLog.textContent = "";
   }
+  clearGpsDisplay(null);
 }
 
 function sessionLabel(session: BleBoatSession): string {
@@ -954,14 +1047,24 @@ function createNotifyHandlers(session: BleBoatSession): void {
     renderImuDisplay(session);
   };
 
-  session.onNotecardRspNotify = (ev: Event) => {
+  session.onLoraLineNotify = (ev: Event) => {
     const ch = ev.target as BluetoothRemoteGATTCharacteristic;
     const v = ch.value;
-    if (!v || session.activeNotecardGen === 0) {
+    if (!v || v.byteLength === 0) {
       return;
     }
-    const u8 = new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
-    appendNotecardRspBytes(session, u8, session.activeNotecardGen);
+    const chunk = new TextDecoder().decode(v);
+    appendStreamLine(session, "loraLineLogText", chunk);
+  };
+
+  session.onGpsLineNotify = (ev: Event) => {
+    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
+    const v = ch.value;
+    if (!v || v.byteLength === 0) {
+      return;
+    }
+    const chunk = new TextDecoder().decode(v);
+    ingestGpsNmea(session, chunk);
   };
 
   session.onUwbLineNotify = (ev: Event) => {
@@ -1014,71 +1117,41 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
   updateBleToolbar();
 }
 
-async function sendNotecardRequest(): Promise<void> {
+async function sendLoraTx(): Promise<void> {
   const session = getActiveSession();
-  if (!session?.charNotecardReq) {
-    const el = document.querySelector("#notecard-rsp-log");
+  if (!session?.charLoraTx) {
+    const el = document.querySelector("#lora-line-log");
     if (el) {
       el.textContent =
-        "Notecard characteristic 0xFEF7 unavailable.\n" +
-        "Flash firmware with CONFIG_REGATTAONE_NOTECARD_ENABLE=y and reconnect.";
+        "LoRa TX characteristic 0xFEF7 unavailable.\n" +
+        "Flash firmware with CONFIG_REGATTAONE_SX1262_ENABLE=y and reconnect.";
     }
     return;
   }
-  if (session.notecardBusy) {
+  if (session.loraBusy) {
     return;
   }
-  const ta = document.querySelector<HTMLTextAreaElement>("#notecard-json");
-  const body = (ta?.value ?? "").trim();
-  if (!body) {
+  const input = document.querySelector<HTMLInputElement>("#lora-tx-input");
+  const payload = (input?.value ?? "").trim();
+  if (!payload) {
     return;
   }
-  try {
-    JSON.parse(body);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    appendNotecardLog(
-      session,
-      `! Invalid JSON: ${msg}\n` + `  Example: {"req":"hub.status"}\n`,
-    );
-    return;
-  }
-  const line = body.endsWith("\n") ? body : `${body}\n`;
-  session.notecardBusy = true;
-  session.notecardJsonDraft = ta?.value ?? "";
-  session.notecardRspAcc.length = 0;
-  const gen = ++session.commsGen;
-  session.activeNotecardGen = gen;
-  session.activeUwbGen = 0;
-  if (session.notecardLogText.length > 0 && !session.notecardLogText.endsWith("\n")) {
-    session.notecardLogText += "\n";
-  }
-  appendNotecardLog(session, `>> ${line}`);
+  session.loraBusy = true;
+  session.loraTxDraft = input?.value ?? "";
+  appendLoraLog(session, `>> ${payload}\n`);
   try {
     const imuWasOn = await pauseImuForComms(session);
     try {
-      await ensureNotecardComms(session);
-      await gattWrite(session, "notecard", new TextEncoder().encode(line));
-      await pollNotecardResponse(session, gen, 15000);
-      if (gen === session.activeNotecardGen && session.notecardRspAcc.length === 0) {
-        appendNotecardLog(
-          session,
-          "! No response after 15 s. Try {\"req\":\"hub.status\"} or reconnect.\n",
-        );
-      }
+      await ensureLoraComms(session);
+      await gattWrite(session, "lora", new TextEncoder().encode(payload));
     } finally {
       await restoreImuAfterComms(session, imuWasOn);
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    appendNotecardLog(session, `! Write error: ${msg}\n`);
+    appendLoraLog(session, `! Write error: ${msg}\n`);
   } finally {
-    session.notecardBusy = false;
-    if (gen === session.activeNotecardGen) {
-      commitNotecardInFlightResponse(session);
-      session.activeNotecardGen = 0;
-      renderNotecardRsp(session);
-    }
+    session.loraBusy = false;
     updateBleToolbar();
   }
 }
@@ -1108,7 +1181,6 @@ async function sendUwbAt(): Promise<void> {
   const baselineLen = session.uwbLineLogText.length;
   const gen = ++session.commsGen;
   session.activeUwbGen = gen;
-  session.activeNotecardGen = 0;
   try {
     const imuWasOn = await pauseImuForComms(session);
     try {
@@ -1152,8 +1224,9 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
     gatt,
     name: dev.name ?? "RegattaOne-Boat",
     charImu: null,
-    charNotecardReq: null,
-    charNotecardRsp: null,
+    charLoraTx: null,
+    charLoraLine: null,
+    charGpsLine: null,
     charUwbLine: null,
     charUwbAt: null,
     charBoatId: null,
@@ -1162,24 +1235,26 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
     boatIdDraft: "",
     deviceType: "boat",
     deviceTypeDraft: "boat",
-    notecardLogText: "",
-    notecardRspAcc: [],
+    loraLineLogText: "",
+    gpsFix: defaultGpsFix(),
+    gpsMapLat: null,
+    gpsMapLon: null,
     uwbLineLogText: "",
-    notecardJsonDraft: "",
+    loraTxDraft: "",
     uwbAtDraft: "",
     lastImuWallMs: 0,
     imu: defaultImuDisplay(),
     notificationsOn: false,
     imuNotificationsOn: false,
     commsGen: 0,
-    activeNotecardGen: 0,
     activeUwbGen: 0,
-    notecardBusy: false,
+    loraBusy: false,
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
-    onNotecardRspNotify: () => {},
+    onLoraLineNotify: () => {},
+    onGpsLineNotify: () => {},
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
@@ -1206,8 +1281,9 @@ async function connectBle(): Promise<void> {
       optionalServices: [
         BLE_SERVICE_UUID,
         BLE_IMU_CHAR_UUID,
-        BLE_NOTECARD_REQ_CHAR_UUID,
-        BLE_NOTECARD_RSP_CHAR_UUID,
+        BLE_LORA_TX_CHAR_UUID,
+        BLE_LORA_LINE_CHAR_UUID,
+        BLE_GPS_LINE_CHAR_UUID,
         BLE_UWB_LINE_CHAR_UUID,
         BLE_UWB_AT_CHAR_UUID,
         BLE_BOAT_ID_CHAR_UUID,
@@ -1280,8 +1356,8 @@ export function startRegattaApp(): void {
     if (!btn) {
       return;
     }
-    if (btn.id === "notecard-send") {
-      void sendNotecardRequest();
+    if (btn.id === "lora-tx-send") {
+      void sendLoraTx();
       return;
     }
     if (btn.id === "uwb-at-send") {
@@ -1292,8 +1368,8 @@ export function startRegattaApp(): void {
       clearUwbLog(getActiveSession());
       return;
     }
-    if (btn.id === "notecard-log-clear") {
-      clearNotecardLog(getActiveSession());
+    if (btn.id === "lora-log-clear") {
+      clearLoraLog(getActiveSession());
       return;
     }
     if (btn.id === "device-type-save") {
@@ -1311,6 +1387,10 @@ export function startRegattaApp(): void {
     const target = ev.target;
     if (target instanceof HTMLInputElement && target.id === "uwb-at-input") {
       void sendUwbAt();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.id === "lora-tx-input") {
+      void sendLoraTx();
     }
   });
   document.addEventListener("input", (ev) => {
@@ -1319,8 +1399,8 @@ export function startRegattaApp(): void {
       return;
     }
     const target = ev.target;
-    if (target instanceof HTMLTextAreaElement && target.id === "notecard-json") {
-      session.notecardJsonDraft = target.value;
+    if (target instanceof HTMLInputElement && target.id === "lora-tx-input") {
+      session.loraTxDraft = target.value;
       return;
     }
     if (target instanceof HTMLInputElement && target.id === "uwb-at-input") {

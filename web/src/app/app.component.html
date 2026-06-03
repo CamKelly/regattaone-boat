@@ -137,27 +137,93 @@
             <pre id="uwb-line-log" class="ble-log uwb-line-log" aria-live="polite"></pre>
           </nz-tab>
 
-          <nz-tab nzTitle="Notecard · 0xFEF7">
-            <p class="tab-hint">JSON request (newline-terminated). Response on <code>0xFEF8</code>.</p>
-            <textarea
-              nz-input
-              id="notecard-json"
-              rows="3"
-              spellcheck="false"
-              placeholder='{"req":"hub.status"}'
-            ></textarea>
-            <div class="notecard-actions">
-              <button nz-button nzType="primary" type="button" id="notecard-send">
-                Send to Notecard
-              </button>
+          <nz-tab nzTitle="LoRa · 0xFEF7">
+            <p class="tab-hint">
+              Send a UTF-8 payload over SX1262 (RadioLib). Received packets appear on <code>0xFEF8</code>.
+            </p>
+            <div nz-row [nzGutter]="8" class="uwb-input-row">
+              <div nz-col [nzFlex]="'auto'">
+                <input
+                  nz-input
+                  id="lora-tx-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="Hello LoRa"
+                />
+              </div>
+              <div nz-col [nzFlex]="'none'">
+                <button nz-button nzType="primary" type="button" id="lora-tx-send">Send</button>
+              </div>
             </div>
             <div class="log-header">
-              <label class="field-label" for="notecard-rsp-log">Response</label>
-              <button nz-button nzType="default" nzSize="small" type="button" id="notecard-log-clear">
+              <label class="field-label" for="lora-line-log">LoRa log</label>
+              <button nz-button nzType="default" nzSize="small" type="button" id="lora-log-clear">
                 Clear
               </button>
             </div>
-            <pre id="notecard-rsp-log" class="ble-log notecard-rsp-log" aria-live="polite"></pre>
+            <pre id="lora-line-log" class="ble-log lora-line-log" aria-live="polite"></pre>
+          </nz-tab>
+
+          <nz-tab nzTitle="GPS · 0xFEFD">
+            <p id="gps-meta" class="tab-hint">Waiting for NMEA fix…</p>
+            <div class="gps-layout">
+              <div class="gps-map-wrap">
+                <iframe
+                  id="gps-map"
+                  class="gps-map"
+                  title="GPS position on OpenStreetMap"
+                  loading="lazy"
+                  referrerpolicy="no-referrer-when-downgrade"
+                ></iframe>
+                <p id="gps-map-hint" class="field-hint gps-map-hint">Map appears when latitude and longitude are valid.</p>
+                <a id="gps-map-link" class="gps-map-link" href="#" target="_blank" rel="noopener noreferrer" hidden>
+                  Open in OpenStreetMap
+                </a>
+              </div>
+              <div class="gps-grid" aria-live="polite">
+                <div class="gps-cell gps-cell--wide">
+                  <span class="gps-cell-label">Position</span>
+                  <span id="gps-position" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">Fix</span>
+                  <span id="gps-fix" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">Accuracy (est.)</span>
+                  <span id="gps-accuracy" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">Speed (SOG)</span>
+                  <span id="gps-sog" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">Course (COG)</span>
+                  <span id="gps-cog" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">Altitude</span>
+                  <span id="gps-altitude" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">Satellites</span>
+                  <span id="gps-sats" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">DOP (HDOP / VDOP / PDOP)</span>
+                  <span id="gps-dop" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">UTC time</span>
+                  <span id="gps-utc" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">Magnetic variation</span>
+                  <span id="gps-magvar" class="gps-cell-value">—</span>
+                </div>
+              </div>
+            </div>
           </nz-tab>
         </nz-tabset>
       </div>

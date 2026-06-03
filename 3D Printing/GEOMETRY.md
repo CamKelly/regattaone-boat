@@ -222,6 +222,103 @@ Use **47.46 mm** for opposing **transducer face** centers at the underside; use 
 
 ---
 
+## Acoustic path and bottom plate spacing
+
+North/South (and East/West) pairs use a **V-path**: transmit from one
+transducer face → specular reflection on the **top face** of
+`bottom.scad` → receive at the opposite face. Wind speed along that axis
+uses the **face-to-face path length** **L**, not the straight plate gap.
+
+### Measurable gap **G**
+
+**G** is the distance you can measure in assembly (calipers, standoffs,
+shims):
+
+| Reference | Surface |
+| --- | --- |
+| Top | Underside of top plate (**z = 0**) |
+| Bottom | Top face of bottom reflector plate (reflecting surface) |
+
+If you measure through the full stack to the **bottom** of the bottom
+plate, subtract plate thickness: **G = stack − `LID_LENGTH`**.
+
+The transducer **faces** sit below the top underside at
+**z_face = −r·sin(α) ≈ −3.381 mm**; **G** is plate-to-plate, not
+face-to-face.
+
+### Symbols
+
+| Symbol | Meaning | Value |
+| --- | --- | --- |
+| **M** | Pivot offset from center (±20 on Y or X) | 20 mm |
+| **p** | \|`MOUNT_BASE_Z`\| | 5 mm |
+| **r** | `TRANSDUCER_BODY_RADIUS` | 8 mm |
+| **α** | `ULTRASONIC_ANGLE` | 25° |
+| **F** | `FACE_CENTER_S` = (p − r·sin α) / cos α | ≈ 1.786 mm |
+
+Face centers on the bore axis (North/South example):
+
+```text
+y_N = −M − F·sin(α) ≈ −20.755 mm
+y_S = +M + F·sin(α) ≈ +20.755 mm
+z_face = −r·sin(α) ≈ −3.381 mm
+Δy = y_S − y_N = 2M + 2F·sin(α) ≈ 41.51 mm
+```
+
+Emission from each face is along the bore axis, **downward and toward
+center**: North **(0, +sin α, −cos α)**, South **(0, −sin α, −cos α)**.
+
+### Required gap (ray closure)
+
+For the reflected pulse to hit the opposite transducer, **G** is fixed
+by sleeve geometry (not a free parameter):
+
+```text
+G = p + M·cot(α)
+  = 5 + 20·cot(25°)
+  ≈ 47.88 mm
+```
+
+Small misalignment is tolerated by the ~16 mm face aperture; large
+errors miss the receiver.
+
+### Face-to-face path length **L**
+
+When **G** is set correctly, the V-path is symmetric (equal down/up
+legs). **L** is North face center → reflector → South face center (same
+both directions at zero wind):
+
+```text
+L = 2·(G − r·sin(α)) / cos(α)
+  = Δy / sin(α)
+  = (2M + 2F·sin(α)) / sin(α)
+  ≈ 98.22 mm
+```
+
+Each leg ≈ **49.11 mm**. East/West use the same formulas with **M = 20**
+on **X**.
+
+### Assembly workflow
+
+1. Measure **G** (top underside → bottom reflector top).
+2. Target **G ≈ 47.88 mm** (standoffs/spacers as needed).
+3. Compute **L** from measured **G**, or use **L ≈ 98.22 mm** at nominal
+   **G**.
+4. Use **L** in delta–time-of-flight wind math along that axis.
+
+### Wind component (reference)
+
+Along North–South, with sound speed **c** and
+**Δt = t_N→S − t_S→N**:
+
+```text
+v_NS ≈ (L / (2·cos(α))) · (Δt / t₀) · c     (t₀ ≈ L / c, first order)
+```
+
+A 1 mm error in **L** is ~1% velocity error.
+
+---
+
 ## Bolt holes
 
 `bolt_holes(80, -30)` in `top.scad`; defined in `common.scad`.
@@ -242,6 +339,7 @@ Use **47.46 mm** for opposing **transducer face** centers at the underside; use 
 - [x] 16.2 mm body bore + 18.3 mm flange counterbore  
 - [x] Consistent geometry on all four channels  
 - [x] Repeatable acoustic spacing (**≈ 47.46 mm** opposing centers at underside)
+- [x] Bottom reflector gap **G ≈ 47.88 mm**; acoustic path **L ≈ 98.22 mm**
 
 ---
 
@@ -261,6 +359,8 @@ Use **47.46 mm** for opposing **transducer face** centers at the underside; use 
 | Face center Z | ≈ −3.38 mm |
 | Sleeve length | ≈ 12.29 mm |
 | Opposing center spacing (underside) | ≈ 47.46 mm |
+| Bottom reflector gap **G** (nominal) | ≈ 47.88 mm |
+| Acoustic path **L** (face to face, N↔S) | ≈ 98.22 mm |
 
 ---
 
@@ -269,16 +369,25 @@ Use **47.46 mm** for opposing **transducer face** centers at the underside; use 
 ```bash
 python3 -c "
 import math
-r, pz, lid = 8.0, -5, 3
+r, pz, lid, mount = 8.0, -5, 3, 20
 a = math.radians(25)
-fcz = -r * math.sin(a)
-fcs = (fcz - pz) / math.cos(a)
+s, c = math.sin(a), math.cos(a)
+p = -pz
+fcz = -r * s
+fcs = (fcz - pz) / c
+G = p + mount / math.tan(a)
+L = 2 * (G - r * s) / c
+dy = 2 * mount + 2 * fcs * s
 print('FACE_CENTER_Z', fcz)
 print('FACE_CENTER_S', fcs)
 print('FLANGE_SHOULDER_S', fcs + 7.7)
 print('FLANGE_TOP_S', fcs + 10.2)
 print('CYLINDER_LENGTH', fcs + 10.2 + 0.3)
 print('Spacing underside', 40 + 2 * (lid - pz) * math.tan(a))
+print('Face delta_y', dy)
+print('Bottom gap G', G)
+print('Acoustic path L', L)
+print('Leg length', L / 2)
 "
 ```
 
@@ -287,5 +396,6 @@ print('Spacing underside', 40 + 2 * (lid - pz) * math.tan(a))
 ## Related files
 
 - `top.scad` — lid, sleeves, body bore, flange counterbore  
+- `bottom.scad` — reflector plate (top face at gap **G** below top underside)  
 - `common.scad` — plate and bolt dimensions  
 - `README.md` — OpenSCAD workflow  

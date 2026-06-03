@@ -1,6 +1,6 @@
 # RegattaOne Boat
 
-ESP-IDF **firmware** for **ESP32-C3** or **ESP32-S3** that bridges **Blues Notecard for LoRa** (I2C), a **REYAX RYUW122_Lite** UWB module (UART), and **Chrome over Web Bluetooth** on the same NimBLE GATT service. An **Angular + Ionic** web app connects to the device, sends **Notecard JSON** requests, and shows **Notecard responses** and **UWB UART** lines.
+ESP-IDF **firmware** for **ESP32-S3 Mini** (primary) or **ESP32-C3** that bridges an **SX1262 LoRa** module (SPI / RadioLib), a **GPS** (NMEA 0183 UART + PPS), a **REYAX RYUW122_Lite** UWB module (UART), optional **SEN0140** IMU (I2C), and **Chrome over Web Bluetooth** on the same NimBLE GATT service. An **Angular + Ionic** web app connects to the device and shows **UWB UART** lines (Notecard JSON UI remains for legacy ESP32-C3 builds).
 
 BLE advertised name: **`RegattaOne-Boat`**.
 
@@ -10,12 +10,10 @@ BLE advertised name: **`RegattaOne-Boat`**.
 
 | Layer | Role |
 | ----- | ---- |
-| **Firmware** (`main/`) | NimBLE GATT **0xFEF0**; optional **SEN0140** IMU task (**0xFEF1**); **Blues Notecard** serial-over-I2C (**0xFEF7** write / **0xFEF8** notify); **RYUW122** UART lines → **0xFEF9** notify; optional **MSP430** paths (**default off** in menuconfig). |
-| **Web app** (`web/`) | **Web Bluetooth**: connect by service UUID, **Send to Notecard**, live **response** and **UWB** logs (no IMU / Three.js in the maintained UI). |
-| **Backend** (`backend/`) | Firebase Cloud Functions, Firestore rules, Notehub webhooks, device presence sync, and admin PWA (`backend/client/`). |
-| **Wiring** | See **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)** for Seeed **XIAO ESP32-C3** ↔ Notecarrier / Notecard ↔ RYUW122. |
-
-Hardware references: [Notecard for LoRa](https://shop.blues.com/products/notecard-lora), [Notecarrier B](https://shop.blues.com/products/carr-b), [RYUW122_Lite](https://reyax.com/products/RYUW122_Lite).
+| **Firmware** (`main/`) | NimBLE GATT **0xFEF0**; optional **SEN0140** IMU task (**0xFEF1**); **SX1262** LoRa SPI (RadioLib, menuconfig); **GPS** NMEA UART + PPS; **RYUW122** UART lines → **0xFEF9** notify; legacy **Blues Notecard** I2C (**0xFEF7** / **0xFEF8**, C3 only); optional **MSP430** paths (**default off** on S3). |
+| **Web app** (`web/`) | **Web Bluetooth**: connect by service UUID, live **UWB** logs (Notecard tab for legacy C3). |
+| **Backend** (`backend/`) | Firebase Cloud Functions, Firestore rules, Notehub webhooks (legacy Notecard), device presence sync, and admin PWA (`backend/client/`). |
+| **Wiring** | **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** — ESP32-S3 Mini ↔ SX1262 ↔ GPS ↔ RYUW122 ↔ SEN0140. C3 + Notecard: **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)**. |
 
 ---
 
@@ -40,16 +38,16 @@ Hardware references: [Notecard for LoRa](https://shop.blues.com/products/notecar
 From the **repository root**:
 
 ```bash
-# Pick chip (examples)
-idf.py set-target esp32c3
-# or: idf.py set-target esp32s3
+# Pick chip (ESP32-S3 Mini is the current target)
+idf.py set-target esp32s3
+# or: idf.py set-target esp32c3
 
 idf.py build
 idf.py -p PORT flash monitor
 ```
 
-- **`sdkconfig.defaults`** — shared NimBLE / BT options. Target-specific extras: **`sdkconfig.defaults.esp32c3`**, **`sdkconfig.defaults.esp32s3`** (merge via `idf.py set-target` / your `sdkconfig`).
-- **Pins:** **Component config → RegattaOne** in `idf.py menuconfig` — SEN0140 I2C, Notecard (standalone or shared bus), RYUW122 UART, MSP430 (if enabled).
+- **`components/RadioLib/`** — vendored [RadioLib](https://github.com/jgromes/RadioLib) v7.6.0 (ESP-IDF discovers it automatically; no component manager needed).
+- **Pins:** **Component config → RegattaOne** in `idf.py menuconfig` — SEN0140 I2C, SX1262 SPI, GPS UART/PPS, RYUW122 UART, legacy Notecard (C3), MSP430 (if enabled).
 
 After changing target: if CMake complains, run **`idf.py fullclean`** once, then **`idf.py set-target …`** and **`idf.py build`** again.
 
@@ -57,9 +55,10 @@ After changing target: if CMake complains, run **`idf.py fullclean`** once, then
 
 | Path | Purpose |
 | ---- | ------- |
-| `main/regattaone-laser.c` | `app_main`: NVS, I2C mux, SEN0140 (optional), BLE, Notecard, RYUW122 UART task, MSP430 (optional). |
+| `main/regattaone-laser.c` | `app_main`: NVS, I2C mux, SEN0140 (optional), BLE, SX1262 LoRa, RYUW122 UART task, MSP430 (optional). |
 | `main/ble_sen0140.c` / `.h` | NimBLE service **0xFEF0** and characteristics **0xFEF1–0xFEF9** (see table below). |
-| `main/blues_notecard.c` / `.h` | Blues **serial-over-I2C** to Notecard (default address **0x17**). |
+| `main/sx1262_lora.c` / `.cpp` / `.h` | SX1262 LoRa over SPI (RadioLib). |
+| `main/radiolib_esp_hal.hpp` | ESP-IDF SPI master HAL for RadioLib. |
 | `main/ryuw122_uart.c` / `.h` | UART listener → BLE **0xFEF9** notifies. |
 | `main/i2c_bus_mux.c` / `.h` | Mutex so SEN0140 and Notecard can share one I2C bus. |
 | `main/sen0140_10dof.c` / `.h` | Optional DFRobot SEN0140 IMU (legacy; disable by not wiring / init failure). |
@@ -168,7 +167,8 @@ regattaone-boat/
 │   ├── shared/                    # @regattaone/shared types
 │   └── docs/                      # Notehub + presence setup
 ├── web-vite-legacy/               # Old Vite client (reference)
-├── WIRING-ESP32C3-NOTECARD-UWB.md # Primary wiring guide
+├── WIRING-ESP32S3-LORA-GPS.md   # Primary wiring (ESP32-S3 Mini)
+├── WIRING-ESP32C3-NOTECARD-UWB.md # Legacy C3 + Notecard wiring
 ├── WIRING-SEN0140.md             # Optional IMU wiring
 └── .clangd                        # clangd: CompileFlags + build/compile_commands.json
 ```
@@ -197,7 +197,7 @@ regattaone-boat/
 ## Quick reference
 
 ```bash
-idf.py set-target esp32c3   # or esp32s3
+idf.py set-target esp32s3   # or esp32c3
 idf.py build
 idf.py -p /dev/tty.usbmodem* flash monitor
 

@@ -32,6 +32,9 @@
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
 #include "ryuw122_uart.h"
 #endif
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+#include "sx1262_lora.h"
+#endif
 #include "msp430_bsl_invoke.h"
 #include "msp430_fw_upload.h"
 #if CONFIG_REGATTAONE_MSP430_ENABLE
@@ -52,6 +55,9 @@ static const char *TAG = "ble_sen0140";
 /** Write: UTF-8 Notecard JSON request (must end with `\n`). Triggers I2C transaction; response on FEF8. */
 #define SEN0140_GATT_NOTECARD_REQ_UUID  0xfef7
 #define SEN0140_GATT_NOTECARD_RSP_UUID  0xfef8
+#define SEN0140_GATT_LORA_TX_UUID        0xfef7
+#define SEN0140_GATT_LORA_LINE_UUID      0xfef8
+#define SEN0140_GATT_GPS_LINE_UUID       0xfefd
 #define SEN0140_GATT_UWB_LINE_UUID      0xfef9
 /** Write: UTF-8 AT command (CRLF appended if missing); response lines on FEF9 notify. */
 #define SEN0140_GATT_UWB_AT_UUID        0xfefa
@@ -93,12 +99,16 @@ static uint16_t s_bsl_chr_val_handle;
 static uint16_t s_fw_chr_val_handle;
 static uint16_t s_prog_status_chr_val_handle;
 static uint16_t s_notecard_rsp_chr_val_handle;
+static uint16_t s_lora_line_chr_val_handle;
+static uint16_t s_gps_line_chr_val_handle;
 static uint16_t s_uwb_line_chr_val_handle;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool s_notify_enabled;
 static bool s_uart_notify_enabled;
 static bool s_prog_notify_enabled;
 static bool s_notecard_rsp_notify_enabled;
+static bool s_lora_line_notify_enabled;
+static bool s_gps_line_notify_enabled;
 static bool s_uwb_line_notify_enabled;
 static uint16_t s_seq;
 
@@ -120,6 +130,43 @@ static void uwb_line_store(const uint8_t *data, size_t len)
     memcpy(s_uwb_line_buf + s_uwb_line_len, data, n);
     s_uwb_line_len += n;
     s_uwb_line_buf[s_uwb_line_len] = '\0';
+}
+#endif
+
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+#define LORA_LINE_BUF_MAX 384U
+static char s_lora_line_buf[LORA_LINE_BUF_MAX];
+static size_t s_lora_line_len;
+
+static void lora_line_store(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+    size_t room = LORA_LINE_BUF_MAX - 1U - s_lora_line_len;
+    size_t n = len < room ? len : room;
+    memcpy(s_lora_line_buf + s_lora_line_len, data, n);
+    s_lora_line_len += n;
+    s_lora_line_buf[s_lora_line_len] = '\0';
+}
+#endif
+
+#if CONFIG_REGATTAONE_GPS_ENABLE
+#define GPS_LINE_BUF_MAX 384U
+static char s_gps_line_buf[GPS_LINE_BUF_MAX];
+static size_t s_gps_line_len;
+
+static void gps_line_store(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        s_gps_line_len = 0U;
+        s_gps_line_buf[0] = '\0';
+        return;
+    }
+    size_t n = len < (GPS_LINE_BUF_MAX - 1U) ? len : (GPS_LINE_BUF_MAX - 1U);
+    memcpy(s_gps_line_buf, data, n);
+    s_gps_line_buf[n] = '\0';
+    s_gps_line_len = n;
 }
 #endif
 
@@ -496,6 +543,65 @@ static int gatt_svr_access_notecard_rsp(uint16_t conn_handle, uint16_t attr_hand
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+static int gatt_svr_access_lora_tx(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                   void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_READ_NOT_PERMITTED;
+    }
+    uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+    if (om_len == 0U || om_len > 255U) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    uint8_t buf[256];
+    if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    s_lora_line_len = 0U;
+    s_lora_line_buf[0] = '\0';
+    esp_err_t err = sx1262_lora_transmit(buf, om_len);
+    return (err == ESP_OK) ? 0 : BLE_ATT_ERR_UNLIKELY;
+}
+
+static int gatt_svr_access_lora_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                     void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        if (s_lora_line_len > 0U) {
+            return os_mbuf_append(ctxt->om, s_lora_line_buf, (uint16_t)s_lora_line_len) == 0 ? 0
+                                                                                                : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+#endif
+
+#if CONFIG_REGATTAONE_GPS_ENABLE
+static int gatt_svr_access_gps_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                    void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        if (s_gps_line_len > 0U) {
+            return os_mbuf_append(ctxt->om, s_gps_line_buf, (uint16_t)s_gps_line_len) == 0 ? 0
+                                                                                            : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+#endif
+
 static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                     void *arg)
 {
@@ -597,6 +703,7 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .access_cb = gatt_svr_access_gpio_levels,
                     .flags = BLE_GATT_CHR_F_WRITE,
                 },
+#if CONFIG_REGATTAONE_NOTECARD_ENABLE
                 {
                     .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_NOTECARD_REQ_UUID),
                     .access_cb = gatt_svr_access_notecard_req,
@@ -608,6 +715,27 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                     .val_handle = &s_notecard_rsp_chr_val_handle,
                 },
+#elif CONFIG_REGATTAONE_SX1262_ENABLE
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_LORA_TX_UUID),
+                    .access_cb = gatt_svr_access_lora_tx,
+                    .flags = BLE_GATT_CHR_F_WRITE,
+                },
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_LORA_LINE_UUID),
+                    .access_cb = gatt_svr_access_lora_line,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                    .val_handle = &s_lora_line_chr_val_handle,
+                },
+#endif
+#if CONFIG_REGATTAONE_GPS_ENABLE
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_GPS_LINE_UUID),
+                    .access_cb = gatt_svr_access_gps_line,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                    .val_handle = &s_gps_line_chr_val_handle,
+                },
+#endif
                 {
                     .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_UWB_LINE_UUID),
                     .access_cb = gatt_svr_access_uwb_line,
@@ -695,6 +823,8 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_uart_notify_enabled = false;
         s_prog_notify_enabled = false;
         s_notecard_rsp_notify_enabled = false;
+        s_lora_line_notify_enabled = false;
+        s_gps_line_notify_enabled = false;
         s_uwb_line_notify_enabled = false;
         msp430_fw_upload_abort();
 #if CONFIG_REGATTAONE_MSP430_ENABLE
@@ -728,6 +858,14 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_notecard_rsp_chr_val_handle)) {
             s_notecard_rsp_notify_enabled = event->subscribe.cur_notify;
             ESP_LOGI(TAG, "notecard rsp notify=%d", (int)s_notecard_rsp_notify_enabled);
+        }
+        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_lora_line_chr_val_handle)) {
+            s_lora_line_notify_enabled = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "lora line notify=%d", (int)s_lora_line_notify_enabled);
+        }
+        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_gps_line_chr_val_handle)) {
+            s_gps_line_notify_enabled = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "gps line notify=%d", (int)s_gps_line_notify_enabled);
         }
         if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_uwb_line_chr_val_handle)) {
             s_uwb_line_notify_enabled = event->subscribe.cur_notify;
@@ -840,12 +978,10 @@ esp_err_t ble_sen0140_init(void)
 
     ESP_LOGI(TAG, "NimBLE host task started — watch for \"stack sync\" then \"GAP advertising\"");
     ESP_LOGI(TAG,
-             "NimBLE GATT (svc %04x imu %04x uart %04x bsl %04x fw %04x prog %04x gpio %04x nc_req %04x nc_rsp %04x uwb %04x uwb_at %04x)",
-             SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_UART_CHR_UUID,
-             SEN0140_GATT_BSL_CHR_UUID, SEN0140_GATT_FW_CHR_UUID, SEN0140_GATT_PROG_STATUS_CHR_UUID,
-             SEN0140_GATT_GPIO_CHR_UUID, SEN0140_GATT_NOTECARD_REQ_UUID, SEN0140_GATT_NOTECARD_RSP_UUID,
-             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID, SEN0140_GATT_BOAT_ID_UUID,
-             SEN0140_GATT_DEVICE_TYPE_UUID);
+             "NimBLE GATT (svc %04x imu %04x lora_tx %04x lora_rx %04x gps %04x uwb %04x uwb_at %04x)",
+             SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_LORA_TX_UUID,
+             SEN0140_GATT_LORA_LINE_UUID, SEN0140_GATT_GPS_LINE_UUID, SEN0140_GATT_UWB_LINE_UUID,
+             SEN0140_GATT_UWB_AT_UUID);
     return ESP_OK;
 }
 
@@ -904,7 +1040,8 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
 
     /* Comms responses share the NimBLE mbuf pool — throttle IMU while UWB/Notecard notify is on. */
     static TickType_t s_last_imu_notify;
-    if (s_uwb_line_notify_enabled || s_notecard_rsp_notify_enabled) {
+    if (s_uwb_line_notify_enabled || s_notecard_rsp_notify_enabled || s_lora_line_notify_enabled ||
+        s_gps_line_notify_enabled) {
         const TickType_t now = xTaskGetTickCount();
         if (now - s_last_imu_notify < pdMS_TO_TICKS(200)) {
             return;
@@ -992,6 +1129,51 @@ void ble_sen0140_notecard_rsp_notify_chunk(const uint8_t *data, size_t len)
         len -= chunk;
     }
     ble_notify_give();
+}
+
+static void ble_line_notify(uint16_t chr_val_handle, bool notify_enabled, const uint8_t *data, size_t len)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !notify_enabled) {
+        return;
+    }
+    ble_notify_take();
+    const uint8_t *p = data;
+    while (len > 0U) {
+        size_t chunk = len > SEN0140_BLE_UART_CHUNK_MAX ? SEN0140_BLE_UART_CHUNK_MAX : len;
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(p, (uint16_t)chunk);
+        if (!om) {
+            break;
+        }
+        int nrc = ble_gatts_notify_custom(s_conn_handle, chr_val_handle, om);
+        if (nrc != 0) {
+            ESP_LOGW(TAG, "line notify rc=%d", nrc);
+        }
+        p += chunk;
+        len -= chunk;
+    }
+    ble_notify_give();
+}
+
+void ble_sen0140_lora_line_notify(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+    lora_line_store(data, len);
+#endif
+    ble_line_notify(s_lora_line_chr_val_handle, s_lora_line_notify_enabled, data, len);
+}
+
+void ble_sen0140_gps_line_notify(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+#if CONFIG_REGATTAONE_GPS_ENABLE
+    gps_line_store(data, len);
+    ble_line_notify(s_gps_line_chr_val_handle, s_gps_line_notify_enabled, data, len);
+#endif
 }
 
 void ble_sen0140_uwb_line_notify(const uint8_t *data, size_t len)

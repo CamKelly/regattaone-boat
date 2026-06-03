@@ -1,4 +1,160 @@
-menu "RegattaOne — Blues Notecard (LoRa, I2C)"
+menu "RegattaOne — SX1262 LoRa (SPI, RadioLib)"
+
+    config REGATTAONE_SX1262_ENABLE
+        bool "Enable SX1262 LoRa radio over SPI (RadioLib)"
+        default y if IDF_TARGET_ESP32S3
+        default n
+        help
+            When enabled, firmware initializes the SX1262 on the SPI bus defined below.
+            Intended for direct LoRa (not LoRaWAN) using RadioLib on ESP-IDF.
+
+    config SX1262_SPI_HOST_NUM
+        int "SPI host (2 = SPI2_HOST / FSPI, 3 = SPI3_HOST / HSPI)"
+        depends on REGATTAONE_SX1262_ENABLE
+        range 2 3
+        default 2
+        help
+            ESP-IDF SPI host index. SPI2 (FSPI) is typical for a dedicated LoRa module.
+
+    config SX1262_SPI_MOSI_GPIO
+        int "SPI MOSI (SDI) GPIO"
+        depends on REGATTAONE_SX1262_ENABLE
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48
+        default 13 if IDF_TARGET_ESP32S3
+        default 6 if IDF_TARGET_ESP32C3
+
+    config SX1262_SPI_MISO_GPIO
+        int "SPI MISO (SDO) GPIO"
+        depends on REGATTAONE_SX1262_ENABLE
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48
+        default 14 if IDF_TARGET_ESP32S3
+        default 5 if IDF_TARGET_ESP32C3
+
+    config SX1262_SPI_SCLK_GPIO
+        int "SPI SCLK (SCK) GPIO"
+        depends on REGATTAONE_SX1262_ENABLE
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48
+        default 12 if IDF_TARGET_ESP32S3
+        default 4 if IDF_TARGET_ESP32C3
+
+    config SX1262_SPI_CS_GPIO
+        int "SPI CS / NSS GPIO"
+        depends on REGATTAONE_SX1262_ENABLE
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48
+        default 9 if IDF_TARGET_ESP32S3
+        default 7 if IDF_TARGET_ESP32C3
+
+    config SX1262_RESET_GPIO
+        int "SX1262 RESET GPIO (-1 to omit)"
+        depends on REGATTAONE_SX1262_ENABLE
+        range -1 48
+        default 8 if IDF_TARGET_ESP32S3
+        default 3 if IDF_TARGET_ESP32C3
+
+    config SX1262_DIO1_GPIO
+        int "SX1262 DIO1 (IRQ) GPIO"
+        depends on REGATTAONE_SX1262_ENABLE
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48
+        default 7 if IDF_TARGET_ESP32S3
+        default 2 if IDF_TARGET_ESP32C3
+
+    config SX1262_BUSY_GPIO
+        int "SX1262 BUSY GPIO (-1 to omit)"
+        depends on REGATTAONE_SX1262_ENABLE
+        range -1 48
+        default 6 if IDF_TARGET_ESP32S3
+        default 1 if IDF_TARGET_ESP32C3
+
+    config SX1262_SPI_FREQ_HZ
+        int "SPI clock (Hz)"
+        depends on REGATTAONE_SX1262_ENABLE
+        default 2000000
+        range 100000 10000000
+        help
+            SX1262 SPI is typically 1–10 MHz. RadioLib examples often use 2 MHz.
+
+    config SX1262_FREQ_HZ
+        int "LoRa center frequency (Hz)"
+        depends on REGATTAONE_SX1262_ENABLE
+        default 915000000
+        help
+            915 MHz (US) or 868 MHz (EU) depending on your module and regulations.
+
+    config SX1262_TX_POWER_DBM
+        int "TX power (dBm)"
+        depends on REGATTAONE_SX1262_ENABLE
+        default 14
+        range 2 22
+
+endmenu
+
+menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
+
+    config REGATTAONE_GPS_ENABLE
+        bool "Enable GPS NMEA 0183 UART listener + PPS input"
+        default y if IDF_TARGET_ESP32S3
+        default n
+        help
+            Reads NMEA sentences on a dedicated UART. PPS is a separate GPIO for
+            1 Hz pulse-per-second timing (optional but recommended for DGPS marks).
+
+    config GPS_UART_PORT_NUM
+        int "UART controller for GPS (2 = UART_NUM_2; RYUW122 uses UART1 on S3)"
+        depends on REGATTAONE_GPS_ENABLE
+        range 0 2
+        default 2 if IDF_TARGET_ESP32S3
+        default 1
+
+    config GPS_UART_BAUD
+        int "GPS UART baud (NMEA 0183; module default often 9600 or 115200)"
+        depends on REGATTAONE_GPS_ENABLE
+        default 9600
+
+    config GPS_UART_TX_GPIO
+        int "GPS module RX ← ESP TX (GPIO)"
+        depends on REGATTAONE_GPS_ENABLE
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48
+        default 4 if IDF_TARGET_ESP32S3
+        default 8 if IDF_TARGET_ESP32C3
+        help
+            ESP32-S3 Mini: GPIO4 (header IO4). Cross-connect: ESP TX → GPS RX.
+
+    config GPS_UART_RX_GPIO
+        int "GPS module TX → ESP RX (GPIO)"
+        depends on REGATTAONE_GPS_ENABLE
+        range 0 48 if IDF_TARGET_ESP32S3
+        range 0 21 if IDF_TARGET_ESP32C3
+        range 0 48
+        default 5 if IDF_TARGET_ESP32S3
+        default 9 if IDF_TARGET_ESP32C3
+        help
+            ESP32-S3 Mini: GPIO5 (header IO5). Cross-connect: ESP RX ← GPS TX.
+
+    config GPS_PPS_GPIO
+        int "GPS PPS input GPIO (-1 to disable)"
+        depends on REGATTAONE_GPS_ENABLE
+        range -1 48
+        default 21 if IDF_TARGET_ESP32S3
+        default 10 if IDF_TARGET_ESP32C3
+        help
+            1 Hz pulse-per-second from the GPS module. ESP32-S3 Mini: GPIO21 (IO21).
+            Leave at -1 if your module has no PPS output wired.
+
+endmenu
+
+menu "RegattaOne — Blues Notecard (legacy LoRaWAN, I2C)"
 
     config REGATTAONE_NOTECARD_ENABLE
         bool "Enable Blues Notecard over I2C (serial-over-I2C)"
@@ -165,6 +321,7 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         default 17
         help
             XIAO ESP32-C3: pad D3 = GPIO5 (ESP TX → module RX). Not D6 (GPIO21 = USB).
+            ESP32-S3 Mini: GPIO17 (header IO17) on UART1. Cross-connect: ESP TX → module RX.
 
     config RYUW122_UART_RX_GPIO
         int "UWB module TX → ESP RX (GPIO)"
@@ -175,6 +332,7 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         default 18
         help
             XIAO ESP32-C3: pad D2 = GPIO4 (ESP RX ← module TX). Not D7 (GPIO20 = USB).
+            ESP32-S3 Mini: GPIO18 (header IO18) on UART1. Cross-connect: ESP RX ← module TX.
 
 endmenu
 
@@ -210,7 +368,7 @@ menu "RegattaOne — SEN0140 I2C pins"
         help
             ESP32-C3: only GPIO 0–21 exist on the chip.
             Seeed XIAO ESP32-C3: SoC GPIO6 is the pad labeled D4 (often SDA on silk), NOT pad D6 (D6 is UART TX / GPIO21).
-            ESP32-S3: GPIO up to 48 (many packages omit some numbers).
+            ESP32-S3 Mini: GPIO10 = header IO10 (SDA), GPIO11 = header IO11 (SCL) on typical WEMOS/LOLIN boards.
             Set to match your wiring, then idf.py build.
 
     config SEN0140_I2C_SCL_GPIO
@@ -224,5 +382,6 @@ menu "RegattaOne — SEN0140 I2C pins"
         help
             ESP32-C3: only GPIO 0–21.
             Seeed XIAO ESP32-C3: SoC GPIO7 is the pad labeled D5 (often SCL), NOT pad D7 (D7 is UART RX / GPIO20).
+            ESP32-S3 Mini: GPIO11 = header IO11 (SCL).
 
 endmenu

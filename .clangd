@@ -3,6 +3,9 @@
 # Pair with VS Code: --query-driver=** (see .vscode/settings.json).
 CompileFlags:
   CompilationDatabase: build
+  Add:
+    - -Icomponents/RadioLib/src
+    - -Icomponents/RadioLib
   Remove:
     - -fno-shrink-wrap
     - -fstrict-volatile-bitfields

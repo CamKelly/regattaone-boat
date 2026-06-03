@@ -17,7 +17,15 @@
 #include "device_type.h"
 #include "boat_note.h"
 #include "presence_sync.h"
+#if CONFIG_REGATTAONE_NOTECARD_ENABLE
 #include "blues_notecard.h"
+#endif
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+#include "sx1262_lora.h"
+#endif
+#if CONFIG_REGATTAONE_GPS_ENABLE
+#include "gps_nmea.h"
+#endif
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
 #include "ryuw122_uart.h"
@@ -73,13 +81,18 @@ void app_main(void)
 
     ESP_LOGI(
         TAG,
-        "Bring-up: IMU %s | Notecard %s | UWB %s | MSP430 %s",
+        "Bring-up: IMU %s | LoRa %s | GPS %s | UWB %s | MSP430 %s",
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
         "on",
 #else
         "off",
 #endif
-#if CONFIG_REGATTAONE_NOTECARD_ENABLE
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+        "on",
+#else
+        "off",
+#endif
+#if CONFIG_REGATTAONE_GPS_ENABLE
         "on",
 #else
         "off",
@@ -150,6 +163,25 @@ void app_main(void)
     err = ryuw122_uart_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "RYUW122 UART: %s", esp_err_to_name(err));
+    }
+#endif
+
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+    err = sx1262_lora_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SX1262 LoRa init: %s", esp_err_to_name(err));
+    } else {
+        err = sx1262_lora_start();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "SX1262 LoRa start: %s", esp_err_to_name(err));
+        }
+    }
+#endif
+
+#if CONFIG_REGATTAONE_GPS_ENABLE
+    err = gps_nmea_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "GPS NMEA UART: %s", esp_err_to_name(err));
     }
 #endif
 
