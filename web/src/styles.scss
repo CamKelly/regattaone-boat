@@ -17,6 +17,13 @@ body {
     Arial,
     sans-serif;
   background: #f5f5f5;
+  /* iOS notch / home indicator — requires viewport-fit=cover in index.html */
+  padding:
+    env(safe-area-inset-top, 0px)
+    env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px)
+    env(safe-area-inset-left, 0px);
+  box-sizing: border-box;
 }
 
 app-root {

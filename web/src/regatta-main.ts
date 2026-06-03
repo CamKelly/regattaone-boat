@@ -32,9 +32,20 @@ import {
   deviceTypeLabel,
   parseDeviceType,
 } from "./lib/protocol";
+import {
+  asWebGatt,
+  connectNativeGatt,
+  ensureBleInitialized,
+  isBleAvailable,
+  isNativeBle,
+  requestBleDevice,
+  type BleDevicePick,
+  type BleGattCharacteristicLike,
+  type BleGattServerLike,
+} from "./lib/ble-transport";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-06-02b";
+const WEB_BLE_REV = "2026-06-03a";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -51,19 +62,32 @@ interface ImuDisplay {
   meta: string;
 }
 
+const BLE_OPTIONAL_SERVICES = [
+  BLE_SERVICE_UUID,
+  BLE_IMU_CHAR_UUID,
+  BLE_LORA_TX_CHAR_UUID,
+  BLE_LORA_LINE_CHAR_UUID,
+  BLE_GPS_LINE_CHAR_UUID,
+  BLE_UWB_LINE_CHAR_UUID,
+  BLE_UWB_AT_CHAR_UUID,
+  BLE_BOAT_ID_CHAR_UUID,
+  BLE_DEVICE_TYPE_CHAR_UUID,
+];
+
 interface BleBoatSession {
   deviceId: string;
-  device: BluetoothDevice;
-  gatt: BluetoothRemoteGATTServer;
+  device: BluetoothDevice | null;
+  gatt: BleGattServerLike;
+  nativeBle: boolean;
   name: string;
-  charImu: BluetoothRemoteGATTCharacteristic | null;
-  charLoraTx: BluetoothRemoteGATTCharacteristic | null;
-  charLoraLine: BluetoothRemoteGATTCharacteristic | null;
-  charGpsLine: BluetoothRemoteGATTCharacteristic | null;
-  charUwbLine: BluetoothRemoteGATTCharacteristic | null;
-  charUwbAt: BluetoothRemoteGATTCharacteristic | null;
-  charBoatId: BluetoothRemoteGATTCharacteristic | null;
-  charDeviceType: BluetoothRemoteGATTCharacteristic | null;
+  charImu: BleGattCharacteristicLike | null;
+  charLoraTx: BleGattCharacteristicLike | null;
+  charLoraLine: BleGattCharacteristicLike | null;
+  charGpsLine: BleGattCharacteristicLike | null;
+  charUwbLine: BleGattCharacteristicLike | null;
+  charUwbAt: BleGattCharacteristicLike | null;
+  charBoatId: BleGattCharacteristicLike | null;
+  charDeviceType: BleGattCharacteristicLike | null;
   boatId: string;
   boatIdDraft: string;
   deviceType: DeviceType;
@@ -653,14 +677,21 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
   session.parked = false;
   try {
     if (!session.gatt.connected) {
-      session.gatt = await session.device.gatt!.connect();
-      try {
-        const g = session.gatt as BluetoothRemoteGATTServer & { requestMtu?: (n: number) => Promise<number> };
-        if (typeof g.requestMtu === "function") {
-          await g.requestMtu(247);
+      if (session.nativeBle) {
+        session.gatt = await connectNativeGatt(session.deviceId, session.onDisconnected);
+      } else if (session.device?.gatt) {
+        const webGatt = await session.device.gatt.connect();
+        session.gatt = asWebGatt(webGatt);
+        try {
+          const g = webGatt as BluetoothRemoteGATTServer & { requestMtu?: (n: number) => Promise<number> };
+          if (typeof g.requestMtu === "function") {
+            await g.requestMtu(247);
+          }
+        } catch {
+          /* optional */
         }
-      } catch {
-        /* optional */
+      } else {
+        return false;
       }
     }
     if (!session.charImu || !session.charUwbAt) {
@@ -804,7 +835,7 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
 
 type GattWriteTarget = "lora" | "uwb" | "boatid" | "type";
 
-function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BluetoothRemoteGATTCharacteristic | null {
+function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BleGattCharacteristicLike | null {
   if (target === "lora") {
     return session.charLoraTx;
   }
@@ -1087,7 +1118,9 @@ function createNotifyHandlers(session: BleBoatSession): void {
 
 function teardownSession(session: BleBoatSession): void {
   detachCharacteristicListeners(session);
-  session.device.removeEventListener("gattserverdisconnected", session.onDisconnected);
+  if (!session.nativeBle && session.device) {
+    session.device.removeEventListener("gattserverdisconnected", session.onDisconnected);
+  }
 }
 
 function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
@@ -1207,7 +1240,55 @@ async function sendUwbAt(): Promise<void> {
   }
 }
 
-async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
+async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSession> {
+  const session: BleBoatSession = {
+    deviceId: pick.deviceId,
+    device: null,
+    gatt: { connected: false } as BleGattServerLike,
+    nativeBle: true,
+    name: pick.name,
+    charImu: null,
+    charLoraTx: null,
+    charLoraLine: null,
+    charGpsLine: null,
+    charUwbLine: null,
+    charUwbAt: null,
+    charBoatId: null,
+    charDeviceType: null,
+    boatId: "",
+    boatIdDraft: "",
+    deviceType: "boat",
+    deviceTypeDraft: "boat",
+    loraLineLogText: "",
+    gpsFix: defaultGpsFix(),
+    gpsMapLat: null,
+    gpsMapLon: null,
+    uwbLineLogText: "",
+    loraTxDraft: "",
+    uwbAtDraft: "",
+    lastImuWallMs: 0,
+    imu: defaultImuDisplay(),
+    notificationsOn: false,
+    imuNotificationsOn: false,
+    commsGen: 0,
+    activeUwbGen: 0,
+    loraBusy: false,
+    uwbBusy: false,
+    parked: false,
+    gattChain: Promise.resolve(),
+    onImuNotify: () => {},
+    onLoraLineNotify: () => {},
+    onGpsLineNotify: () => {},
+    onUwbLineNotify: () => {},
+    onDisconnected: () => {},
+  };
+  createNotifyHandlers(session);
+  session.gatt = await connectNativeGatt(pick.deviceId, session.onDisconnected);
+  await bindSessionCharacteristics(session);
+  return session;
+}
+
+async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
   const gatt = dev.gatt!.connected ? dev.gatt! : await dev.gatt!.connect();
   try {
     const g = gatt as BluetoothRemoteGATTServer & { requestMtu?: (n: number) => Promise<number> };
@@ -1221,7 +1302,8 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
   const session: BleBoatSession = {
     deviceId: dev.id,
     device: dev,
-    gatt,
+    gatt: asWebGatt(gatt),
+    nativeBle: false,
     name: dev.name ?? "RegattaOne-Boat",
     charImu: null,
     charLoraTx: null,
@@ -1267,8 +1349,8 @@ async function setupGattSession(dev: BluetoothDevice): Promise<BleBoatSession> {
 }
 
 async function connectBle(): Promise<void> {
-  if (!navigator.bluetooth) {
-    updateBleToolbar("Web Bluetooth unavailable — use Chrome on HTTPS");
+  if (!isBleAvailable()) {
+    updateBleToolbar("Bluetooth unavailable — use Chrome or the native app");
     return;
   }
 
@@ -1276,19 +1358,38 @@ async function connectBle(): Promise<void> {
   updateBleToolbar("selecting device…");
 
   try {
+    if (isNativeBle()) {
+      await ensureBleInitialized();
+      const pick = await requestBleDevice(BLE_OPTIONAL_SERVICES);
+
+      if (sessions.has(pick.deviceId)) {
+        await setActiveSession(pick.deviceId);
+        updateBleToolbar("switched device");
+        return;
+      }
+
+      updateBleToolbar("connecting…");
+
+      const activeBeforeConnect = getActiveSession();
+      if (activeBeforeConnect) {
+        await deactivateSession(activeBeforeConnect);
+      }
+
+      const session = await setupNativeGattSession(pick);
+      sessions.set(session.deviceId, session);
+      await setActiveSession(session.deviceId);
+      renderDeviceSelector();
+      return;
+    }
+
+    if (!navigator.bluetooth) {
+      updateBleToolbar("Web Bluetooth unavailable — use Chrome on HTTPS");
+      return;
+    }
+
     const dev = await navigator.bluetooth.requestDevice({
       filters: [{ services: [BLE_SERVICE_UUID] }],
-      optionalServices: [
-        BLE_SERVICE_UUID,
-        BLE_IMU_CHAR_UUID,
-        BLE_LORA_TX_CHAR_UUID,
-        BLE_LORA_LINE_CHAR_UUID,
-        BLE_GPS_LINE_CHAR_UUID,
-        BLE_UWB_LINE_CHAR_UUID,
-        BLE_UWB_AT_CHAR_UUID,
-        BLE_BOAT_ID_CHAR_UUID,
-        BLE_DEVICE_TYPE_CHAR_UUID,
-      ],
+      optionalServices: BLE_OPTIONAL_SERVICES,
     });
 
     if (sessions.has(dev.id)) {
@@ -1304,16 +1405,17 @@ async function connectBle(): Promise<void> {
       await deactivateSession(activeBeforeConnect);
     }
 
-    const session = await setupGattSession(dev);
+    const session = await setupWebGattSession(dev);
     sessions.set(session.deviceId, session);
     await setActiveSession(session.deviceId);
     renderDeviceSelector();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("cancel")) {
+    if (msg.includes("cancel") || msg.includes("Cancel")) {
       updateBleToolbar();
     } else {
       updateBleToolbar(msg);
+      console.error("BLE connect failed", e);
     }
   } finally {
     connectBtn.disabled = false;
@@ -1459,6 +1561,12 @@ export function startRegattaApp(): void {
   });
 
   console.info(`RegattaOne Boat web BLE ${WEB_BLE_REV}`);
+  if (isNativeBle()) {
+    void ensureBleInitialized().catch((e) => {
+      console.error("Native BLE init failed", e);
+      updateBleToolbar("Bluetooth unavailable — enable in Settings");
+    });
+  }
   clearUiPanels();
   syncBoatIdUi(null);
   syncDeviceTypeUi(null);
