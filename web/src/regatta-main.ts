@@ -1,3 +1,9 @@
+import {
+  clearGpsLeafletMap,
+  invalidateGpsLeafletMapSize,
+  recenterGpsLeafletMap,
+  updateGpsLeafletMap,
+} from "./lib/gps-leaflet-map";
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
   applyNmeaLine,
@@ -12,7 +18,6 @@ import {
   formatDop,
   formatSpeedKnots,
   formatUtc,
-  openStreetMapEmbedUrl,
   openStreetMapUrl,
   type GpsFix,
 } from "./lib/nmea-parse";
@@ -94,8 +99,6 @@ interface BleBoatSession {
   deviceTypeDraft: DeviceType;
   loraLineLogText: string;
   gpsFix: GpsFix;
-  gpsMapLat: number | null;
-  gpsMapLon: number | null;
   uwbLineLogText: string;
   loraTxDraft: string;
   uwbAtDraft: string;
@@ -525,12 +528,23 @@ function renderGpsDisplay(session: BleBoatSession): void {
   const fix = session.gpsFix;
   const acc = estimateHorizontalAccuracyM(fix.hdop);
 
-  if (fix.updatedAtMs === 0) {
+  const ppsNote =
+    fix.ppsCount !== null
+      ? ` · PPS ${fix.ppsCount}${fix.ppsUpdatedAtMs > 0 ? ` (last edge ${Math.max(0, Math.round(performance.now() - fix.ppsUpdatedAtMs))} ms ago)` : ""}`
+      : "";
+
+  if (fix.updatedAtMs === 0 && fix.ppsCount === null) {
     setText("gps-meta", "Waiting for NMEA sentences…");
   } else if (fix.fixValid && fix.lat !== null && fix.lon !== null) {
-    setText("gps-meta", `Fix OK · last ${fix.lastSentence ?? "?"} · updated ${Math.max(0, Math.round(performance.now() - fix.updatedAtMs))} ms ago`);
+    setText(
+      "gps-meta",
+      `Fix OK · last ${fix.lastSentence ?? "?"} · updated ${Math.max(0, Math.round(performance.now() - fix.updatedAtMs))} ms ago${ppsNote}`,
+    );
   } else {
-    setText("gps-meta", `No valid fix · last ${fix.lastSentence ?? "?"} · ${fixQualityLabel(fix.fixQuality)}`);
+    setText(
+      "gps-meta",
+      `No valid fix · last ${fix.lastSentence ?? "?"} · ${fixQualityLabel(fix.fixQuality)}${ppsNote}`,
+    );
   }
 
   if (fix.lat !== null && fix.lon !== null) {
@@ -569,57 +583,44 @@ function renderGpsDisplay(session: BleBoatSession): void {
     "gps-magvar",
     fix.magneticVariationDeg !== null ? `${fix.magneticVariationDeg.toFixed(1)}°` : "—",
   );
+  if (fix.ppsCount !== null) {
+    const age =
+      fix.ppsUpdatedAtMs > 0 ? `${Math.max(0, Math.round(performance.now() - fix.ppsUpdatedAtMs))} ms ago` : "—";
+    setText("gps-pps", `${fix.ppsCount} pulses · last edge ${age}`);
+  } else {
+    setText("gps-pps", "—");
+  }
 
   updateGpsMap(session, fix);
 }
 
-function updateGpsMap(session: BleBoatSession, fix: GpsFix): void {
-  const iframe = document.querySelector<HTMLIFrameElement>("#gps-map");
+function updateGpsMap(_session: BleBoatSession, fix: GpsFix): void {
   const hint = document.querySelector<HTMLElement>("#gps-map-hint");
   const link = document.querySelector<HTMLAnchorElement>("#gps-map-link");
-  if (!iframe || !hint || !link) {
+  if (!hint || !link) {
     return;
   }
 
   if (!fix.fixValid || fix.lat === null || fix.lon === null) {
-    iframe.removeAttribute("src");
+    clearGpsLeafletMap();
     hint.hidden = false;
     link.hidden = true;
-    session.gpsMapLat = null;
-    session.gpsMapLon = null;
     return;
   }
 
-  const lat = fix.lat;
-  const lon = fix.lon;
-  const moved =
-    session.gpsMapLat === null ||
-    session.gpsMapLon === null ||
-    Math.abs(lat - session.gpsMapLat) > 1e-5 ||
-    Math.abs(lon - session.gpsMapLon) > 1e-5;
-
-  if (moved) {
-    iframe.src = openStreetMapEmbedUrl(lat, lon);
-    link.href = openStreetMapUrl(lat, lon);
-    link.hidden = false;
-    hint.hidden = true;
-    session.gpsMapLat = lat;
-    session.gpsMapLon = lon;
-  }
+  updateGpsLeafletMap(fix.lat, fix.lon);
+  link.href = openStreetMapUrl(fix.lat, fix.lon);
+  link.hidden = false;
+  hint.hidden = true;
 }
 
 function clearGpsDisplay(session: BleBoatSession | null): void {
   if (session) {
     session.gpsFix = defaultGpsFix();
-    session.gpsMapLat = null;
-    session.gpsMapLon = null;
   }
-  const iframe = document.querySelector<HTMLIFrameElement>("#gps-map");
+  clearGpsLeafletMap();
   const hint = document.querySelector<HTMLElement>("#gps-map-hint");
   const link = document.querySelector<HTMLAnchorElement>("#gps-map-link");
-  if (iframe) {
-    iframe.removeAttribute("src");
-  }
   if (hint) {
     hint.hidden = false;
   }
@@ -639,6 +640,7 @@ function clearGpsDisplay(session: BleBoatSession | null): void {
     "gps-dop",
     "gps-utc",
     "gps-magvar",
+    "gps-pps",
   ]) {
     setText(id, "—");
   }
@@ -743,7 +745,7 @@ async function ensureSessionConnected(session: BleBoatSession): Promise<boolean>
 
 async function pollUwbResponse(session: BleBoatSession, gen: number, baselineLen: number, timeoutMs: number): Promise<boolean> {
   const deadline = performance.now() + timeoutMs;
-  let readFallbackUsed = false;
+  let nextReadAt = 0;
   while (performance.now() < deadline) {
     if (gen !== session.activeUwbGen) {
       return false;
@@ -751,13 +753,14 @@ async function pollUwbResponse(session: BleBoatSession, gen: number, baselineLen
     if (session.uwbLineLogText.length > baselineLen) {
       return true;
     }
-    if (!readFallbackUsed && session.charUwbLine && session.gatt.connected) {
+    const now = performance.now();
+    if (session.charUwbLine && session.gatt.connected && now >= nextReadAt) {
+      nextReadAt = now + 250;
       try {
         const val = await runGattOp(session, () => session.charUwbLine!.readValue());
         if (val.byteLength > 0) {
           const chunk = new TextDecoder().decode(val);
           appendUwbLineIfNew(session, chunk, gen);
-          readFallbackUsed = true;
           if (session.uwbLineLogText.length > baselineLen) {
             return true;
           }
@@ -766,7 +769,7 @@ async function pollUwbResponse(session: BleBoatSession, gen: number, baselineLen
         /* optional */
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return session.uwbLineLogText.length > baselineLen;
 }
@@ -1101,11 +1104,19 @@ function createNotifyHandlers(session: BleBoatSession): void {
   session.onUwbLineNotify = (ev: Event) => {
     const ch = ev.target as BluetoothRemoteGATTCharacteristic;
     const v = ch.value;
-    if (!v || session.activeUwbGen === 0) {
+    if (!v || v.byteLength === 0) {
       return;
     }
     const s = new TextDecoder().decode(v);
-    appendUwbLineIfNew(session, s, session.activeUwbGen);
+    const gen = session.activeUwbGen;
+    if (gen !== 0) {
+      appendUwbLineIfNew(session, s, gen);
+    } else {
+      const line = s.endsWith("\n") ? s : `${s}\n`;
+      if (!session.uwbLineLogText.endsWith(line)) {
+        appendUwbLog(session, line);
+      }
+    }
   };
 
   session.onDisconnected = () => {
@@ -1219,11 +1230,11 @@ async function sendUwbAt(): Promise<void> {
     try {
       await ensureUwbComms(session);
       await gattWrite(session, "uwb", new TextEncoder().encode(cmd));
-      const gotReply = await pollUwbResponse(session, gen, baselineLen, 5000);
+      const gotReply = await pollUwbResponse(session, gen, baselineLen, 8000);
       if (gen === session.activeUwbGen && !gotReply) {
         appendUwbLog(
           session,
-          "! No UWB response after 5s — check wiring (ESP TX→module RX GPIO17), baud 115200, 3.3V GND.\n",
+          "! No UWB response — check idf.py monitor for ryuw122 boot log (AT probe, TX/RX GPIO, baud, power).\n",
         );
       }
     } finally {
@@ -1261,8 +1272,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     deviceTypeDraft: "boat",
     loraLineLogText: "",
     gpsFix: defaultGpsFix(),
-    gpsMapLat: null,
-    gpsMapLon: null,
     uwbLineLogText: "",
     loraTxDraft: "",
     uwbAtDraft: "",
@@ -1319,8 +1328,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     deviceTypeDraft: "boat",
     loraLineLogText: "",
     gpsFix: defaultGpsFix(),
-    gpsMapLat: null,
-    gpsMapLon: null,
     uwbLineLogText: "",
     loraTxDraft: "",
     uwbAtDraft: "",
@@ -1542,6 +1549,10 @@ export function startRegattaApp(): void {
 
   connectBtn.addEventListener("click", () => void connectBle());
 
+  document.querySelector("#gps-map-recenter")?.addEventListener("click", () => {
+    recenterGpsLeafletMap();
+  });
+
   document.querySelector("#ble-tabs")?.addEventListener("click", (ev) => {
     const tab = (ev.target as HTMLElement | null)?.closest(".ant-tabs-tab");
     if (!tab) {
@@ -1549,6 +1560,9 @@ export function startRegattaApp(): void {
     }
     const label = tab.textContent ?? "";
     const wantImu = label.includes("IMU");
+    if (label.includes("GPS")) {
+      requestAnimationFrame(() => invalidateGpsLeafletMapSize());
+    }
     if (wantImu === imuTabActive) {
       return;
     }

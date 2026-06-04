@@ -3,14 +3,17 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
 #include "driver/uart.h"
+#include "driver/gpio.h"
 
 #include "ble_sen0140.h"
 
@@ -29,6 +32,7 @@ static volatile bool s_post_tx_drain;
 
 static SemaphoreHandle_t s_uart_mtx;
 static SemaphoreHandle_t s_at_done;
+static QueueHandle_t s_ble_at_q;
 static char s_at_rsp[RYUW_AT_RSP_MAX];
 static size_t s_at_rsp_len;
 static bool s_at_ok;
@@ -77,6 +81,9 @@ static bool ryuw122_line_is_printable(const char *line, size_t len)
 static void ryuw122_apply_uart(int tx_gpio, int rx_gpio, int baud)
 {
     (void)uart_set_pin(CONFIG_RYUW122_UART_PORT_NUM, tx_gpio, rx_gpio, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (rx_gpio >= 0) {
+        gpio_set_pull_mode((gpio_num_t)rx_gpio, GPIO_PULLUP_ONLY);
+    }
     (void)uart_set_baudrate(CONFIG_RYUW122_UART_PORT_NUM, baud);
     uart_flush(CONFIG_RYUW122_UART_PORT_NUM);
     uart_flush_input(CONFIG_RYUW122_UART_PORT_NUM);
@@ -137,7 +144,7 @@ static bool ryuw122_send_at_probe(int tx_gpio, int rx_gpio, int baud)
     vTaskDelay(pdMS_TO_TICKS(80));
 
     uint8_t buf[128];
-    const int len = uart_read_bytes(CONFIG_RYUW122_UART_PORT_NUM, buf, sizeof(buf), pdMS_TO_TICKS(800));
+    const int len = uart_read_bytes(CONFIG_RYUW122_UART_PORT_NUM, buf, sizeof(buf), pdMS_TO_TICKS(1500));
     if (len <= 0 || !ryuw122_buf_looks_like_at_reply(buf, len)) {
         if (len > 0) {
             ESP_LOGD(TAG, "probe reject TX=%d RX=%d @ %d (%d bytes)", tx_gpio, rx_gpio, baud, len);
@@ -151,7 +158,7 @@ static bool ryuw122_send_at_probe(int tx_gpio, int rx_gpio, int baud)
 
 static bool ryuw122_autoprobe(void)
 {
-    static const int bauds[] = {115200, 57600, 9600};
+    static const int bauds[] = {115200, 57600, 38400, 9600};
     const struct {
         int tx;
         int rx;
@@ -175,6 +182,51 @@ static bool ryuw122_autoprobe(void)
         }
     }
     return false;
+}
+
+typedef struct {
+    char cmd[128];
+} ryuw122_at_job_t;
+
+static void ryuw122_ble_at_task(void *arg)
+{
+    (void)arg;
+    ryuw122_at_job_t job;
+    for (;;) {
+        if (xQueueReceive(s_ble_at_q, &job, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        esp_err_t err = ryuw122_uart_at_cmd(job.cmd, 5000);
+        if (err == ESP_ERR_TIMEOUT) {
+            static const char msg[] = "+ERR: no UART reply (check TX/RX swap, baud, 3.3V)\n";
+            ble_sen0140_uwb_line_notify((const uint8_t *)msg, sizeof(msg) - 1U);
+        } else if (err != ESP_OK && s_at_rsp_len == 0U) {
+            static const char msg[] = "+ERR: AT failed\n";
+            ble_sen0140_uwb_line_notify((const uint8_t *)msg, sizeof(msg) - 1U);
+        }
+    }
+}
+
+static bool ryuw122_normalize_at_cmd(const uint8_t *in, size_t in_len, char *out, size_t out_len)
+{
+    if (!in || !out || in_len == 0U || out_len < 2U) {
+        return false;
+    }
+    size_t n = in_len;
+    while (n > 0U && (in[n - 1U] == '\r' || in[n - 1U] == '\n' || in[n - 1U] == ' ')) {
+        n--;
+    }
+    size_t start = 0U;
+    while (start < n && (in[start] == ' ' || in[start] == '\t')) {
+        start++;
+    }
+    n -= start;
+    if (n == 0U || n >= out_len) {
+        return false;
+    }
+    memcpy(out, in + start, n);
+    out[n] = '\0';
+    return true;
 }
 
 static void ryuw122_task(void *arg)
@@ -251,10 +303,7 @@ esp_err_t ryuw122_uart_start(void)
         .source_clk = UART_SCLK_DEFAULT,
     };
     ESP_RETURN_ON_ERROR(uart_param_config(CONFIG_RYUW122_UART_PORT_NUM, &cfg), TAG, "param");
-    ESP_RETURN_ON_ERROR(
-        uart_set_pin(CONFIG_RYUW122_UART_PORT_NUM, CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO,
-                     UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE),
-        TAG, "set_pin");
+    ryuw122_apply_uart(CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
 
     s_tx_gpio = CONFIG_RYUW122_UART_TX_GPIO;
     s_rx_gpio = CONFIG_RYUW122_UART_RX_GPIO;
@@ -263,8 +312,9 @@ esp_err_t ryuw122_uart_start(void)
 
     s_uart_mtx = xSemaphoreCreateMutex();
     s_at_done = xSemaphoreCreateBinary();
-    if (s_uart_mtx == NULL || s_at_done == NULL) {
-        ESP_LOGE(TAG, "mutex/semaphore create failed");
+    s_ble_at_q = xQueueCreate(2, sizeof(ryuw122_at_job_t));
+    if (s_uart_mtx == NULL || s_at_done == NULL || s_ble_at_q == NULL) {
+        ESP_LOGE(TAG, "mutex/semaphore/queue create failed");
         if (s_uart_mtx) {
             vSemaphoreDelete(s_uart_mtx);
             s_uart_mtx = NULL;
@@ -272,6 +322,10 @@ esp_err_t ryuw122_uart_start(void)
         if (s_at_done) {
             vSemaphoreDelete(s_at_done);
             s_at_done = NULL;
+        }
+        if (s_ble_at_q) {
+            vQueueDelete(s_ble_at_q);
+            s_ble_at_q = NULL;
         }
         uart_driver_delete(CONFIG_RYUW122_UART_PORT_NUM);
         return ESP_ERR_NO_MEM;
@@ -285,7 +339,10 @@ esp_err_t ryuw122_uart_start(void)
     }
 
     if (!ryuw122_autoprobe()) {
-        ESP_LOGW(TAG, "No valid AT reply at boot — using menuconfig TX/RX @ %d baud", CONFIG_RYUW122_UART_BAUD);
+        ESP_LOGW(TAG,
+                 "No valid AT reply at boot — using menuconfig TX=GPIO%d RX=GPIO%d @ %d baud "
+                 "(cross-connect ESP TX→module RX; check 3.3V/GND)",
+                 CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
         ryuw122_apply_uart(CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
         s_tx_gpio = CONFIG_RYUW122_UART_TX_GPIO;
         s_rx_gpio = CONFIG_RYUW122_UART_RX_GPIO;
@@ -295,6 +352,10 @@ esp_err_t ryuw122_uart_start(void)
     const uint32_t stack = 4096;
     if (xTaskCreate(ryuw122_task, "ryuw122", stack, NULL, 5, NULL) != pdPASS) {
         uart_driver_delete(CONFIG_RYUW122_UART_PORT_NUM);
+        return ESP_FAIL;
+    }
+    if (xTaskCreate(ryuw122_ble_at_task, "ryuw122_at", stack, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "BLE AT worker task create failed");
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "UART%d active: TX=GPIO%d RX=GPIO%d @ %d baud", CONFIG_RYUW122_UART_PORT_NUM, s_tx_gpio,
@@ -378,6 +439,24 @@ esp_err_t ryuw122_uart_at_cmd(const char *cmd, uint32_t timeout_ms)
     return res;
 }
 
+esp_err_t ryuw122_uart_queue_ble_at(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U || s_ble_at_q == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (len > 256U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ryuw122_at_job_t job;
+    if (!ryuw122_normalize_at_cmd(data, len, job.cmd, sizeof(job.cmd))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (xQueueSend(s_ble_at_q, &job, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+
 #else
 
 esp_err_t ryuw122_uart_start(void)
@@ -396,6 +475,13 @@ esp_err_t ryuw122_uart_at_cmd(const char *cmd, uint32_t timeout_ms)
 {
     (void)cmd;
     (void)timeout_ms;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+esp_err_t ryuw122_uart_queue_ble_at(const uint8_t *data, size_t len)
+{
+    (void)data;
+    (void)len;
     return ESP_ERR_NOT_SUPPORTED;
 }
 

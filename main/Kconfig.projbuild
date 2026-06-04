@@ -317,7 +317,7 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
     config RYUW122_BOOT_DELAY_MS
         int "Delay after UART init before AT probe (module power-up)"
         range 0 5000
-        default 500
+        default 1000
         help
             RYUW122 may need hundreds of ms after power before UART responds.
 

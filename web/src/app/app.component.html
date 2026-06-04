@@ -169,13 +169,15 @@
             <p id="gps-meta" class="tab-hint">Waiting for NMEA fix…</p>
             <div class="gps-layout">
               <div class="gps-map-wrap">
-                <iframe
+                <div
                   id="gps-map"
-                  class="gps-map"
-                  title="GPS position on OpenStreetMap"
-                  loading="lazy"
-                  referrerpolicy="no-referrer-when-downgrade"
-                ></iframe>
+                  class="gps-map gps-map--hidden"
+                  role="application"
+                  aria-label="GPS position on OpenStreetMap"
+                ></div>
+                <button type="button" id="gps-map-recenter" class="gps-map-recenter" hidden>
+                  Recenter
+                </button>
                 <p id="gps-map-hint" class="field-hint gps-map-hint">Map appears when latitude and longitude are valid.</p>
                 <a id="gps-map-link" class="gps-map-link" href="#" target="_blank" rel="noopener noreferrer" hidden>
                   Open in OpenStreetMap
@@ -221,6 +223,10 @@
                 <div class="gps-cell">
                   <span class="gps-cell-label">Magnetic variation</span>
                   <span id="gps-magvar" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">PPS (1 Hz)</span>
+                  <span id="gps-pps" class="gps-cell-value">—</span>
                 </div>
               </div>
             </div>

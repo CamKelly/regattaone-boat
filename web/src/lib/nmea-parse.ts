@@ -24,6 +24,10 @@ export interface GpsFix {
   /** Most recently applied sentence type (e.g. GGA). */
   lastSentence: string | null;
   updatedAtMs: number;
+  /** 1 Hz PPS edges from firmware ($PREGPPS). */
+  ppsCount: number | null;
+  ppsLastEdgeUs: number | null;
+  ppsUpdatedAtMs: number;
 }
 
 const UERE_M = 5;
@@ -50,6 +54,9 @@ export function defaultGpsFix(): GpsFix {
     utcDate: null,
     lastSentence: null,
     updatedAtMs: 0,
+    ppsCount: null,
+    ppsLastEdgeUs: null,
+    ppsUpdatedAtMs: 0,
   };
 }
 
@@ -368,10 +375,30 @@ function applyGsv(fix: GpsFix, fields: string[]): void {
   fix.lastSentence = "GSV";
 }
 
+/** Firmware PPS tick: $PREGPPS,<esp_time_us>,<pulse_count> (no NMEA checksum). */
+function applyPregpps(fix: GpsFix, fields: string[]): void {
+  const us = parseIntField(fields[1]);
+  const count = parseIntField(fields[2]);
+  if (count !== null) {
+    fix.ppsCount = count;
+  }
+  if (us !== null) {
+    fix.ppsLastEdgeUs = us;
+  }
+  fix.ppsUpdatedAtMs = performance.now();
+  fix.lastSentence = "PPS";
+}
+
 /** Merge one NMEA line into `fix` (mutates and returns the same object). */
 export function applyNmeaLine(fix: GpsFix, rawLine: string): GpsFix {
   const line = rawLine.trim();
   if (!line.startsWith("$")) {
+    return fix;
+  }
+  if (line.startsWith("$PREGPPS,")) {
+    const fields = line.split(",");
+    applyPregpps(fix, fields);
+    fix.updatedAtMs = performance.now();
     return fix;
   }
   if (!nmeaChecksumOk(line)) {
