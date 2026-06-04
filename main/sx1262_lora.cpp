@@ -363,7 +363,7 @@ extern "C" esp_err_t sx1262_lora_init(void)
 
     const float freq_mhz = (float)SX1262_FREQ_HZ / 1000000.0f;
     const int state = s_radio->begin(freq_mhz, kLoRaBwKhz, kLoRaSf, kLoRaCr, RADIOLIB_SX126X_SYNC_WORD_PRIVATE,
-                                     (int8_t)SX1262_TX_POWER_DBM, 8, 0.0f, false);
+                                     (int8_t)SX1262_TX_POWER_DBM, 8, 1.6f, false);
     if (state != RADIOLIB_ERR_NONE) {
         if (state == RADIOLIB_ERR_CHIP_NOT_FOUND) {
             ESP_LOGE(TAG,
