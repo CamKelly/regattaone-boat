@@ -15,11 +15,6 @@
 #include "ble_sen0140.h"
 #include "boat_id.h"
 #include "device_type.h"
-#include "boat_note.h"
-#include "presence_sync.h"
-#if CONFIG_REGATTAONE_NOTECARD_ENABLE
-#include "blues_notecard.h"
-#endif
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 #include "sx1262_lora.h"
 #endif
@@ -29,10 +24,6 @@
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
 #include "ryuw122_uart.h"
-#if CONFIG_REGATTAONE_MSP430_ENABLE
-#include "msp430_bsl_invoke.h"
-#include "msp430_uart_rx.h"
-#endif
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
 #include "sen0140_10dof.h"
 #endif
@@ -81,7 +72,7 @@ void app_main(void)
 
     ESP_LOGI(
         TAG,
-        "Bring-up: IMU %s | LoRa %s | GPS %s | UWB %s | MSP430 %s",
+        "Bring-up: IMU %s | LoRa %s | GPS %s | UWB %s",
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
         "on",
 #else
@@ -98,11 +89,6 @@ void app_main(void)
         "off",
 #endif
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
-        "on",
-#else
-        "off",
-#endif
-#if CONFIG_REGATTAONE_MSP430_ENABLE
         "on"
 #else
         "off"
@@ -116,11 +102,7 @@ void app_main(void)
     err = sen0140_board_init();
     const bool sen0140_ok = (err == ESP_OK);
     if (!sen0140_ok) {
-#if CONFIG_REGATTAONE_MSP430_ENABLE
-        ESP_LOGW(TAG, "SEN0140 / I2C init failed: %s — BLE + MSP430 UART still start", esp_err_to_name(err));
-#else
         ESP_LOGW(TAG, "SEN0140 / I2C init failed: %s — BLE still starts", esp_err_to_name(err));
-#endif
     } else {
         ESP_LOGI(TAG, "SEN0140 (10 DOF) ready. GPIO SDA=%d SCL=%d", SEN0140_I2C_SDA_GPIO, SEN0140_I2C_SCL_GPIO);
     }
@@ -128,36 +110,11 @@ void app_main(void)
     const bool sen0140_ok = false;
 #endif
 
-#if CONFIG_REGATTAONE_MSP430_ENABLE
-    err = msp430_bsl_gpio_init();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "MSP430 BSL GPIO init: %s", esp_err_to_name(err));
-    }
-#endif
-
     err = ble_sen0140_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "BLE init failed: %s", esp_err_to_name(err));
         return;
     }
-
-#if CONFIG_REGATTAONE_NOTECARD_ENABLE
-    {
-#if CONFIG_REGATTAONE_SEN0140_ENABLE
-        i2c_master_bus_handle_t bus = (i2c_master_bus_handle_t)sen0140_i2c_bus_handle();
-#else
-        i2c_master_bus_handle_t bus = NULL;
-#endif
-        err = blues_notecard_init(bus);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Blues Notecard init: %s", esp_err_to_name(err));
-        } else {
-            ESP_LOGI(TAG, "Blues Notecard I2C (%s bus)", bus ? "shared SEN0140" : "standalone");
-            boat_notehub_report_async(BOAT_NOTE_BOOT);
-            presence_sync_start();
-        }
-    }
-#endif
 
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
     err = ryuw122_uart_start();
@@ -182,14 +139,6 @@ void app_main(void)
     err = gps_nmea_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "GPS NMEA UART: %s", esp_err_to_name(err));
-    }
-#endif
-
-#if CONFIG_REGATTAONE_MSP430_ENABLE
-    err = msp430_uart_rx_start();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "MSP430 UART bridge failed: %s", esp_err_to_name(err));
-        return;
     }
 #endif
 

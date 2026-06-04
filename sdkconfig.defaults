@@ -15,6 +15,3 @@ CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
 # IMU FEF1 notifies (42 B) + link-layer backlog; margin for future GATT traffic.
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=96
 CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=96
-
-# IMU-only / partial wiring: Blues Notecard code path off until wired (menuconfig to enable).
-CONFIG_REGATTAONE_NOTECARD_ENABLE=n

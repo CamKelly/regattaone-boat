@@ -169,9 +169,3 @@ Same as [WIRING-SEN0140.md](WIRING-SEN0140.md) — **GPIO10 SDA**, **GPIO11 SCL*
 ```
 
 After changing pins, run **`idf.py menuconfig`** → **RegattaOne** and rebuild.
-
----
-
-## Legacy: Blues Notecard (ESP32-C3)
-
-The previous **Notecard over I2C** wiring for Seeed XIAO ESP32-C3 is unchanged in [WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md). On ESP32-S3 Mini, **`CONFIG_REGATTAONE_NOTECARD_ENABLE=n`** — use SX1262 instead.

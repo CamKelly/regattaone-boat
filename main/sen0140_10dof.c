@@ -601,22 +601,9 @@ esp_err_t sen0140_board_init(void)
     }
 
     if (!s_adxl && !s_itg && !s_mag && !s_baro_ok) {
-#if CONFIG_REGATTAONE_NOTECARD_ENABLE
-        const uint8_t nc_addr = (uint8_t)CONFIG_NOTECARD_I2C_ADDR_7BIT;
-        if (i2c_master_probe(s_bus, nc_addr, I2C_PROBE_TIMEOUT_MS) == ESP_OK) {
-            ESP_LOGW(TAG,
-                     "Notecard ACK at 0x%02x but no SEN0140 chips — IMU not wired on this bus, wrong pins, or IMU unpowered",
-                     (unsigned)nc_addr);
-        } else {
-            ESP_LOGW(TAG,
-                     "No ACK at IMU addresses or Notecard 0x%02x — check SDA=GPIO%d SCL=GPIO%d, pull-ups, GND, 3V3",
-                     (unsigned)nc_addr, (int)SEN0140_I2C_SDA_GPIO, (int)SEN0140_I2C_SCL_GPIO);
-        }
-#else
         ESP_LOGW(TAG,
                  "No SEN0140 chips ACK — check SDA=GPIO%d SCL=GPIO%d (menuconfig), wiring, pull-ups, GND, 3V3",
                  (int)SEN0140_I2C_SDA_GPIO, (int)SEN0140_I2C_SCL_GPIO);
-#endif
 #if CONFIG_IDF_TARGET_ESP32C3
         ESP_LOGW(TAG,
                  "XIAO C3: defaults expect IMU SDA on pad D4 (GPIO6), SCL on D5 (GPIO7). "

@@ -10,12 +10,13 @@
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
+#include "gps_timebase.h"
+
 #if CONFIG_REGATTAONE_GPS_ENABLE
 #include "driver/gpio.h"
 #include "driver/uart.h"
 
 #include "ble_sen0140.h"
-#include "gps_timebase.h"
 
 #if CONFIG_REGATTAONE_GPS_HW_CAPTURE
 #include "gps_hw_timer.h"
@@ -239,10 +240,18 @@ esp_err_t gps_nmea_start(void)
 
 uint32_t gps_pps_pulse_count(void)
 {
+#if CONFIG_REGATTAONE_GPS_ENABLE
     return gps_timebase_pps_count();
+#else
+    return 0U;
+#endif
 }
 
 int64_t gps_pps_last_edge_us(void)
 {
+#if CONFIG_REGATTAONE_GPS_ENABLE
     return gps_timebase_last_pps_esp_us();
+#else
+    return 0;
+#endif
 }

@@ -3,7 +3,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "boat_note.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "nvs.h"
@@ -147,9 +146,6 @@ esp_err_t boat_id_set(const char *id, size_t len)
     memcpy(tmp, id, len);
     tmp[len] = '\0';
 
-    const bool had_id = s_boat_id[0] != '\0';
-    const bool id_changed = !had_id || strcmp(s_boat_id, tmp) != 0;
-
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
     if (err != ESP_OK) {
@@ -168,8 +164,5 @@ esp_err_t boat_id_set(const char *id, size_t len)
     s_boat_id[sizeof(s_boat_id) - 1U] = '\0';
     refresh_ble_name();
     ESP_LOGI(TAG, "saved id \"%s\" ble_name \"%s\"", s_boat_id, s_ble_name);
-    if (id_changed) {
-        boat_notehub_report_async(had_id ? BOAT_NOTE_CHANGED : BOAT_NOTE_SET);
-    }
     return ESP_OK;
 }

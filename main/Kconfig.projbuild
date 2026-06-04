@@ -270,121 +270,6 @@ menu "RegattaOne — TDMA (PPS-synchronized UTC slots)"
 
 endmenu
 
-menu "RegattaOne — Blues Notecard (legacy LoRaWAN, I2C)"
-
-    config REGATTAONE_NOTECARD_ENABLE
-        bool "Enable Blues Notecard over I2C (serial-over-I2C)"
-        default n
-        help
-            When enabled, GATT writes to 0xFEF7 run JSON transactions on the Notecard (default address 0x17).
-            Shares the SEN0140 I2C bus when that bus exists; otherwise creates a dedicated bus on NOTECARD pins.
-
-    config NOTECARD_I2C_ADDR_7BIT
-        hex "Notecard 7-bit I2C address"
-        default 0x17
-        help
-            Blues default is 0x17 unless changed with a card.io request.
-
-    config NOTECARD_I2C_FREQ_HZ
-        int "Notecard I2C clock (Hz)"
-        default 100000
-
-    config NOTECARD_I2C_PORT_NUM
-        int "I2C port (0 = I2C_NUM_0)"
-        range 0 1
-        default 0
-
-    config NOTECARD_I2C_SDA_GPIO
-        int "Standalone Notecard bus SDA GPIO (used only if SEN0140 bus is unavailable)"
-        range 0 21 if IDF_TARGET_ESP32C3
-        range 0 48 if IDF_TARGET_ESP32S3
-        range 0 48
-        default 6 if IDF_TARGET_ESP32C3
-        default 10
-
-    config NOTECARD_I2C_SCL_GPIO
-        int "Standalone Notecard bus SCL GPIO (used only if SEN0140 bus is unavailable)"
-        range 0 21 if IDF_TARGET_ESP32C3
-        range 0 48 if IDF_TARGET_ESP32S3
-        range 0 48
-        default 7 if IDF_TARGET_ESP32C3
-        default 11
-
-    config REGATTAONE_PRESENCE_SYNC_ENABLE
-        bool "Enable device presence sync (presence.qi / presence_ack.qo)"
-        depends on REGATTAONE_NOTECARD_ENABLE
-        default y
-        help
-            Poll Notehub inbound presence.qi, apply peer deltas locally, and ack on presence_ack.qo.
-
-    config PRESENCE_AUTO_POLL
-        bool "Automatic presence hub.sync polling (disable for manual BLE testing)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default y
-        help
-            When disabled, firmware does not start the background presence poll task.
-            Use the BLE Notecard JSON box to run hub.sync, file.changes, and note.get manually.
-            boat.qo boot notes still work.
-
-    config PRESENCE_POLL_INTERVAL_SEC
-        int "Presence hub.sync + poll interval (seconds)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default 300
-        range 60 86400
-        help
-            Used when PRESENCE_AUTO_POLL is enabled (background task) and for
-            hub.set periodic inbound interval when PRESENCE_HUB_CONTINUOUS is off.
-
-    config PRESENCE_DRAIN_IDLE_ATTEMPTS
-        int "Inbound drain retries after hub.sync (LoRa needs more)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default 20
-        range 1 60
-        help
-            After hub.sync, retry note.get this many times (3 s apart) waiting for
-            LoRaWAN downlink. 20 attempts ≈ 60 s of waiting per poll.
-            Only used when PRESENCE_AUTO_POLL is enabled.
-
-    config PRESENCE_SYNC_WAIT_SEC
-        int "Max seconds to wait for hub.sync completion (LoRa)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default 300
-        range 60 600
-        help
-            Poll hub.sync.status until sync-end. Do not issue another hub.sync
-            while status is sync in progress — that can prevent LoRa downlink.
-
-    config PRESENCE_HUB_CONTINUOUS
-        bool "Use continuous hub mode (faster LoRa inbound, more power)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default y
-        help
-            continuous + sync:true keeps the Notecard checking Notehub more
-            aggressively. Recommended for LoRaWAN (NOTE-LWUS) presence testing.
-
-    config PRESENCE_ACK_PORT
-        int "Notehub port for presence_ack.qo template"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default 12
-        range 1 99
-
-    config PRESENCE_MAX_PEERS
-        int "Max tracked peer devices"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default 32
-        range 4 128
-
-    config NOTEHUB_PRODUCT_UID
-        string "Notehub product UID for hub.set (empty = skip)"
-        depends on REGATTAONE_PRESENCE_SYNC_ENABLE
-        default "com.ellph.camkelly:regattaone"
-        help
-            Blues product UID for hub.set, e.g. com.company.project:product.
-            Must match the Notecard's Notehub product (see Notehub device Events).
-            Leave empty only if the Notecard is already provisioned via another tool.
-
-endmenu
-
 menu "RegattaOne — REYAX RYUW122 (UWB UART)"
 
     config REGATTAONE_RYUW122_ENABLE
@@ -452,24 +337,12 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
 
 endmenu
 
-menu "RegattaOne — MSP430"
-
-    config REGATTAONE_MSP430_ENABLE
-        bool "Enable MSP430 BSL GPIO + UART bridge"
-        default n
-        help
-            When disabled, the app does not touch RST/TEST GPIOs or the MSP430 UART peripheral.
-            Use this for IMU-only bring-up (SEN0140 + BLE). Enable when the MSP430 is connected.
-
-endmenu
-
 config REGATTAONE_SEN0140_ENABLE
     bool "Enable SEN0140 10-DOF IMU (I2C probe + BLE 0xFEF1 task)"
     default y
     help
         When disabled, the firmware does not create the SEN0140 I2C stack or IMU task.
-        Blues Notecard then uses the standalone I2C bus on NOTECARD_* GPIOs (same defaults as SEN0140 pins if you wire only the Notecard).
-        Turn this off for Notecard + UWB bring-up without a DFRobot SEN0140 board.
+        Turn this off for GPS + LoRa + UWB bring-up without a DFRobot SEN0140 board.
 
 menu "RegattaOne — SEN0140 I2C pins"
 

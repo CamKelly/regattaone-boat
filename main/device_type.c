@@ -7,7 +7,6 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 
-#include "boat_note.h"
 
 static const char *TAG = "device_type";
 static const char *NVS_NS = "boat";
@@ -142,9 +141,6 @@ esp_err_t device_type_set(device_type_t type)
         return ESP_ERR_INVALID_ARG;
     }
 
-    const bool had_type = s_type_in_nvs;
-    const bool type_changed = !had_type || s_type != type;
-
     const char *str = device_type_to_string(type);
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
@@ -163,8 +159,5 @@ esp_err_t device_type_set(device_type_t type)
     s_type = type;
     s_type_in_nvs = true;
     ESP_LOGI(TAG, "saved type \"%s\"", str);
-    if (type_changed) {
-        boat_notehub_report_async(had_type ? BOAT_NOTE_CHANGED : BOAT_NOTE_SET);
-    }
     return ESP_OK;
 }
