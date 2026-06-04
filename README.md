@@ -53,7 +53,9 @@ idf.py -p PORT flash monitor
 
 When **switching S3 boards**, delete `sdkconfig` first so pin defaults refresh.
 
-- **`components/RadioLib/`** — vendored [RadioLib](https://github.com/jgromes/RadioLib) v7.6.0 (ESP-IDF discovers it automatically; no component manager needed).
+**Waveshare Zero** default: **GPS + LoRa** on edge pins **GP4–GP13** only (no GP14–18); IMU/UWB off — [WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md).
+
+- **`components/RadioLib/`** — [RadioLib](https://github.com/jgromes/RadioLib) v7.6.0 (local component; works with component manager off). HAL: `main/EspHal.h` ([ESP-IDF example](https://github.com/jgromes/RadioLib/tree/master/examples/NonArduino/ESP-IDF) style, ESP32-S3/C3 `esp_driver_spi`).
 - **Pins:** **Component config → RegattaOne — ESP32-S3 board** (or board fragments via `scripts/idf-s3.sh`), then per-peripheral GPIO menus.
 
 After changing target: if CMake complains, run **`idf.py fullclean`** once, then **`idf.py set-target …`** and **`idf.py build`** again.
@@ -65,7 +67,7 @@ After changing target: if CMake complains, run **`idf.py fullclean`** once, then
 | `main/regattaone-laser.c` | `app_main`: NVS, I2C mux, SEN0140 (optional), BLE, SX1262 LoRa, RYUW122 UART task, MSP430 (optional). |
 | `main/ble_sen0140.c` / `.h` | NimBLE service **0xFEF0** and characteristics **0xFEF1–0xFEF9** (see table below). |
 | `main/sx1262_lora.c` / `.cpp` / `.h` | SX1262 LoRa over SPI (RadioLib). |
-| `main/radiolib_esp_hal.hpp` | ESP-IDF SPI master HAL for RadioLib. |
+| `main/EspHal.h` | RadioLib ESP-IDF HAL (`esp_driver_spi`; based on official ESP-IDF example). |
 | `main/ryuw122_uart.c` / `.h` | UART listener → BLE **0xFEF9** notifies. |
 | `main/i2c_bus_mux.c` / `.h` | Mutex so SEN0140 and Notecard can share one I2C bus. |
 | `main/sen0140_10dof.c` / `.h` | Optional DFRobot SEN0140 IMU (legacy; disable by not wiring / init failure). |

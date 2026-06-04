@@ -15,15 +15,18 @@ set(regattaone_srcs
     "msp430_uart_rx.c"
     "gps_nmea.c"
     "gps_timebase.c"
+    "gps_hw_timer.c"
+    "gps_pps_capture.c"
     "tdma.c"
+    "tdma_scheduler.c"
     "sx1262_lora.cpp")
 
-# RadioLib + SPI are always declared: sx1262_lora.cpp is compiled unconditionally
-# (body is #if CONFIG_REGATTAONE_SX1262_ENABLE). PRIV_REQUIRES so main's own
-# sources (radiolib_esp_hal.hpp) get RadioLib include paths.
+# RadioLib: components/RadioLib (vendored). HAL: main/EspHal.h (ESP-IDF example style, S3 SPI).
+# sx1262_lora.cpp is compiled unconditionally; body is #if CONFIG_REGATTAONE_SX1262_ENABLE.
 idf_component_register(SRCS ${regattaone_srcs}
                        PRIV_REQUIRES spi_flash esp_driver_i2c esp_driver_gpio esp_driver_uart
-                                     esp_driver_spi bt nvs_flash esp_timer esp_system RadioLib
+                                     esp_driver_spi esp_driver_gptimer esp_driver_mcpwm bt nvs_flash
+                                     esp_timer esp_system RadioLib
                        INCLUDE_DIRS "")
 
 # RadioLib headers trigger -Werror=overloaded-virtual under ESP-IDF GCC 15.

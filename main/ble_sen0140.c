@@ -564,7 +564,13 @@ static int gatt_svr_access_lora_tx(uint16_t conn_handle, uint16_t attr_handle, s
     s_lora_line_len = 0U;
     s_lora_line_buf[0] = '\0';
     esp_err_t err = sx1262_lora_transmit(buf, om_len);
-    return (err == ESP_OK) ? 0 : BLE_ATT_ERR_UNLIKELY;
+    if (err == ESP_OK) {
+        return 0;
+    }
+    if (err == ESP_ERR_NO_MEM) {
+        return BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
 }
 
 static int gatt_svr_access_lora_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
@@ -862,6 +868,11 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_lora_line_chr_val_handle)) {
             s_lora_line_notify_enabled = event->subscribe.cur_notify;
             ESP_LOGI(TAG, "lora line notify=%d", (int)s_lora_line_notify_enabled);
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+            if (s_lora_line_notify_enabled) {
+                sx1262_lora_on_line_notify_subscribed();
+            }
+#endif
         }
         if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_gps_line_chr_val_handle)) {
             s_gps_line_notify_enabled = event->subscribe.cur_notify;

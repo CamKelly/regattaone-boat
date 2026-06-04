@@ -49,11 +49,10 @@
                     autocomplete="off"
                     maxlength="32"
                     placeholder="e.g. port-bow"
-                    disabled
                   />
                 </div>
                 <div nz-col [nzFlex]="'none'">
-                  <button nz-button nzType="default" type="button" id="boat-id-save" disabled>Save</button>
+                  <button nz-button nzType="default" type="button" id="boat-id-save">Save</button>
                 </div>
               </div>
               <p id="boat-id-status" class="field-hint">Connect a device to set its boat ID.</p>
@@ -63,7 +62,7 @@
               <label class="field-label" for="device-type-select">Device type <code>0xFEFC</code></label>
               <div nz-row [nzGutter]="8">
                 <div nz-col [nzXs]="24" [nzSm]="16" [nzMd]="12" [nzLg]="8">
-                  <select id="device-type-select" class="native-select" disabled>
+                  <select id="device-type-select" class="native-select">
                     <option value="port">Port</option>
                     <option value="starboard">Starboard</option>
                     <option value="fixed_dgps_mark">Fixed DGPS mark</option>
@@ -72,7 +71,7 @@
                   </select>
                 </div>
                 <div nz-col [nzFlex]="'none'">
-                  <button nz-button nzType="default" type="button" id="device-type-save" disabled>Save</button>
+                  <button nz-button nzType="default" type="button" id="device-type-save">Save</button>
                 </div>
               </div>
               <p id="device-type-status" class="field-hint">Connect a device to set its type.</p>
@@ -138,8 +137,11 @@
           </nz-tab>
 
           <nz-tab nzTitle="LoRa · 0xFEF7">
+            <p id="lora-status" class="tab-hint">LoRa radio: connect BLE for status</p>
             <p class="tab-hint">
-              Send a UTF-8 payload over SX1262 (RadioLib). Received packets appear on <code>0xFEF8</code>.
+              TX is queued with CAD (listen-before-talk) and TTL expiry. Payloads use
+              <code>TTL=&lt;ms&gt;</code> then a newline, then UTF-8. RX, CRC errors, and status notify on
+              <code>0xFEF8</code>.
             </p>
             <div nz-row [nzGutter]="8" class="uwb-input-row">
               <div nz-col [nzFlex]="'auto'">
@@ -150,6 +152,20 @@
                   spellcheck="false"
                   autocomplete="off"
                   placeholder="Hello LoRa"
+                />
+              </div>
+              <div nz-col [nzFlex]="'none'">
+                <input
+                  nz-input
+                  id="lora-ttl-input"
+                  type="number"
+                  min="100"
+                  max="600000"
+                  step="1000"
+                  class="lora-ttl-input"
+                  title="Time-to-live (ms) for queued TX"
+                  aria-label="LoRa TX TTL milliseconds"
+                  value="30000"
                 />
               </div>
               <div nz-col [nzFlex]="'none'">

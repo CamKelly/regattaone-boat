@@ -98,6 +98,8 @@ interface BleBoatSession {
   deviceType: DeviceType;
   deviceTypeDraft: DeviceType;
   loraLineLogText: string;
+  /** Last `! STATUS:` line from firmware (0xFEF8). */
+  loraRadioStatus: string;
   gpsFix: GpsFix;
   uwbLineLogText: string;
   loraTxDraft: string;
@@ -202,23 +204,35 @@ async function saveDeviceTypeToDevice(): Promise<void> {
   }
 }
 
+function setFieldEnabled(el: HTMLInputElement | HTMLSelectElement | HTMLButtonElement | null, enabled: boolean): void {
+  if (!el) {
+    return;
+  }
+  el.disabled = !enabled;
+  if (enabled) {
+    el.removeAttribute("disabled");
+  } else {
+    el.setAttribute("disabled", "");
+  }
+}
+
 function syncDeviceTypeUi(session: BleBoatSession | null): void {
   const select = document.querySelector<HTMLSelectElement>("#device-type-select");
   const saveBtn = document.querySelector<HTMLButtonElement>("#device-type-save");
   const statusEl = document.querySelector("#device-type-status");
   const canEdit = session !== null && session.gatt.connected && session.charDeviceType !== null;
   if (select) {
-    select.disabled = !canEdit;
+    setFieldEnabled(select, canEdit);
     select.value = session?.deviceTypeDraft ?? "boat";
   }
-  if (saveBtn) {
-    saveBtn.disabled = !canEdit;
-  }
+  setFieldEnabled(saveBtn, canEdit);
   if (statusEl) {
     if (!session) {
       statusEl.textContent = "Connect a device to set its type.";
     } else if (!session.charDeviceType) {
       statusEl.textContent = "Flash firmware with device type support (0xFEFC) to enable.";
+    } else if (!session.gatt.connected) {
+      statusEl.textContent = `Stored on device: ${deviceTypeLabel(session.deviceType)}. Reconnect to edit.`;
     } else {
       statusEl.textContent = `Stored on device: ${deviceTypeLabel(session.deviceType)}`;
     }
@@ -262,6 +276,12 @@ async function saveBoatIdToDevice(): Promise<void> {
     }
     return;
   }
+  if (!session.gatt.connected) {
+    if (statusEl) {
+      statusEl.textContent = "Device not connected — reconnect before saving.";
+    }
+    return;
+  }
   const draft = input.value;
   const err = validateBoatIdDraft(draft);
   if (err) {
@@ -299,18 +319,20 @@ function syncBoatIdUi(session: BleBoatSession | null): void {
   const statusEl = document.querySelector("#boat-id-status");
   const canEdit = session !== null && session.gatt.connected && session.charBoatId !== null;
   if (input) {
-    input.disabled = !canEdit;
-    input.value = session?.boatIdDraft ?? "";
+    setFieldEnabled(input, canEdit);
+    if (document.activeElement !== input) {
+      input.value = session?.boatIdDraft ?? "";
+    }
     input.maxLength = BOAT_ID_MAX_LEN;
   }
-  if (saveBtn) {
-    saveBtn.disabled = !canEdit;
-  }
+  setFieldEnabled(saveBtn, canEdit);
   if (statusEl) {
     if (!session) {
       statusEl.textContent = "Connect a device to set its boat ID.";
     } else if (!session.charBoatId) {
       statusEl.textContent = "Flash firmware with boat ID support (0xFEFB) to enable.";
+    } else if (!session.gatt.connected) {
+      statusEl.textContent = `Stored on device: ${session.boatId || "—"}. Reconnect to edit.`;
     } else if (session.boatId) {
       statusEl.textContent = `Stored on device: ${session.boatId}`;
     } else {
@@ -664,6 +686,13 @@ function appendStreamLine(session: BleBoatSession, field: "loraLineLogText", chu
   }
 }
 
+function defaultLoraRadioStatus(session: BleBoatSession): string {
+  if (!session.charLoraTx || !session.charLoraLine) {
+    return "unavailable — flash CONFIG_REGATTAONE_SX1262_ENABLE=y and reconnect";
+  }
+  return session.gatt.connected ? "waiting for notify…" : "not connected";
+}
+
 function appendUwbLineIfNew(session: BleBoatSession, chunk: string, gen: number): void {
   if (gen !== session.activeUwbGen || chunk.length === 0) {
     return;
@@ -704,6 +733,12 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
     await setImuNotifications(session, true);
     await readBoatIdFromDevice(session);
     await readDeviceTypeFromDevice(session);
+    syncBoatIdUi(session);
+    syncDeviceTypeUi(session);
+    if (!session.loraRadioStatus) {
+      session.loraRadioStatus = defaultLoraRadioStatus(session);
+    }
+    renderLoraStatus(session);
     return session.gatt.connected;
   } catch (e) {
     console.error("BLE activate failed", session.name, e);
@@ -884,8 +919,31 @@ function renderLoraLog(session: BleBoatSession): void {
   el.scrollTop = el.scrollHeight;
 }
 
-function appendLoraLog(session: BleBoatSession, chunk: string): void {
+function renderLoraStatus(session: BleBoatSession): void {
+  if (session.deviceId !== activeSessionId) {
+    return;
+  }
+  const el = document.querySelector("#lora-status");
+  if (!el) {
+    return;
+  }
+  const status = session.loraRadioStatus.trim();
+  el.textContent = status.length > 0 ? `LoRa radio: ${status}` : "LoRa radio: (no status yet)";
+}
+
+function ingestLoraLine(session: BleBoatSession, chunk: string): void {
   appendStreamLine(session, "loraLineLogText", chunk);
+  for (const line of chunk.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("! STATUS:")) {
+      session.loraRadioStatus = trimmed.slice("! STATUS:".length).trim();
+      renderLoraStatus(session);
+    }
+  }
+}
+
+function appendLoraLog(session: BleBoatSession, chunk: string): void {
+  ingestLoraLine(session, chunk);
 }
 
 function clearUwbLog(session: BleBoatSession | null): void {
@@ -955,6 +1013,7 @@ function loadSessionToUi(session: BleBoatSession): void {
   }
   renderImuDisplay(session);
   renderLoraLog(session);
+  renderLoraStatus(session);
   renderGpsDisplay(session);
   renderUwbLog(session);
   updateBleToolbar();
@@ -977,8 +1036,12 @@ function clearUiPanels(): void {
   if (uwbInput) {
     uwbInput.value = "";
   }
+  const loraStatus = document.querySelector("#lora-status");
   const loraLog = document.querySelector("#lora-line-log");
   const uwbLog = document.querySelector("#uwb-line-log");
+  if (loraStatus) {
+    loraStatus.textContent = "LoRa radio: connect BLE for status";
+  }
   if (loraLog) {
     loraLog.textContent = "";
   }
@@ -1088,7 +1151,7 @@ function createNotifyHandlers(session: BleBoatSession): void {
       return;
     }
     const chunk = new TextDecoder().decode(v);
-    appendStreamLine(session, "loraLineLogText", chunk);
+    ingestLoraLine(session, chunk);
   };
 
   session.onGpsLineNotify = (ev: Event) => {
@@ -1161,14 +1224,33 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
   updateBleToolbar();
 }
 
+function parseLoraTtlMs(): number {
+  const ttlInput = document.querySelector<HTMLInputElement>("#lora-ttl-input");
+  const raw = Number.parseInt(ttlInput?.value ?? "", 10);
+  if (!Number.isFinite(raw) || raw < 100) {
+    return 30000;
+  }
+  return Math.min(raw, 600000);
+}
+
 async function sendLoraTx(): Promise<void> {
   const session = getActiveSession();
   if (!session?.charLoraTx) {
-    const el = document.querySelector("#lora-line-log");
-    if (el) {
-      el.textContent =
-        "LoRa TX characteristic 0xFEF7 unavailable.\n" +
-        "Flash firmware with CONFIG_REGATTAONE_SX1262_ENABLE=y and reconnect.";
+    const msg =
+      "! LoRa TX 0xFEF7 unavailable — flash CONFIG_REGATTAONE_SX1262_ENABLE=y and reconnect.\n";
+    if (session) {
+      session.loraRadioStatus = "unavailable — SX1262 not enabled in firmware";
+      renderLoraStatus(session);
+      appendLoraLog(session, msg);
+    } else {
+      const statusEl = document.querySelector("#lora-status");
+      if (statusEl) {
+        statusEl.textContent = "LoRa radio: connect a BLE device first";
+      }
+      const logEl = document.querySelector("#lora-line-log");
+      if (logEl) {
+        logEl.textContent = msg;
+      }
     }
     return;
   }
@@ -1180,14 +1262,16 @@ async function sendLoraTx(): Promise<void> {
   if (!payload) {
     return;
   }
+  const ttlMs = parseLoraTtlMs();
+  const body = `TTL=${ttlMs}\n${payload}`;
   session.loraBusy = true;
   session.loraTxDraft = input?.value ?? "";
-  appendLoraLog(session, `>> ${payload}\n`);
+  appendLoraLog(session, `>> queue ttl=${ttlMs} ms: ${payload}\n`);
   try {
     const imuWasOn = await pauseImuForComms(session);
     try {
       await ensureLoraComms(session);
-      await gattWrite(session, "lora", new TextEncoder().encode(payload));
+      await gattWrite(session, "lora", new TextEncoder().encode(body));
     } finally {
       await restoreImuAfterComms(session, imuWasOn);
     }
@@ -1271,6 +1355,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     deviceType: "boat",
     deviceTypeDraft: "boat",
     loraLineLogText: "",
+    loraRadioStatus: "",
     gpsFix: defaultGpsFix(),
     uwbLineLogText: "",
     loraTxDraft: "",
@@ -1291,6 +1376,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
+  session.loraRadioStatus = defaultLoraRadioStatus(session);
   createNotifyHandlers(session);
   session.gatt = await connectNativeGatt(pick.deviceId, session.onDisconnected);
   await bindSessionCharacteristics(session);
@@ -1327,6 +1413,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     deviceType: "boat",
     deviceTypeDraft: "boat",
     loraLineLogText: "",
+    loraRadioStatus: "",
     gpsFix: defaultGpsFix(),
     uwbLineLogText: "",
     loraTxDraft: "",
@@ -1347,6 +1434,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
+  session.loraRadioStatus = defaultLoraRadioStatus(session);
   createNotifyHandlers(session);
 
   await bindSessionCharacteristics(session);

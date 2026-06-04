@@ -58,26 +58,26 @@ When switching boards, delete **`sdkconfig`** (or run `idf.py fullclean`) so sta
 
 ## Pin summary — Waveshare ESP32-S3-Zero
 
-Right-edge **GP12–GP14 / GP9–GP7 / GP10–GP11** match the DevKit Mini LoRa + IMU cluster. Left-edge **GP4 / GP5** suit GPS UART. **GP17 / GP18** are bottom pads for UWB.
+Default firmware for **`waveshare-zero`** is **GPS + LoRa only** on **castellated edge pins GP4–GP13**. These pads are **not used** on this plan: **GP14–GP18**, **GP38–GP42**, **GP45** (and **GP33–GP37** are not broken out).
 
 | Function | Signal | SoC GPIO | Zero label | Notes |
 | -------- | ------ | -------- | ---------- | ----- |
-| **IMU I2C** | SDA | **10** | GP10 | Right edge |
-| | SCL | **11** | GP11 | |
-| **LoRa SPI** | MOSI | **13** | GP13 | Same as DevKit Mini |
-| | MISO | **14** | GP14 | |
-| | SCLK | **12** | GP12 | SPI2 / FSPI |
+| **GPS UART** | ESP TX → GPS RX | **4** | GP4 | UART2 |
+| | ESP RX ← GPS TX | **5** | GP5 | |
+| **GPS PPS** | — | **-1** | — | Unwired (GP16 not in plan). NMEA still works |
+| **LoRa SPI** | MOSI | **13** | GP13 | SPI2 / FSPI |
+| | MISO | **10** | GP10 | Not GP14 |
+| | SCLK | **12** | GP12 | |
 | | CS | **9** | GP9 | |
 | | RESET | **8** | GP8 | |
 | | DIO1 | **7** | GP7 | |
 | | BUSY | **6** | GP6 | |
-| **GPS UART** | ESP TX → GPS RX | **4** | GP4 | Left edge |
-| | ESP RX ← GPS TX | **5** | GP5 | UART2 |
-| **GPS PPS** | 1 Hz pulse in | **16** | GP16 | **Not GP21** — onboard WS2812 RGB |
-| **UWB UART** | ESP TX → module RX | **17** | GP17 | Bottom pad |
-| | ESP RX ← module TX | **18** | GP18 | Bottom pad |
+| **IMU I2C** | — | — | — | Disabled (`REGATTAONE_SEN0140_ENABLE=n`) |
+| **UWB UART** | — | — | — | Disabled (`REGATTAONE_RYUW122_ENABLE=n`) |
 
-**Zero-specific:** **GP21** drives the onboard **WS2812** LED — do not use for PPS or peripherals. **GP45** is a strapping pin (bottom pad). **TX/RX** silkscreen pins are UART0 / USB-serial — leave for console.
+**Zero-specific:** **GP21** = onboard **WS2812** (do not use). **TX/RX** silkscreen = **GP43/GP44** (USB console). Enable IMU/UWB or PPS later in **menuconfig** only if you wire pads outside this plan.
+
+**Solder checklist (GPS + LoRa):** GP4, GP5, GP6, GP7, GP8, GP9, GP10, GP12, GP13, plus **3.3 V** and **GND** to each module.
 
 ---
 
@@ -99,7 +99,7 @@ Typical module (Ebyte E22, Waveshare SX1262, etc.):
 
 SPI host: **SPI2 (FSPI)** at **2 MHz** by default (`SX1262_SPI_FREQ_HZ`). Center frequency default **915 MHz** (`SX1262_FREQ_HZ`); change for your region/module.
 
-Firmware uses **[RadioLib](https://github.com/jgromes/RadioLib)** vendored in `components/RadioLib/`. `main/sx1262_lora.cpp` initializes the SX1262 and runs a background RX task (logs received packets to serial). Pin macros: `main/sx1262_lora.h`.
+Firmware uses **[RadioLib](https://github.com/jgromes/RadioLib)** in `components/RadioLib/` with `main/EspHal.h` ([ESP-IDF example](https://github.com/jgromes/RadioLib/tree/master/examples/NonArduino/ESP-IDF) HAL pattern, S3 SPI). `main/sx1262_lora.cpp` drives the SX1262; a background RX task logs packets to serial/BLE. Pin macros: `main/sx1262_lora.h`.
 
 ---
 

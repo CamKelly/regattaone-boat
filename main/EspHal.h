@@ -1,10 +1,20 @@
-#pragma once
+/*
+ * RadioLib ESP-IDF hardware abstraction layer.
+ *
+ * Based on the official Non-Arduino example:
+ * https://github.com/jgromes/RadioLib/tree/master/examples/NonArduino/ESP-IDF
+ *
+ * Upstream EspHal.h targets ESP32 only (legacy SPI register / DPORT). This project
+ * uses esp_driver_spi for ESP32-S3 and ESP32-C3 (and ESP32). NSS/CS is driven by
+ * RadioLib Module, not the SPI peripheral (spics_io_num = -1).
+ */
+#ifndef ESP_HAL_H
+#define ESP_HAL_H
 
 #include "Hal.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -20,7 +30,6 @@ static void IRAM_ATTR radiolib_isr_trampoline(void *radiolib_func)
     }
 }
 
-/** ESP-IDF SPI master HAL for RadioLib (ESP32 / ESP32-S3 / ESP32-C3). */
 class EspHal : public RadioLibHal {
  public:
     EspHal(int8_t sck, int8_t miso, int8_t mosi, spi_host_device_t host, uint32_t spi_clock_hz)
@@ -129,13 +138,11 @@ class EspHal : public RadioLibHal {
 
         pinMode(pin, GPIO_MODE_INPUT);
         const uint32_t start = micros();
-        const uint32_t deadline = start + timeout;
 
         while (digitalRead(pin) == state) {
             if ((micros() - start) > timeout) {
                 return 0;
             }
-            (void)deadline;
         }
         return (long)(micros() - start);
     }
@@ -198,3 +205,5 @@ class EspHal : public RadioLibHal {
     bool spi_initialized_ = false;
     static inline bool isr_service_installed_ = false;
 };
+
+#endif /* ESP_HAL_H */

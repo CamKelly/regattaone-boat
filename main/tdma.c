@@ -5,6 +5,10 @@
 #include "gps_timebase.h"
 #include "sdkconfig.h"
 
+#if CONFIG_TDMA_GPTIMER_SCHEDULER
+#include "tdma_scheduler.h"
+#endif
+
 #if CONFIG_REGATTAONE_TDMA_ENABLE
 
 static uint32_t hash_boat_id_slot(void)
@@ -90,6 +94,11 @@ bool tdma_can_transmit_now(void)
     if (!gps_timebase_utc_valid()) {
         return false;
     }
+#if CONFIG_TDMA_GPTIMER_SCHEDULER
+    if (tdma_scheduler_in_window()) {
+        return true;
+    }
+#endif
     return tdma_in_tx_window(gps_timebase_now_us());
 }
 

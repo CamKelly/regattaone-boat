@@ -9,15 +9,38 @@
 #include "freertos/portmacro.h"
 #include "sdkconfig.h"
 
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+#include "gps_hw_timer.h"
+#endif
+
+#if CONFIG_TDMA_GPTIMER_SCHEDULER
+#include "tdma_scheduler.h"
+#endif
+
 static const char *TAG = "gps_time";
 
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static volatile uint32_t s_pps_count;
-static volatile int64_t s_last_pps_esp_us;
+static volatile int64_t s_last_pps_mono_us;
 static volatile int64_t s_utc_us_at_last_pps;
 static volatile bool s_pps_seen;
 static volatile bool s_utc_valid;
+
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+static volatile uint32_t s_last_cap_ticks;
+static volatile uint32_t s_prev_cap_ticks;
+static volatile uint32_t s_last_cap_delta_us;
+#endif
+
+static int64_t mono_now_us(void)
+{
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+    return (int64_t)gps_hw_timer_now_ticks();
+#else
+    return esp_timer_get_time();
+#endif
+}
 
 static int parse_two_digits(const char *p, int *out)
 {
@@ -96,14 +119,14 @@ static const char *nmea_field(const char *line, int index)
 static void snap_utc_from_rmc(int64_t utc_sec)
 {
     portENTER_CRITICAL(&s_mux);
-    const int64_t esp_now = esp_timer_get_time();
-    if (s_pps_seen && s_last_pps_esp_us > 0) {
-        const int64_t elapsed_us = esp_now - (int64_t)s_last_pps_esp_us;
+    const int64_t mono_now = mono_now_us();
+    if (s_pps_seen && s_last_pps_mono_us > 0) {
+        const int64_t elapsed_us = mono_now - s_last_pps_mono_us;
         const int64_t elapsed_sec = elapsed_us / 1000000LL;
         s_utc_us_at_last_pps = utc_sec * 1000000LL - elapsed_sec * 1000000LL;
     } else {
         s_utc_us_at_last_pps = utc_sec * 1000000LL;
-        s_last_pps_esp_us = esp_now;
+        s_last_pps_mono_us = mono_now;
     }
     s_utc_valid = true;
     portEXIT_CRITICAL(&s_mux);
@@ -114,10 +137,15 @@ void gps_timebase_init(void)
 {
     portENTER_CRITICAL(&s_mux);
     s_pps_count = 0;
-    s_last_pps_esp_us = 0;
+    s_last_pps_mono_us = 0;
     s_utc_us_at_last_pps = 0;
     s_pps_seen = false;
     s_utc_valid = false;
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+    s_last_cap_ticks = 0;
+    s_prev_cap_ticks = 0;
+    s_last_cap_delta_us = 0;
+#endif
     portEXIT_CRITICAL(&s_mux);
 }
 
@@ -125,7 +153,7 @@ void IRAM_ATTR gps_timebase_on_pps_isr(int64_t esp_timer_us)
 {
     portENTER_CRITICAL_ISR(&s_mux);
     s_pps_count++;
-    s_last_pps_esp_us = esp_timer_us;
+    s_last_pps_mono_us = esp_timer_us;
     s_pps_seen = true;
     if (s_utc_valid) {
         if (s_pps_count > 1U) {
@@ -134,6 +162,36 @@ void IRAM_ATTR gps_timebase_on_pps_isr(int64_t esp_timer_us)
     }
     portEXIT_CRITICAL_ISR(&s_mux);
 }
+
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+
+void IRAM_ATTR gps_timebase_on_pps_hw_isr(uint64_t cap_ticks)
+{
+    portENTER_CRITICAL_ISR(&s_mux);
+    s_pps_count++;
+    s_prev_cap_ticks = s_last_cap_ticks;
+    s_last_cap_ticks = (uint32_t)cap_ticks;
+    if (s_pps_count > 1U && s_prev_cap_ticks > 0U) {
+        s_last_cap_delta_us = s_last_cap_ticks - s_prev_cap_ticks;
+    }
+    s_last_pps_mono_us = (int64_t)cap_ticks;
+    s_pps_seen = true;
+    if (s_utc_valid) {
+        if (s_pps_count > 1U) {
+            s_utc_us_at_last_pps += 1000000LL;
+        }
+    }
+    portEXIT_CRITICAL_ISR(&s_mux);
+}
+
+#else
+
+void IRAM_ATTR gps_timebase_on_pps_hw_isr(uint64_t cap_ticks)
+{
+    (void)cap_ticks;
+}
+
+#endif
 
 void gps_timebase_feed_nmea(const char *line, size_t len)
 {
@@ -159,8 +217,8 @@ void gps_timebase_feed_nmea(const char *line, size_t len)
     portENTER_CRITICAL(&s_mux);
     if (s_utc_valid && s_pps_seen) {
         const int64_t estimate_sec = s_utc_us_at_last_pps / 1000000LL;
-        const int64_t esp_now = esp_timer_get_time();
-        const int64_t est_now_sec = estimate_sec + (esp_now - (int64_t)s_last_pps_esp_us) / 1000000LL;
+        const int64_t mono_now = mono_now_us();
+        const int64_t est_now_sec = estimate_sec + (mono_now - s_last_pps_mono_us) / 1000000LL;
         if (utc_sec >= est_now_sec - 1LL && utc_sec <= est_now_sec + 1LL) {
             portEXIT_CRITICAL(&s_mux);
             return;
@@ -169,6 +227,10 @@ void gps_timebase_feed_nmea(const char *line, size_t len)
     portEXIT_CRITICAL(&s_mux);
 
     snap_utc_from_rmc(utc_sec);
+
+#if CONFIG_TDMA_GPTIMER_SCHEDULER
+    tdma_scheduler_arm_next();
+#endif
 }
 
 int64_t gps_timebase_now_us(void)
@@ -176,14 +238,14 @@ int64_t gps_timebase_now_us(void)
     portENTER_CRITICAL(&s_mux);
     const bool valid = s_utc_valid && s_pps_seen;
     const int64_t utc_pps = s_utc_us_at_last_pps;
-    const int64_t pps_esp = s_last_pps_esp_us;
+    const int64_t pps_mono = s_last_pps_mono_us;
     portEXIT_CRITICAL(&s_mux);
 
-    if (!valid || pps_esp <= 0) {
+    if (!valid || pps_mono <= 0) {
         return 0;
     }
-    const int64_t now_esp = esp_timer_get_time();
-    return utc_pps + (now_esp - pps_esp);
+    const int64_t now_mono = mono_now_us();
+    return utc_pps + (now_mono - pps_mono);
 }
 
 int64_t gps_timebase_utc_sec_at_pps(void)
@@ -205,10 +267,30 @@ uint32_t gps_timebase_pps_count(void)
 int64_t gps_timebase_last_pps_esp_us(void)
 {
     portENTER_CRITICAL(&s_mux);
-    const int64_t t = s_last_pps_esp_us;
+    const int64_t t = s_last_pps_mono_us;
     portEXIT_CRITICAL(&s_mux);
     return t;
 }
+
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+
+uint32_t gps_timebase_last_pps_cap_ticks(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    const uint32_t t = s_last_cap_ticks;
+    portEXIT_CRITICAL(&s_mux);
+    return t;
+}
+
+uint32_t gps_timebase_last_pps_cap_delta_us(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    const uint32_t d = s_last_cap_delta_us;
+    portEXIT_CRITICAL(&s_mux);
+    return d;
+}
+
+#endif
 
 bool gps_timebase_pps_locked(void)
 {

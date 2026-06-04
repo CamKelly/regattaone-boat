@@ -5,9 +5,12 @@ export const BLE_SERVICE_UUID = "0000fef0-0000-1000-8000-00805f9b34fb";
 /** Notify: binary IMU packet (`sen0140_ble_imu_pkt_t`, 42 bytes v2). */
 export const BLE_IMU_CHAR_UUID = "0000fef1-0000-1000-8000-00805f9b34fb";
 
-/** Write UTF-8 LoRa payload (SX1262 / RadioLib); RX lines notify on FEF8. */
+/**
+ * Write LoRa TX request (SX1262): optional `TTL=<ms>\n` prefix, then UTF-8 payload.
+ * Firmware queues with CAD/CSMA backoff; events notify on FEF8.
+ */
 export const BLE_LORA_TX_CHAR_UUID = "0000fef7-0000-1000-8000-00805f9b34fb";
-/** Notify: UTF-8 LoRa RX lines from SX1262. */
+/** Notify: LoRa RX, CRC errors, TX queue/CAD events, and `! STATUS:` radio health. */
 export const BLE_LORA_LINE_CHAR_UUID = "0000fef8-0000-1000-8000-00805f9b34fb";
 /** Notify: UTF-8 NMEA 0183 lines from GPS UART. */
 export const BLE_GPS_LINE_CHAR_UUID = "0000fefd-0000-1000-8000-00805f9b34fb";

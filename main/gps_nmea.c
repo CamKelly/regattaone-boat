@@ -17,6 +17,12 @@
 #include "ble_sen0140.h"
 #include "gps_timebase.h"
 
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+#include "gps_hw_timer.h"
+#include "gps_pps_capture.h"
+#include "tdma_scheduler.h"
+#endif
+
 static const char *TAG = "gps";
 
 #define GPS_LINE_MAX 256
@@ -44,21 +50,37 @@ static void gps_emit_line(char *line, size_t *li)
 
 static void gps_emit_pps_ble(void)
 {
-    char line[96];
-    const int64_t esp_us = gps_timebase_last_pps_esp_us();
+    char line[128];
+    const int64_t mono_us = gps_timebase_last_pps_esp_us();
     const uint32_t count = gps_timebase_pps_count();
     const int64_t utc_us = gps_timebase_now_us();
     int n;
+
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+    const uint32_t cap = gps_timebase_last_pps_cap_ticks();
+    const uint32_t delta = gps_timebase_last_pps_cap_delta_us();
     if (gps_timebase_utc_valid() && utc_us > 0) {
-        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu,%lld\n", (long long)esp_us, (unsigned long)count,
+        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu,%lld,%lu,%lu\n", (long long)mono_us,
+                     (unsigned long)count, (long long)utc_us, (unsigned long)cap, (unsigned long)delta);
+    } else {
+        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu,,%lu,%lu\n", (long long)mono_us, (unsigned long)count,
+                     (unsigned long)cap, (unsigned long)delta);
+    }
+#else
+    if (gps_timebase_utc_valid() && utc_us > 0) {
+        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu,%lld\n", (long long)mono_us, (unsigned long)count,
                      (long long)utc_us);
     } else {
-        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu\n", (long long)esp_us, (unsigned long)count);
+        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu\n", (long long)mono_us, (unsigned long)count);
     }
+#endif
+
     if (n > 0 && (size_t)n < sizeof(line)) {
         ble_sen0140_gps_line_notify((const uint8_t *)line, (size_t)n);
     }
 }
+
+#if !CONFIG_REGATTAONE_GPS_HW_CAPTURE
 
 static void IRAM_ATTR gps_pps_isr(void *arg)
 {
@@ -72,7 +94,7 @@ static void IRAM_ATTR gps_pps_isr(void *arg)
     portYIELD_FROM_ISR(woken);
 }
 
-static esp_err_t gps_pps_init(void)
+static esp_err_t gps_pps_gpio_init(void)
 {
 #if GPS_PPS_GPIO < 0
     ESP_LOGW(TAG, "PPS disabled (GPS_PPS_GPIO=-1) — TDMA requires PPS wired");
@@ -98,10 +120,12 @@ static esp_err_t gps_pps_init(void)
         ESP_LOGE(TAG, "pps isr add GPIO%d: %s", GPS_PPS_GPIO, esp_err_to_name(err));
         return err;
     }
-    ESP_LOGI(TAG, "PPS on GPIO%d → UTC timebase (1 µs) for TDMA", GPS_PPS_GPIO);
+    ESP_LOGI(TAG, "PPS on GPIO%d → UTC timebase (esp_timer, legacy)", GPS_PPS_GPIO);
     return ESP_OK;
 #endif
 }
+
+#endif /* !CONFIG_REGATTAONE_GPS_HW_CAPTURE */
 
 static void gps_uart_task(void *arg)
 {
@@ -167,17 +191,39 @@ esp_err_t gps_nmea_start(void)
     ESP_LOGI(TAG, "UART%d: TX=GPIO%d RX=GPIO%d @ %d baud (NMEA → BLE; UTC from RMC + PPS)",
              GPS_UART_PORT_NUM, GPS_UART_TX_GPIO, GPS_UART_RX_GPIO, GPS_UART_BAUD);
 
-    err = gps_pps_init();
-    if (err != ESP_OK) {
-        uart_driver_delete(GPS_UART_PORT_NUM);
-        return err;
-    }
+    esp_err_t pps_err = ESP_OK;
+#if !CONFIG_REGATTAONE_GPS_HW_CAPTURE
+    pps_err = gps_pps_gpio_init();
+#endif
 
     const uint32_t stack = 4096;
     if (xTaskCreate(gps_uart_task, "gps_nmea", stack, NULL, 5, &s_gps_task) != pdPASS) {
         s_gps_task = NULL;
         uart_driver_delete(GPS_UART_PORT_NUM);
         return ESP_ERR_NO_MEM;
+    }
+
+#if CONFIG_REGATTAONE_GPS_HW_CAPTURE
+    ESP_RETURN_ON_ERROR(gps_hw_timer_init(), TAG, "hw timer init");
+#if CONFIG_TDMA_GPTIMER_SCHEDULER
+    {
+        esp_err_t sched_err = tdma_scheduler_init();
+        if (sched_err != ESP_OK) {
+            ESP_LOGW(TAG, "TDMA scheduler: %s", esp_err_to_name(sched_err));
+        }
+    }
+#else
+    ESP_RETURN_ON_ERROR(gps_hw_timer_start(), TAG, "hw timer start");
+#endif
+    pps_err = gps_pps_capture_init(s_gps_task);
+    if (pps_err != ESP_OK) {
+        ESP_LOGE(TAG, "MCPWM PPS capture: %s", esp_err_to_name(pps_err));
+    }
+#endif
+
+    if (pps_err != ESP_OK) {
+        uart_driver_delete(GPS_UART_PORT_NUM);
+        return pps_err;
     }
     return ESP_OK;
 }

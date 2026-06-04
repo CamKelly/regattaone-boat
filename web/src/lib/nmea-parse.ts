@@ -27,8 +27,12 @@ export interface GpsFix {
   /** 1 Hz PPS edges from firmware ($PREGPPS). */
   ppsCount: number | null;
   ppsLastEdgeUs: number | null;
-  /** UTC µs at last PPS when firmware sends 4-field $PREGPPS. */
+  /** UTC µs at last PPS when firmware sends 4+ field $PREGPPS. */
   ppsUtcUs: number | null;
+  /** MCPWM latched capture ticks at last PPS (hw capture path). */
+  ppsCapTicks: number | null;
+  /** µs between last two PPS captures (expect ~1000000). */
+  ppsCapDeltaUs: number | null;
   ppsUpdatedAtMs: number;
 }
 
@@ -59,6 +63,8 @@ export function defaultGpsFix(): GpsFix {
     ppsCount: null,
     ppsLastEdgeUs: null,
     ppsUtcUs: null,
+    ppsCapTicks: null,
+    ppsCapDeltaUs: null,
     ppsUpdatedAtMs: 0,
   };
 }
@@ -378,11 +384,13 @@ function applyGsv(fix: GpsFix, fields: string[]): void {
   fix.lastSentence = "GSV";
 }
 
-/** Firmware PPS tick: $PREGPPS,<esp_time_us>,<pulse_count> (no NMEA checksum). */
+/** Firmware PPS tick: $PREGPPS,<mono_us>,<count>[,<utc_us>[,<cap_ticks>,<cap_delta_us>]] (no checksum). */
 function applyPregpps(fix: GpsFix, fields: string[]): void {
   const us = parseNum(fields[1]);
   const count = parseIntField(fields[2]);
-  const utcUs = fields[3] !== undefined ? parseNum(fields[3]) : null;
+  const utcUs = fields[3] !== undefined && fields[3].length > 0 ? parseNum(fields[3]) : null;
+  const capTicks = fields[4] !== undefined ? parseIntField(fields[4]) : null;
+  const capDeltaUs = fields[5] !== undefined ? parseIntField(fields[5]) : null;
   if (count !== null) {
     fix.ppsCount = count;
   }
@@ -391,6 +399,12 @@ function applyPregpps(fix: GpsFix, fields: string[]): void {
   }
   if (utcUs !== null) {
     fix.ppsUtcUs = utcUs;
+  }
+  if (capTicks !== null) {
+    fix.ppsCapTicks = capTicks;
+  }
+  if (capDeltaUs !== null) {
+    fix.ppsCapDeltaUs = capDeltaUs;
   }
   fix.ppsUpdatedAtMs = performance.now();
   fix.lastSentence = "PPS";

@@ -11,42 +11,68 @@ Wiring and GPIO pins: **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)
 | Layer | Source files | Role |
 | ----- | ------------ | ---- |
 | **GPS UART** | `main/gps_nmea.c` | NMEA → BLE `0xFEFD`; feeds UTC from `$xxRMC` |
-| **PPS GPIO** | `main/gps_nmea.c` | 1 Hz rising edge → UTC second boundaries |
-| **UTC clock** | `main/gps_timebase.c` | PPS-disciplined **UTC microseconds** (1 µs resolution) |
-| **TDMA** | `main/tdma.c` | UTC-aligned TX slots for LoRa / UWB |
+| **PPS capture** | `main/gps_pps_capture.c` | MCPWM hardware latch on rising edge (ESP32-S3) |
+| **HW clock** | `main/gps_hw_timer.c` | 1 MHz GPTimer; synced to MCPWM count each PPS |
+| **UTC clock** | `main/gps_timebase.c` | PPS-disciplined **UTC microseconds** |
+| **TDMA math** | `main/tdma.c` | UTC-aligned slot index / guards |
+| **TDMA alarms** | `main/tdma_scheduler.c` | GPTimer one-shot open/close window |
 | **LoRa gate** | `main/sx1262_lora.cpp` | `sx1262_lora_transmit()` blocked outside slot |
-| **UWB gate** | `main/ryuw122_uart.c` | `ryuw122_tdma_can_use_now()` for timed UWB |
+| **UWB gate** | `main/ryuw122_uart.c` | `ryuw122_tdma_can_use_now()` |
 
-**Precision:** ESP32 uses `esp_timer_get_time()` — **1 µs** ticks. PPS is captured in a GPIO ISR; between PPS edges UTC time is linearly extrapolated. This is suitable for millisecond-scale TDMA slots; absolute jitter is dominated by PPS ISR latency (typically tens of µs).
+**ESP32-S3 default (v2):** PPS → **MCPWM capture** (hardware timestamp) → **GPTimer** synced each second → UTC extrapolation + optional **GPTimer slot alarms**.
+
+**Legacy (v1):** GPIO ISR + `esp_timer_get_time()` — disable **MCPWM hardware capture** in menuconfig.
 
 ---
 
 ## Requirements
 
 1. **`CONFIG_REGATTAONE_GPS_ENABLE=y`**
-2. **PPS wired** — `GPS_PPS_GPIO` ≥ 0 (DevKit Mini: **21**, Waveshare Zero: **16**). Do **not** use `-1` if you need TDMA.
-3. **GPS fix** — valid `$GNRMC` / `$GPRMC` with status `A` for UTC alignment.
-4. **`CONFIG_REGATTAONE_TDMA_ENABLE=y`** (default when GPS is on).
+2. **PPS wired** — `GPS_PPS_GPIO` ≥ 0 (DevKit Mini: **21**, Waveshare Zero: **16**).
+3. **GPS fix** — valid `$GNRMC` / `$GPRMC` with status `A`.
+4. **`CONFIG_REGATTAONE_TDMA_ENABLE=y`**
+5. **ESP32-S3** for hardware capture (default on S3 builds).
 
 Until **PPS + RMC** sync: `gps_timebase_utc_valid()` is false and TDMA TX is blocked.
 
 ---
 
+## menuconfig
+
+**RegattaOne — GPS**
+
+| Kconfig | Default (S3) | Description |
+| ------- | ------------- | ----------- |
+| `REGATTAONE_GPS_HW_CAPTURE` | y | MCPWM PPS capture + GPTimer timebase |
+
+**RegattaOne — TDMA**
+
+| Kconfig | Default | Description |
+| ------- | ------- | ----------- |
+| `REGATTAONE_TDMA_ENABLE` | y | Master enable |
+| `TDMA_SLOT_US` | 100000 | Slot length (µs) |
+| `TDMA_NUM_SLOTS` | 10 | Slots per frame |
+| `TDMA_DEVICE_SLOT` | -1 | Slot index (-1 = hash boat ID) |
+| `TDMA_GUARD_US` | 2000 | Guard band (µs) |
+| `TDMA_GPTIMER_SCHEDULER` | y | Hardware alarms for slot open/close |
+| `TDMA_ENFORCE_LORA_TX` | y | Block LoRa outside slot |
+| `TDMA_ENFORCE_UWB` | y | Gate UWB on slot |
+
+---
+
 ## UTC timebase
 
-### PPS (pulse per second)
+### PPS (hardware capture)
 
-- Configured as **GPIO input**, **rising edge** interrupt.
-- Each pulse:
-  - Increments pulse counter
-  - Records `esp_timer_get_time()` at the edge
-  - If UTC is already valid, advances the UTC second by **+1 s** (PPS marks the start of each UTC second when GPS is locked)
+On each rising PPS edge the MCPWM capture timer **latches** the count in hardware. The ISR:
+
+1. Records `cap_value` (µs ticks at 1 MHz)
+2. Sets the GPTimer count to that value (`gps_hw_timer_sync_to_capture`)
+3. Advances UTC by +1 s when already synced
 
 ### NMEA UTC
 
-- On each complete NMEA line, `$xxRMC` with fix status **`A`** is parsed (time + date fields).
-- First valid RMC **snaps** UTC to the reported second (adjusted for time since last PPS if PPS already seen).
-- Later RMC lines refine only if off by more than ~1 s.
+Unchanged: `$xxRMC` with fix `A` snaps the UTC second label; PPS defines the tick.
 
 ### Reading time
 
@@ -54,114 +80,56 @@ Until **PPS + RMC** sync: `gps_timebase_utc_valid()` is false and TDMA TX is blo
 #include "gps_timebase.h"
 
 if (gps_timebase_utc_valid()) {
-    int64_t utc_us = gps_timebase_now_us();  // µs since Unix epoch
+    int64_t utc_us = gps_timebase_now_us();
 }
 ```
 
 | API | Meaning |
 | --- | ------- |
-| `gps_timebase_now_us()` | Current UTC estimate (µs); **0** if not synced |
-| `gps_timebase_utc_valid()` | PPS seen + RMC alignment trusted |
-| `gps_timebase_pps_locked()` | At least one PPS received |
-| `gps_timebase_pps_count()` | PPS edges since boot |
-| `gps_timebase_last_pps_esp_us()` | `esp_timer` value at last PPS |
+| `gps_timebase_now_us()` | UTC estimate (µs) |
+| `gps_timebase_last_pps_cap_ticks()` | MCPWM latched count (hw path) |
+| `gps_timebase_last_pps_cap_delta_us()` | Interval since previous PPS (~1e6) |
 
 ---
 
 ## TDMA schedule
 
-All nodes compute the **same slot index** from UTC so frames align network-wide.
-
-### menuconfig
-
-**Component config → RegattaOne — TDMA (PPS-synchronized UTC slots)**
-
-| Kconfig | Default | Description |
-| ------- | ------- | ----------- |
-| `REGATTAONE_TDMA_ENABLE` | y | Master enable |
-| `TDMA_SLOT_US` | 100000 | Slot length (**µs**). 100000 = 100 ms |
-| `TDMA_NUM_SLOTS` | 10 | Slots per frame (10 × 100 ms = 1 s frame) |
-| `TDMA_DEVICE_SLOT` | -1 | This node’s slot **0 … N-1**; **-1** = hash from boat ID |
-| `TDMA_GUARD_US` | 2000 | No TX in first/last 2 ms of each slot |
-| `TDMA_ENFORCE_LORA_TX` | y | `sx1262_lora_transmit()` returns `ESP_ERR_INVALID_STATE` outside slot |
-| `TDMA_ENFORCE_UWB` | y | `ryuw122_tdma_can_use_now()` returns false outside slot |
-
-Defaults also in `sdkconfig.defaults.esp32s3`.
-
-### Slot math
+Slot math is unchanged:
 
 ```text
 slot_index = (utc_us / TDMA_SLOT_US) % TDMA_NUM_SLOTS
 ```
 
-TX allowed when:
+When **`TDMA_GPTIMER_SCHEDULER`** is enabled:
 
-- `slot_index == tdma_device_slot()`, and
-- phase within slot is between `TDMA_GUARD_US` and `TDMA_SLOT_US - TDMA_GUARD_US`
-
-### API
-
-```c
-#include "tdma.h"
-
-tdma_device_slot();           // this node’s slot
-tdma_slot_index(utc_us);      // global slot at utc_us
-tdma_can_transmit_now();      // in TX window now?
-tdma_us_until_tx_window();    // µs until next window (-1 if not synced)
-tdma_us_remaining_in_slot();  // µs left in current window
-```
-
-### LoRa
-
-```c
-esp_err_t err = sx1262_lora_transmit(payload, len);
-// ESP_ERR_INVALID_STATE if outside TDMA slot (when enforce enabled)
-
-// Lab / debug only:
-sx1262_lora_transmit_unscheduled(payload, len);
-```
-
-### UWB (RYUW122)
-
-Before timed UWB activity:
-
-```c
-if (ryuw122_tdma_can_use_now()) {
-    // send AT / ranging in this slot
-} else {
-    int64_t wait = ryuw122_tdma_us_until_window();  // µs
-}
-```
+- A GPTimer **one-shot** fires at slot open (start + guard)
+- A second alarm fires at slot close
+- `tdma_can_transmit_now()` is true while the hardware window flag is set
+- High-priority `tdma_slot` task re-arms the next window after each alarm
 
 ---
 
-## BLE / web app
+## BLE / debug (`$PREGPPS`)
 
-NMEA lines still go to BLE characteristic **`0xFEFD`** (not printed on serial monitor).
-
-Once per PPS (~1 Hz), firmware also sends:
+**Hardware capture** (6 fields with UTC):
 
 ```text
-$PREGPPS,<esp_timer_us>,<pulse_count>[,<utc_us>]
+$PREGPPS,<mono_us>,<pulse_count>,<utc_us>,<cap_ticks>,<cap_delta_us>
 ```
 
-- With UTC sync: **4 fields** (includes `utc_us`).
-- Before sync: **2 fields** (count + esp time only).
-
-The web app parses `$PREGPPS` for the **PPS (1 Hz)** field on the GPS tab.
-
----
-
-## Boot / debug
-
-Serial monitor (once):
+**Before UTC sync** (empty UTC field):
 
 ```text
-gps: PPS on GPIO16 → UTC timebase (1 µs) for TDMA
-gps_time: UTC sync from RMC: sec=...
+$PREGPPS,<mono_us>,<pulse_count>,,<cap_ticks>,<cap_delta_us>
 ```
 
-If you see `PPS disabled (GPS_PPS_GPIO=-1)` or no RMC fix, TDMA will not arm.
+**Legacy** (unchanged): 2 or 3 fields without `cap_*`.
+
+**Prove capture on the bench:**
+
+1. Plot `cap_delta_us` — should cluster around **1,000,000** with low spread under BLE/WiFi load.
+2. Compare `mono_us` interval (GPTimer) vs `cap_delta_us` (MCPWM) — capture delta should be tighter under contention.
+3. Log slot-open time vs `$PREGPPS` utc_us phase — GPTimer scheduler should land within tens of µs of guard.
 
 ---
 
@@ -169,18 +137,23 @@ If you see `PPS disabled (GPS_PPS_GPIO=-1)` or no RMC fix, TDMA will not arm.
 
 | File | Purpose |
 | ---- | ------- |
-| `main/gps_nmea.h` | UART / PPS GPIO macros |
-| `main/gps_nmea.c` | UART task, PPS ISR, BLE notify |
-| `main/gps_timebase.h` / `.c` | UTC µs clock |
-| `main/tdma.h` / `.c` | Slot schedule |
-| `main/sx1262_lora.cpp` | LoRa TX gate |
-| `main/ryuw122_uart.c` | UWB TDMA helpers |
+| `main/gps_pps_capture.c` | MCPWM PPS capture |
+| `main/gps_hw_timer.c` | 1 MHz GPTimer |
+| `main/gps_timebase.c` | UTC µs clock |
+| `main/tdma_scheduler.c` | Slot open/close alarms |
+| `main/tdma.c` | Slot math + gates |
+| `main/gps_nmea.c` | UART, BLE, init order |
 
 ---
 
-## Future work
+## Accuracy notes
 
-- Wait-for-slot helper tasks (auto TX at slot open)
-- Finer PPS capture (GPTimer hardware capture vs ISR latency)
-- Explicit UWB ranging scheduled inside slot window
-- BLE readout of current slot / time-to-slot for debugging
+| Layer | v1 (GPIO ISR) | v2 (MCPWM + GPTimer) |
+| ----- | ------------- | --------------------- |
+| PPS edge timestamp | ISR + `esp_timer` | Hardware latch |
+| Slot open | Task polling | GPTimer alarm + flag |
+| UWB UART → RF | Still ~ms variable | Still ~ms variable |
+
+LoRa (100 ms slots): either path is fine. UWB with ms slots: use v2 + measure `cap_delta_us` and guard bands.
+
+Disable **`REGATTAONE_GPS_HW_CAPTURE`** to revert to v1 without removing TDMA.
