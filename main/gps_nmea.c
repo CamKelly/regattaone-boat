@@ -15,14 +15,13 @@
 #include "driver/uart.h"
 
 #include "ble_sen0140.h"
+#include "gps_timebase.h"
 
 static const char *TAG = "gps";
 
 #define GPS_LINE_MAX 256
 
 static TaskHandle_t s_gps_task;
-static volatile uint32_t s_pps_count;
-static volatile int64_t s_pps_last_us;
 
 static void gps_emit_line(char *line, size_t *li)
 {
@@ -37,16 +36,25 @@ static void gps_emit_line(char *line, size_t *li)
     line[*li] = '\n';
     const size_t n = *li + 1U;
     line[n] = '\0';
+
+    gps_timebase_feed_nmea(line, n);
     ble_sen0140_gps_line_notify((const uint8_t *)line, n);
     *li = 0;
 }
 
 static void gps_emit_pps_ble(void)
 {
-    char line[72];
-    const int64_t us = s_pps_last_us;
-    const uint32_t count = s_pps_count;
-    const int n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu\n", (long long)us, (unsigned long)count);
+    char line[96];
+    const int64_t esp_us = gps_timebase_last_pps_esp_us();
+    const uint32_t count = gps_timebase_pps_count();
+    const int64_t utc_us = gps_timebase_now_us();
+    int n;
+    if (gps_timebase_utc_valid() && utc_us > 0) {
+        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu,%lld\n", (long long)esp_us, (unsigned long)count,
+                     (long long)utc_us);
+    } else {
+        n = snprintf(line, sizeof(line), "$PREGPPS,%lld,%lu\n", (long long)esp_us, (unsigned long)count);
+    }
     if (n > 0 && (size_t)n < sizeof(line)) {
         ble_sen0140_gps_line_notify((const uint8_t *)line, (size_t)n);
     }
@@ -55,8 +63,8 @@ static void gps_emit_pps_ble(void)
 static void IRAM_ATTR gps_pps_isr(void *arg)
 {
     (void)arg;
-    s_pps_count++;
-    s_pps_last_us = esp_timer_get_time();
+    const int64_t t = esp_timer_get_time();
+    gps_timebase_on_pps_isr(t);
     BaseType_t woken = pdFALSE;
     if (s_gps_task != NULL) {
         vTaskNotifyGiveFromISR(s_gps_task, &woken);
@@ -67,7 +75,7 @@ static void IRAM_ATTR gps_pps_isr(void *arg)
 static esp_err_t gps_pps_init(void)
 {
 #if GPS_PPS_GPIO < 0
-    ESP_LOGI(TAG, "PPS disabled (GPS_PPS_GPIO=-1)");
+    ESP_LOGW(TAG, "PPS disabled (GPS_PPS_GPIO=-1) — TDMA requires PPS wired");
     return ESP_OK;
 #else
     esp_err_t err = gpio_install_isr_service(0);
@@ -90,7 +98,7 @@ static esp_err_t gps_pps_init(void)
         ESP_LOGE(TAG, "pps isr add GPIO%d: %s", GPS_PPS_GPIO, esp_err_to_name(err));
         return err;
     }
-    ESP_LOGI(TAG, "PPS input on GPIO%d (rising edge → BLE $PREGPPS)", GPS_PPS_GPIO);
+    ESP_LOGI(TAG, "PPS on GPIO%d → UTC timebase (1 µs) for TDMA", GPS_PPS_GPIO);
     return ESP_OK;
 #endif
 }
@@ -130,6 +138,8 @@ static void gps_uart_task(void *arg)
 
 esp_err_t gps_nmea_start(void)
 {
+    gps_timebase_init();
+
     const int rx = 2048;
     const int tx = 256;
     esp_err_t err = uart_driver_install(GPS_UART_PORT_NUM, rx, tx, 0, NULL, 0);
@@ -154,7 +164,7 @@ esp_err_t gps_nmea_start(void)
     ESP_ERROR_CHECK(uart_set_pin(GPS_UART_PORT_NUM, GPS_UART_TX_GPIO, GPS_UART_RX_GPIO, UART_PIN_NO_CHANGE,
                                  UART_PIN_NO_CHANGE));
 
-    ESP_LOGI(TAG, "UART%d: TX=GPIO%d RX=GPIO%d @ %d baud (NMEA → BLE only, not serial log)",
+    ESP_LOGI(TAG, "UART%d: TX=GPIO%d RX=GPIO%d @ %d baud (NMEA → BLE; UTC from RMC + PPS)",
              GPS_UART_PORT_NUM, GPS_UART_TX_GPIO, GPS_UART_RX_GPIO, GPS_UART_BAUD);
 
     err = gps_pps_init();
@@ -172,27 +182,7 @@ esp_err_t gps_nmea_start(void)
     return ESP_OK;
 }
 
-uint32_t gps_pps_pulse_count(void)
-{
-    return s_pps_count;
-}
-
-int64_t gps_pps_last_edge_us(void)
-{
-    return s_pps_last_us;
-}
-
 #else /* !CONFIG_REGATTAONE_GPS_ENABLE */
-
-uint32_t gps_pps_pulse_count(void)
-{
-    return 0U;
-}
-
-int64_t gps_pps_last_edge_us(void)
-{
-    return 0;
-}
 
 esp_err_t gps_nmea_start(void)
 {
@@ -200,3 +190,13 @@ esp_err_t gps_nmea_start(void)
 }
 
 #endif /* CONFIG_REGATTAONE_GPS_ENABLE */
+
+uint32_t gps_pps_pulse_count(void)
+{
+    return gps_timebase_pps_count();
+}
+
+int64_t gps_pps_last_edge_us(void)
+{
+    return gps_timebase_last_pps_esp_us();
+}

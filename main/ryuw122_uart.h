@@ -10,3 +10,8 @@ esp_err_t ryuw122_uart_write(const uint8_t *data, size_t len);
 esp_err_t ryuw122_uart_at_cmd(const char *cmd, uint32_t timeout_ms);
 /** Queue AT from BLE GATT write; worker runs ryuw122_uart_at_cmd and notifies 0xFEF9. */
 esp_err_t ryuw122_uart_queue_ble_at(const uint8_t *data, size_t len);
+
+/** True when TDMA allows UWB activity (same slot schedule as LoRa). */
+bool ryuw122_tdma_can_use_now(void);
+/** Microseconds until this device's TDMA TX window (-1 if UTC not synced). */
+int64_t ryuw122_tdma_us_until_window(void);

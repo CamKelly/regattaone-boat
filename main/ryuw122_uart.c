@@ -16,6 +16,7 @@
 #include "driver/gpio.h"
 
 #include "ble_sen0140.h"
+#include "tdma.h"
 
 static const char *TAG = "ryuw122";
 
@@ -457,6 +458,24 @@ esp_err_t ryuw122_uart_queue_ble_at(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
+bool ryuw122_tdma_can_use_now(void)
+{
+#if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_UWB
+    return tdma_can_transmit_now();
+#else
+    return true;
+#endif
+}
+
+int64_t ryuw122_tdma_us_until_window(void)
+{
+#if CONFIG_REGATTAONE_TDMA_ENABLE
+    return tdma_us_until_tx_window();
+#else
+    return 0;
+#endif
+}
+
 #else
 
 esp_err_t ryuw122_uart_start(void)
@@ -483,6 +502,16 @@ esp_err_t ryuw122_uart_queue_ble_at(const uint8_t *data, size_t len)
     (void)data;
     (void)len;
     return ESP_ERR_NOT_SUPPORTED;
+}
+
+bool ryuw122_tdma_can_use_now(void)
+{
+    return true;
+}
+
+int64_t ryuw122_tdma_us_until_window(void)
+{
+    return 0;
 }
 
 #endif

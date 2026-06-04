@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "tdma.h"
 
 static const char *TAG = "sx1262";
 
@@ -129,7 +130,7 @@ extern "C" esp_err_t sx1262_lora_start(void)
     return ESP_OK;
 }
 
-extern "C" esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len)
+extern "C" esp_err_t sx1262_lora_transmit_unscheduled(const uint8_t *data, size_t len)
 {
     if (!s_ready || s_radio == nullptr || data == nullptr || len == 0U) {
         return ESP_ERR_INVALID_ARG;
@@ -148,6 +149,18 @@ extern "C" esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len)
     return ESP_OK;
 }
 
+extern "C" esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len)
+{
+#if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_LORA_TX
+    if (!tdma_can_transmit_now()) {
+        ESP_LOGD(TAG, "LoRa TX blocked — not in TDMA slot %u (wait %lld us)", (unsigned)tdma_device_slot(),
+                 (long long)tdma_us_until_tx_window());
+        return ESP_ERR_INVALID_STATE;
+    }
+#endif
+    return sx1262_lora_transmit_unscheduled(data, len);
+}
+
 #else /* !CONFIG_REGATTAONE_SX1262_ENABLE */
 
 extern "C" esp_err_t sx1262_lora_init(void) { return ESP_ERR_NOT_SUPPORTED; }
@@ -155,6 +168,13 @@ extern "C" esp_err_t sx1262_lora_init(void) { return ESP_ERR_NOT_SUPPORTED; }
 extern "C" esp_err_t sx1262_lora_start(void) { return ESP_ERR_NOT_SUPPORTED; }
 
 extern "C" esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len)
+{
+    (void)data;
+    (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+extern "C" esp_err_t sx1262_lora_transmit_unscheduled(const uint8_t *data, size_t len)
 {
     (void)data;
     (void)len;

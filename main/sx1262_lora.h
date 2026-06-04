@@ -16,6 +16,8 @@ extern "C" {
 
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 
+#include "tdma.h"
+
 #define SX1262_SPI_HOST_NUM     CONFIG_SX1262_SPI_HOST_NUM
 #define SX1262_SPI_MOSI_GPIO    CONFIG_SX1262_SPI_MOSI_GPIO
 #define SX1262_SPI_MISO_GPIO    CONFIG_SX1262_SPI_MISO_GPIO
@@ -32,8 +34,10 @@ extern "C" {
 esp_err_t sx1262_lora_init(void);
 /** Start background RX task (continuous receive). */
 esp_err_t sx1262_lora_start(void);
-/** Transmit a raw payload; resumes RX afterward. */
+/** Transmit a raw payload; resumes RX afterward. Honors TDMA slot when enabled. */
 esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len);
+/** Same as sx1262_lora_transmit but skips TDMA gate (testing only). */
+esp_err_t sx1262_lora_transmit_unscheduled(const uint8_t *data, size_t len);
 
 #endif /* CONFIG_REGATTAONE_SX1262_ENABLE */
 

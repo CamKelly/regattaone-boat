@@ -14,6 +14,8 @@ set(regattaone_srcs
     "ble_sen0140.c"
     "msp430_uart_rx.c"
     "gps_nmea.c"
+    "gps_timebase.c"
+    "tdma.c"
     "sx1262_lora.cpp")
 
 # RadioLib + SPI are always declared: sx1262_lora.cpp is compiled unconditionally

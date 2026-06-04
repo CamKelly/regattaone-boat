@@ -179,6 +179,57 @@ menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
 
 endmenu
 
+menu "RegattaOne — TDMA (PPS-synchronized UTC slots)"
+
+    config REGATTAONE_TDMA_ENABLE
+        bool "Enable UTC-aligned TDMA time slots (requires GPS + PPS)"
+        depends on REGATTAONE_GPS_ENABLE
+        default y
+        help
+            Disciplines a UTC microsecond clock from GPS PPS (1 Hz) and RMC time.
+            All nodes compute the same slot index from UTC; each device transmits
+            only in its assigned slot (LoRa / UWB).
+
+    config TDMA_SLOT_US
+        int "Slot length (microseconds)"
+        depends on REGATTAONE_TDMA_ENABLE
+        default 100000
+        range 1000 60000000
+        help
+            Duration of one TDMA slot. 100000 = 100 ms.
+
+    config TDMA_NUM_SLOTS
+        int "Slots per frame"
+        depends on REGATTAONE_TDMA_ENABLE
+        default 10
+        range 2 256
+
+    config TDMA_DEVICE_SLOT
+        int "This device slot index (-1 = hash from boat id)"
+        depends on REGATTAONE_TDMA_ENABLE
+        default -1
+        range -1 255
+
+    config TDMA_GUARD_US
+        int "Guard band at slot edges (microseconds)"
+        depends on REGATTAONE_TDMA_ENABLE
+        default 2000
+        range 0 500000
+        help
+            No TX in the first/last guard_us of each slot (turnaround / clock skew).
+
+    config TDMA_ENFORCE_LORA_TX
+        bool "Reject LoRa transmit outside assigned slot"
+        depends on REGATTAONE_TDMA_ENABLE && REGATTAONE_SX1262_ENABLE
+        default y
+
+    config TDMA_ENFORCE_UWB
+        bool "Gate UWB activity on TDMA slot (ryuw122_tdma_can_use_now)"
+        depends on REGATTAONE_TDMA_ENABLE && REGATTAONE_RYUW122_ENABLE
+        default y
+
+endmenu
+
 menu "RegattaOne — Blues Notecard (legacy LoRaWAN, I2C)"
 
     config REGATTAONE_NOTECARD_ENABLE

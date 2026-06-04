@@ -115,9 +115,11 @@ Firmware uses **[RadioLib](https://github.com/jgromes/RadioLib)** vendored in `c
 
 - UART: **UART2** (`GPS_UART_PORT_NUM=2`) so **UART1** remains free for RYUW122.
 - Baud: **9600** default (common NMEA rate). Many modules ship at **115200** — match `GPS_UART_BAUD` to your module or reconfigure the GPS.
-- **PPS:** rising edge ~1 Hz when locked. Firmware counts pulses on the configured GPIO and sends `$PREGPPS,<us>,<count>` on the same BLE GPS characteristic (0xFEFD). NMEA sentences are **not** printed to the serial monitor.
+- **PPS:** rising edge ~1 Hz when locked. See **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)** for UTC timebase, TDMA slots, LoRa/UWB gates, and APIs. Summary: PPS + `$xxRMC` → UTC µs clock → shared slot schedule. BLE `$PREGPPS,...` on 0xFEFD. NMEA not logged to serial.
 
-Pin macros: `main/gps_nmea.h`. Set `GPS_PPS_GPIO=-1` in menuconfig if unwired.
+Configure TDMA: **menuconfig → RegattaOne — TDMA** (or see [TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)).
+
+Pin macros: `main/gps_nmea.h`. Set `GPS_PPS_GPIO=-1` only if PPS is unwired (TDMA will not sync).
 
 ---
 

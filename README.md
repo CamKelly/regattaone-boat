@@ -13,7 +13,7 @@ BLE advertised name: random **4-character** code (A–Z, a–z, 0–9), persiste
 | **Firmware** (`main/`) | NimBLE GATT **0xFEF0**; optional **SEN0140** IMU task (**0xFEF1**); **SX1262** LoRa SPI (RadioLib, menuconfig); **GPS** NMEA UART + PPS; **RYUW122** UART lines → **0xFEF9** notify; legacy **Blues Notecard** I2C (**0xFEF7** / **0xFEF8**, C3 only); optional **MSP430** paths (**default off** on S3). |
 | **Web app** (`web/`) | **Web Bluetooth**: connect by service UUID, live **UWB** logs (Notecard tab for legacy C3). |
 | **Backend** (`backend/`) | Firebase Cloud Functions, Firestore rules, Notehub webhooks (legacy Notecard), device presence sync, and admin PWA (`backend/client/`). |
-| **Wiring** | **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** — DevKit Mini or Waveshare Zero ↔ SX1262 ↔ GPS ↔ RYUW122 ↔ SEN0140. C3 + Notecard: **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)**. |
+| **Wiring** | **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** — DevKit Mini or Waveshare Zero ↔ SX1262 ↔ GPS ↔ RYUW122 ↔ SEN0140. **PPS / TDMA:** **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)**. C3 + Notecard: **[WIRING-ESP32C3-NOTECARD-UWB.md](WIRING-ESP32C3-NOTECARD-UWB.md)**. |
 
 ---
 

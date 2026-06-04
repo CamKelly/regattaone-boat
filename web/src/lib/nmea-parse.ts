@@ -27,6 +27,8 @@ export interface GpsFix {
   /** 1 Hz PPS edges from firmware ($PREGPPS). */
   ppsCount: number | null;
   ppsLastEdgeUs: number | null;
+  /** UTC µs at last PPS when firmware sends 4-field $PREGPPS. */
+  ppsUtcUs: number | null;
   ppsUpdatedAtMs: number;
 }
 
@@ -56,6 +58,7 @@ export function defaultGpsFix(): GpsFix {
     updatedAtMs: 0,
     ppsCount: null,
     ppsLastEdgeUs: null,
+    ppsUtcUs: null,
     ppsUpdatedAtMs: 0,
   };
 }
@@ -377,13 +380,17 @@ function applyGsv(fix: GpsFix, fields: string[]): void {
 
 /** Firmware PPS tick: $PREGPPS,<esp_time_us>,<pulse_count> (no NMEA checksum). */
 function applyPregpps(fix: GpsFix, fields: string[]): void {
-  const us = parseIntField(fields[1]);
+  const us = parseNum(fields[1]);
   const count = parseIntField(fields[2]);
+  const utcUs = fields[3] !== undefined ? parseNum(fields[3]) : null;
   if (count !== null) {
     fix.ppsCount = count;
   }
   if (us !== null) {
     fix.ppsLastEdgeUs = us;
+  }
+  if (utcUs !== null) {
+    fix.ppsUtcUs = utcUs;
   }
   fix.ppsUpdatedAtMs = performance.now();
   fix.lastSentence = "PPS";
