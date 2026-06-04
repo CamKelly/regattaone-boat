@@ -1235,6 +1235,9 @@ function parseLoraTtlMs(): number {
 
 async function sendLoraTx(): Promise<void> {
   const session = getActiveSession();
+  if (session && !session.charLoraTx) {
+    await bindSessionCharacteristics(session);
+  }
   if (!session?.charLoraTx) {
     const msg =
       "! LoRa TX 0xFEF7 unavailable — flash CONFIG_REGATTAONE_SX1262_ENABLE=y and reconnect.\n";

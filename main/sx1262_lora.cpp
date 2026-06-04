@@ -7,9 +7,11 @@
 #include "modules/SX126x/SX1262.h"
 
 #include "ble_sen0140.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
+#include "modules/SX126x/SX126x_commands.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -209,6 +211,35 @@ static void tx_q_pop(void)
     xSemaphoreGive(s_tx_q_mtx);
 }
 
+/** Avoid flooding 0xFEF8 notifies (starves NimBLE mbuf pool → GATT write fails). */
+static void rx_error_throttled(int state)
+{
+    static uint32_t s_err_count;
+    static int64_t s_last_ble_notify_us;
+    s_err_count++;
+
+    if (s_err_count == 1U || (s_err_count % 32U) == 0U) {
+        ESP_LOGW(TAG, "RX error: %d (count=%lu)", state, (unsigned long)s_err_count);
+    }
+
+    const int64_t now_us = (int64_t)esp_timer_get_time();
+    if (now_us - s_last_ble_notify_us < 3000000) {
+        return;
+    }
+    s_last_ble_notify_us = now_us;
+    lora_line_notifyf("! RX error %d (radio busy / DIO1 - see serial log)\n", state);
+}
+
+static bool sx1262_restart_receive_locked(void)
+{
+    const int st = s_radio->startReceive();
+    if (st != RADIOLIB_ERR_NONE) {
+        ESP_LOGW(TAG, "startReceive: %d", st);
+        return false;
+    }
+    return true;
+}
+
 static uint32_t cad_backoff_ms(size_t payload_len)
 {
     const RadioLibTime_t air_us = s_radio->getTimeOnAir(payload_len > 0U ? payload_len : 32U);
@@ -234,11 +265,37 @@ static void sx1262_rx_task(void *arg)
             continue;
         }
 
+        /* Re-arm RX after TX/CAD (transmit() leaves standby). Brief mutex hold only. */
+        if (xSemaphoreTake(s_radio_mtx, pdMS_TO_TICKS(200)) == pdTRUE) {
+            (void)sx1262_restart_receive_locked();
+            xSemaphoreGive(s_radio_mtx);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(kRxPollMs));
+
+#if SX1262_DIO1_GPIO >= 0
+        if (gpio_get_level((gpio_num_t)SX1262_DIO1_GPIO) == 0) {
+            continue;
+        }
+#endif
+
         if (xSemaphoreTake(s_radio_mtx, pdMS_TO_TICKS(500)) != pdTRUE) {
+            vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
-        const int state = s_radio->receive(buf, sizeof(buf) - 1U, kRxPollMs);
+        const uint32_t irq = s_radio->getIrqFlags();
+        if (!(irq & RADIOLIB_SX126X_IRQ_RX_DONE)) {
+            (void)s_radio->finishReceive();
+            (void)sx1262_restart_receive_locked();
+            xSemaphoreGive(s_radio_mtx);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        const int state = s_radio->readData(buf, sizeof(buf) - 1U);
+        (void)sx1262_restart_receive_locked();
+
         if (state == RADIOLIB_ERR_NONE) {
             const size_t len = s_radio->getPacketLength();
             if (len >= sizeof(buf)) {
@@ -255,8 +312,8 @@ static void sx1262_rx_task(void *arg)
             lora_line_notifyf("! RX CRC mismatch RSSI %.1f SNR %.1f\n", (double)s_radio->getRSSI(),
                               (double)s_radio->getSNR());
         } else if (state != RADIOLIB_ERR_RX_TIMEOUT) {
-            ESP_LOGW(TAG, "RX error: %d", state);
-            lora_line_notifyf("! RX error %d\n", state);
+            rx_error_throttled(state);
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
 
         xSemaphoreGive(s_radio_mtx);
@@ -407,6 +464,11 @@ extern "C" esp_err_t sx1262_lora_start(void)
         ESP_LOGE(TAG, "TX task create failed");
         set_status(SX1262_LORA_STATUS_NOT_STARTED);
         return ESP_ERR_NO_MEM;
+    }
+
+    if (xSemaphoreTake(s_radio_mtx, pdMS_TO_TICKS(2000)) == pdTRUE) {
+        (void)sx1262_restart_receive_locked();
+        xSemaphoreGive(s_radio_mtx);
     }
 
     s_tasks_started = true;
