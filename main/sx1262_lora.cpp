@@ -9,6 +9,7 @@
 #include "ble_sen0140.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "gps_timebase.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "modules/SX126x/SX126x_commands.h"
@@ -211,6 +212,17 @@ static void tx_q_pop(void)
     xSemaphoreGive(s_tx_q_mtx);
 }
 
+static bool tx_q_non_empty(void)
+{
+    if (s_tx_q_mtx == nullptr) {
+        return false;
+    }
+    xSemaphoreTake(s_tx_q_mtx, portMAX_DELAY);
+    const bool have = s_tx_q_count > 0U;
+    xSemaphoreGive(s_tx_q_mtx);
+    return have;
+}
+
 /** Avoid flooding 0xFEF8 notifies (starves NimBLE mbuf pool → GATT write fails). */
 static void rx_error_throttled(int state)
 {
@@ -265,10 +277,10 @@ static void sx1262_rx_task(void *arg)
             continue;
         }
 
-        /* Re-arm RX after TX/CAD (transmit() leaves standby). Brief mutex hold only. */
-        if (xSemaphoreTake(s_radio_mtx, pdMS_TO_TICKS(200)) == pdTRUE) {
-            (void)sx1262_restart_receive_locked();
-            xSemaphoreGive(s_radio_mtx);
+        /* Let the TX worker own the radio while the queue has work (avoid mutex starvation). */
+        if (tx_q_non_empty()) {
+            vTaskDelay(pdMS_TO_TICKS(25));
+            continue;
         }
 
         vTaskDelay(pdMS_TO_TICKS(kRxPollMs));
@@ -340,12 +352,31 @@ static void sx1262_tx_task(void *arg)
         if (now_us >= item.deadline_us) {
             tx_q_pop();
             ESP_LOGW(TAG, "TX expired (%u bytes)", (unsigned)item.len);
+#if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_LORA_TX
+            if (!item.skip_tdma && gps_timebase_utc_valid()) {
+                lora_line_notifyf("! TX expired (%u bytes): no TDMA slot before TTL (try again)\n",
+                                  (unsigned)item.len);
+            } else {
+                lora_line_notifyf("! TX expired (%u bytes): radio busy or CAD (see serial log)\n",
+                                  (unsigned)item.len);
+            }
+#else
             lora_line_notifyf("! TX expired (%u bytes), discarded\n", (unsigned)item.len);
+#endif
             continue;
         }
 
 #if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_LORA_TX
         if (!item.skip_tdma && !tdma_can_transmit_now()) {
+            static int64_t s_last_slot_wait_log_us;
+            const int64_t tnow = (int64_t)esp_timer_get_time();
+            if (tnow - s_last_slot_wait_log_us >= 5000000) {
+                s_last_slot_wait_log_us = tnow;
+                const int64_t wait_us = tdma_us_until_tx_window();
+                ESP_LOGI(TAG, "TX waiting for TDMA slot (~%lld ms)", (long long)((wait_us + 999) / 1000));
+                lora_line_notifyf("! TX waiting for TDMA slot (~%lld ms)\n",
+                                  (long long)((wait_us + 999) / 1000));
+            }
             const int64_t wait_us = tdma_us_until_tx_window();
             if (wait_us > 0) {
                 const uint32_t wait_ms = (uint32_t)((wait_us + 999) / 1000);
@@ -358,6 +389,7 @@ static void sx1262_tx_task(void *arg)
 #endif
 
         if (xSemaphoreTake(s_radio_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) {
+            ESP_LOGW(TAG, "TX waiting for radio mutex");
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
@@ -365,6 +397,7 @@ static void sx1262_tx_task(void *arg)
         int cad = s_radio->scanChannel();
         if (cad == RADIOLIB_LORA_DETECTED) {
             const uint32_t backoff_ms = cad_backoff_ms(item.len);
+            (void)sx1262_restart_receive_locked();
             xSemaphoreGive(s_radio_mtx);
             ESP_LOGD(TAG, "CAD busy, backoff %lu ms", (unsigned long)backoff_ms);
             lora_line_notifyf("! CAD busy, backoff %lu ms\n", (unsigned long)backoff_ms);
@@ -372,6 +405,7 @@ static void sx1262_tx_task(void *arg)
             continue;
         }
         if (cad != RADIOLIB_CHANNEL_FREE) {
+            (void)sx1262_restart_receive_locked();
             xSemaphoreGive(s_radio_mtx);
             ESP_LOGW(TAG, "scanChannel failed: %d", cad);
             lora_line_notifyf("! CAD error %d\n", cad);
@@ -381,6 +415,7 @@ static void sx1262_tx_task(void *arg)
 
         const int tx_state = s_radio->transmit(item.data, item.len);
         if (tx_state != RADIOLIB_ERR_NONE) {
+            (void)sx1262_restart_receive_locked();
             xSemaphoreGive(s_radio_mtx);
             ESP_LOGW(TAG, "transmit failed: %d", tx_state);
             lora_line_notifyf("! TX failed %d\n", tx_state);
@@ -389,6 +424,7 @@ static void sx1262_tx_task(void *arg)
         }
 
         tx_q_pop();
+        (void)sx1262_restart_receive_locked();
         xSemaphoreGive(s_radio_mtx);
 
         ESP_LOGI(TAG, "TX ok %u bytes", (unsigned)item.len);
@@ -455,12 +491,12 @@ extern "C" esp_err_t sx1262_lora_start(void)
         return ESP_OK;
     }
 
-    if (xTaskCreate(sx1262_rx_task, "sx1262_rx", 4096, nullptr, 5, nullptr) != pdPASS) {
+    if (xTaskCreate(sx1262_rx_task, "sx1262_rx", 4096, nullptr, 4, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "RX task create failed");
         set_status(SX1262_LORA_STATUS_NOT_STARTED);
         return ESP_ERR_NO_MEM;
     }
-    if (xTaskCreate(sx1262_tx_task, "sx1262_tx", 4096, nullptr, 5, nullptr) != pdPASS) {
+    if (xTaskCreate(sx1262_tx_task, "sx1262_tx", 4096, nullptr, 6, nullptr) != pdPASS) {
         ESP_LOGE(TAG, "TX task create failed");
         set_status(SX1262_LORA_STATUS_NOT_STARTED);
         return ESP_ERR_NO_MEM;

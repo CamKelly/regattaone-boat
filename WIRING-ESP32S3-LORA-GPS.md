@@ -97,7 +97,7 @@ Typical module (Ebyte E22, Waveshare SX1262, etc.):
 | **DIO1** | IO7 | 7 |
 | **BUSY** | IO6 | 6 |
 
-SPI host: **SPI2 (FSPI)** at **2 MHz** by default (`SX1262_SPI_FREQ_HZ`). Center frequency default **915 MHz** (`SX1262_FREQ_HZ`); change for your region/module.
+SPI host: **SPI2 (FSPI)** at **2 MHz** by default (`SX1262_SPI_FREQ_HZ`). **RegattaOne uses 915 MHz** (`SX1262_FREQ_HZ`, US ISM). Some module datasheets list 868 MHz for an EU SKU in the same PDF—ignore that unless you deliberately retune menuconfig for a different deployment.
 
 Firmware uses **[RadioLib](https://github.com/jgromes/RadioLib)** in `components/RadioLib/` with `main/EspHal.h` ([ESP-IDF example](https://github.com/jgromes/RadioLib/tree/master/examples/NonArduino/ESP-IDF) HAL pattern, S3 SPI). `main/sx1262_lora.cpp` drives the SX1262; a background RX task logs packets to serial/BLE. Pin macros: `main/sx1262_lora.h`.
 

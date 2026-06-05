@@ -115,7 +115,8 @@ menu "RegattaOne — SX1262 LoRa (SPI, RadioLib)"
         depends on REGATTAONE_SX1262_ENABLE
         default 915000000
         help
-            915 MHz (US) or 868 MHz (EU) depending on your module and regulations.
+            Default 915000000 (US ISM). RegattaOne fleet firmware expects 915 MHz unless you
+            intentionally change this for a non-US build.
 
     config SX1262_TX_POWER_DBM
         int "TX power (dBm)"
