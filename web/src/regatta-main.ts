@@ -928,20 +928,29 @@ function renderLoraStatus(session: BleBoatSession): void {
   el.textContent = status.length > 0 ? `LoRa radio: ${status}` : "LoRa radio: (no status yet)";
 }
 
+function isLoraRxLogLine(trimmed: string): boolean {
+  return trimmed.startsWith("RX ");
+}
+
 function ingestLoraLine(session: BleBoatSession, chunk: string): void {
-  appendStreamLine(session, "loraLineLogText", chunk);
   for (const line of chunk.split("\n")) {
     const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
     if (trimmed.startsWith("! STATUS:")) {
       session.loraRadioStatus = trimmed.slice("! STATUS:".length).trim();
       renderLoraStatus(session);
+      continue;
+    }
+    if (isLoraRxLogLine(trimmed)) {
+      appendStreamLine(session, "loraLineLogText", `${trimmed}\n`);
     }
   }
 }
 
-function appendLoraLog(session: BleBoatSession, chunk: string): void {
-  ingestLoraLine(session, chunk);
-}
+/** TX/stream/errors are not shown in the LoRa log (RX packets only). */
+function appendLoraLog(_session: BleBoatSession, _chunk: string): void {}
 
 function clearUwbLog(session: BleBoatSession | null): void {
   if (session) {
@@ -1399,10 +1408,6 @@ async function sendLoraTx(): Promise<void> {
     const statusEl = document.querySelector("#lora-status");
     if (statusEl) {
       statusEl.textContent = "LoRa radio: connect a BLE device first";
-    }
-    const logEl = document.querySelector("#lora-line-log");
-    if (logEl) {
-      logEl.textContent = msg;
     }
     return;
   }

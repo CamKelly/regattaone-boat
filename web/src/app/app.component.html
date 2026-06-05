@@ -140,8 +140,8 @@
             <p id="lora-status" class="tab-hint">LoRa radio: connect BLE for status</p>
             <p class="tab-hint">
               TX is queued with CAD (listen-before-talk) and TTL expiry. Payloads use
-              <code>TTL=&lt;ms&gt;</code> then a newline, then UTF-8. RX, CRC errors, and status notify on
-              <code>0xFEF8</code>.
+              <code>TTL=&lt;ms&gt;</code> then a newline, then UTF-8. The log below shows
+              received packets only (from <code>0xFEF8</code>); radio status is above.
             </p>
             <div nz-row [nzGutter]="8" class="uwb-input-row">
               <div nz-col [nzFlex]="'auto'">
@@ -197,7 +197,7 @@
             </div>
             <p id="lora-stream-status" class="tab-hint" aria-live="polite">Stream: stopped</p>
             <div class="log-header">
-              <label class="field-label" for="lora-line-log">LoRa log</label>
+              <label class="field-label" for="lora-line-log">Received</label>
               <button nz-button nzType="default" nzSize="small" type="button" id="lora-log-clear">
                 Clear
               </button>
