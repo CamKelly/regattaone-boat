@@ -172,6 +172,30 @@
                 <button nz-button nzType="primary" type="button" id="lora-tx-send">Send</button>
               </div>
             </div>
+            <div nz-row [nzGutter]="8" class="uwb-input-row lora-stream-row">
+              <div nz-col [nzFlex]="'none'">
+                <label class="field-label lora-interval-label" for="lora-interval-input">Interval (ms)</label>
+                <input
+                  nz-input
+                  id="lora-interval-input"
+                  type="number"
+                  min="500"
+                  max="600000"
+                  step="500"
+                  class="lora-interval-input"
+                  title="Delay between sequenced messages"
+                  aria-label="LoRa stream interval milliseconds"
+                  value="3000"
+                />
+              </div>
+              <div nz-col [nzFlex]="'none'">
+                <button nz-button nzType="primary" type="button" id="lora-stream-start">Start sending</button>
+              </div>
+              <div nz-col [nzFlex]="'none'">
+                <button nz-button nzDanger type="button" id="lora-stream-stop" disabled>Stop sending</button>
+              </div>
+            </div>
+            <p id="lora-stream-status" class="tab-hint" aria-live="polite">Stream: stopped</p>
             <div class="log-header">
               <label class="field-label" for="lora-line-log">LoRa log</label>
               <button nz-button nzType="default" nzSize="small" type="button" id="lora-log-clear">

@@ -91,9 +91,8 @@ bool tdma_in_tx_window(int64_t utc_us)
 
 bool tdma_can_transmit_now(void)
 {
-    /* Until RMC+PPS discipline UTC, do not hold LoRa TX (bring-up / bad NMEA baud). */
     if (!gps_timebase_utc_valid()) {
-        return true;
+        return false;
     }
 #if CONFIG_TDMA_GPTIMER_SCHEDULER
     if (tdma_scheduler_in_window()) {

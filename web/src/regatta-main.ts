@@ -112,6 +112,9 @@ interface BleBoatSession {
   commsGen: number;
   activeUwbGen: number;
   loraBusy: boolean;
+  loraStreamRunning: boolean;
+  loraStreamSeq: number;
+  loraStreamTimer: ReturnType<typeof setTimeout> | null;
   uwbBusy: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -398,22 +401,15 @@ function setText(id: string, text: string): void {
 
 function syncActionButtons(): void {
   const session = getActiveSession();
-  const loraSend = document.querySelector<HTMLButtonElement>("#lora-tx-send");
   const uwbSend = document.querySelector<HTMLButtonElement>("#uwb-at-send");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
-  if (loraSend) {
-    loraSend.disabled = false;
-  }
   if (uwbSend) {
     uwbSend.disabled = false;
   }
   if (uwbInput) {
     uwbInput.disabled = false;
   }
-  if (loraInput) {
-    loraInput.disabled = false;
-  }
+  syncLoraStreamUi(session);
   syncBoatIdUi(session);
   syncDeviceTypeUi(session);
 }
@@ -749,6 +745,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
 }
 
 async function deactivateSession(session: BleBoatSession): Promise<void> {
+  stopLoraStream(session);
   session.parked = true;
   await setSessionNotifications(session, false);
   detachCharacteristicListeners(session);
@@ -1014,6 +1011,7 @@ function loadSessionToUi(session: BleBoatSession): void {
   renderImuDisplay(session);
   renderLoraLog(session);
   renderLoraStatus(session);
+  syncLoraStreamUi(session);
   renderGpsDisplay(session);
   renderUwbLog(session);
   updateBleToolbar();
@@ -1048,6 +1046,7 @@ function clearUiPanels(): void {
   if (uwbLog) {
     uwbLog.textContent = "";
   }
+  syncLoraStreamUi(null);
   clearGpsDisplay(null);
 }
 
@@ -1202,6 +1201,7 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
   if (!session) {
     return;
   }
+  stopLoraStream(session);
   if (activeSessionId === deviceId) {
     saveUiToSession(session);
   }
@@ -1233,42 +1233,98 @@ function parseLoraTtlMs(): number {
   return Math.min(raw, 600000);
 }
 
-async function sendLoraTx(): Promise<void> {
-  const session = getActiveSession();
-  if (session && !session.charLoraTx) {
+function parseLoraIntervalMs(): number {
+  const intervalInput = document.querySelector<HTMLInputElement>("#lora-interval-input");
+  const raw = Number.parseInt(intervalInput?.value ?? "", 10);
+  if (!Number.isFinite(raw) || raw < 500) {
+    return 3000;
+  }
+  return Math.min(raw, 600000);
+}
+
+function loraBasePayload(): string {
+  const input = document.querySelector<HTMLInputElement>("#lora-tx-input");
+  return (input?.value ?? "").trim();
+}
+
+function syncLoraStreamUi(session: BleBoatSession | null): void {
+  const streaming = session?.loraStreamRunning === true;
+  const loraSend = document.querySelector<HTMLButtonElement>("#lora-tx-send");
+  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
+  const ttlInput = document.querySelector<HTMLInputElement>("#lora-ttl-input");
+  const intervalInput = document.querySelector<HTMLInputElement>("#lora-interval-input");
+  const startBtn = document.querySelector<HTMLButtonElement>("#lora-stream-start");
+  const stopBtn = document.querySelector<HTMLButtonElement>("#lora-stream-stop");
+  const statusEl = document.querySelector("#lora-stream-status");
+
+  if (loraSend) {
+    loraSend.disabled = !session || streaming;
+  }
+  if (loraInput) {
+    loraInput.disabled = !session || streaming;
+  }
+  if (ttlInput) {
+    ttlInput.disabled = !session || streaming;
+  }
+  if (intervalInput) {
+    intervalInput.disabled = !session || streaming;
+  }
+  if (startBtn) {
+    startBtn.disabled = !session || streaming;
+  }
+  if (stopBtn) {
+    stopBtn.disabled = !session || !streaming;
+  }
+  if (statusEl) {
+    if (!session) {
+      statusEl.textContent = "Stream: connect BLE first";
+    } else if (streaming) {
+      statusEl.textContent = `Stream: sending (next #${session.loraStreamSeq})`;
+    } else {
+      statusEl.textContent = "Stream: stopped";
+    }
+  }
+}
+
+function stopLoraStream(session: BleBoatSession | null): void {
+  if (!session) {
+    return;
+  }
+  const wasRunning = session.loraStreamRunning;
+  session.loraStreamRunning = false;
+  if (session.loraStreamTimer !== null) {
+    clearTimeout(session.loraStreamTimer);
+    session.loraStreamTimer = null;
+  }
+  if (wasRunning) {
+    appendLoraLog(session, ">> stream stopped\n");
+  }
+  if (session.deviceId === activeSessionId) {
+    syncLoraStreamUi(session);
+  }
+}
+
+async function queueLoraPayload(session: BleBoatSession, payload: string): Promise<boolean> {
+  if (!payload) {
+    return false;
+  }
+  if (!session.charLoraTx) {
     await bindSessionCharacteristics(session);
   }
-  if (!session?.charLoraTx) {
+  if (!session.charLoraTx) {
     const msg =
       "! LoRa TX 0xFEF7 unavailable — flash CONFIG_REGATTAONE_SX1262_ENABLE=y and reconnect.\n";
-    if (session) {
-      session.loraRadioStatus = "unavailable — SX1262 not enabled in firmware";
-      renderLoraStatus(session);
-      appendLoraLog(session, msg);
-    } else {
-      const statusEl = document.querySelector("#lora-status");
-      if (statusEl) {
-        statusEl.textContent = "LoRa radio: connect a BLE device first";
-      }
-      const logEl = document.querySelector("#lora-line-log");
-      if (logEl) {
-        logEl.textContent = msg;
-      }
-    }
-    return;
+    session.loraRadioStatus = "unavailable — SX1262 not enabled in firmware";
+    renderLoraStatus(session);
+    appendLoraLog(session, msg);
+    return false;
   }
   if (session.loraBusy) {
-    return;
-  }
-  const input = document.querySelector<HTMLInputElement>("#lora-tx-input");
-  const payload = (input?.value ?? "").trim();
-  if (!payload) {
-    return;
+    return false;
   }
   const ttlMs = parseLoraTtlMs();
   const body = `TTL=${ttlMs}\n${payload}`;
   session.loraBusy = true;
-  session.loraTxDraft = input?.value ?? "";
   appendLoraLog(session, `>> queue ttl=${ttlMs} ms: ${payload}\n`);
   try {
     const imuWasOn = await pauseImuForComms(session);
@@ -1278,13 +1334,87 @@ async function sendLoraTx(): Promise<void> {
     } finally {
       await restoreImuAfterComms(session, imuWasOn);
     }
+    return true;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     appendLoraLog(session, `! Write error: ${msg}\n`);
+    return false;
   } finally {
     session.loraBusy = false;
     updateBleToolbar();
   }
+}
+
+async function loraStreamStep(session: BleBoatSession): Promise<void> {
+  if (!session.loraStreamRunning || activeSessionId !== session.deviceId) {
+    return;
+  }
+  const base = loraBasePayload();
+  if (!base) {
+    appendLoraLog(session, "! Stream stopped — message text is empty\n");
+    stopLoraStream(session);
+    return;
+  }
+  const seq = session.loraStreamSeq;
+  session.loraStreamSeq += 1;
+  syncLoraStreamUi(session);
+  const payload = `${base} #${seq}`;
+  await queueLoraPayload(session, payload);
+  if (!session.loraStreamRunning) {
+    return;
+  }
+  const delayMs = parseLoraIntervalMs();
+  session.loraStreamTimer = setTimeout(() => {
+    session.loraStreamTimer = null;
+    void loraStreamStep(session);
+  }, delayMs);
+}
+
+async function startLoraStream(): Promise<void> {
+  const session = getActiveSession();
+  if (!session || session.loraStreamRunning) {
+    return;
+  }
+  const base = loraBasePayload();
+  if (!base) {
+    return;
+  }
+  session.loraTxDraft = document.querySelector<HTMLInputElement>("#lora-tx-input")?.value ?? "";
+  session.loraStreamSeq = 1;
+  session.loraStreamRunning = true;
+  syncLoraStreamUi(session);
+  appendLoraLog(session, `>> stream started (interval ${parseLoraIntervalMs()} ms)\n`);
+  await loraStreamStep(session);
+}
+
+function stopLoraStreamActive(): void {
+  stopLoraStream(getActiveSession());
+}
+
+async function sendLoraTx(): Promise<void> {
+  const session = getActiveSession();
+  if (!session) {
+    const msg =
+      "! LoRa TX 0xFEF7 unavailable — flash CONFIG_REGATTAONE_SX1262_ENABLE=y and reconnect.\n";
+    const statusEl = document.querySelector("#lora-status");
+    if (statusEl) {
+      statusEl.textContent = "LoRa radio: connect a BLE device first";
+    }
+    const logEl = document.querySelector("#lora-line-log");
+    if (logEl) {
+      logEl.textContent = msg;
+    }
+    return;
+  }
+  if (session.loraStreamRunning) {
+    return;
+  }
+  const payload = loraBasePayload();
+  if (!payload) {
+    return;
+  }
+  session.loraTxDraft = document.querySelector<HTMLInputElement>("#lora-tx-input")?.value ?? "";
+  await queueLoraPayload(session, payload);
 }
 
 async function sendUwbAt(): Promise<void> {
@@ -1370,6 +1500,9 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     commsGen: 0,
     activeUwbGen: 0,
     loraBusy: false,
+    loraStreamRunning: false,
+    loraStreamSeq: 1,
+    loraStreamTimer: null,
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
@@ -1428,6 +1561,9 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     commsGen: 0,
     activeUwbGen: 0,
     loraBusy: false,
+    loraStreamRunning: false,
+    loraStreamSeq: 1,
+    loraStreamTimer: null,
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
@@ -1558,6 +1694,14 @@ export function startRegattaApp(): void {
     }
     if (btn.id === "lora-tx-send") {
       void sendLoraTx();
+      return;
+    }
+    if (btn.id === "lora-stream-start") {
+      void startLoraStream();
+      return;
+    }
+    if (btn.id === "lora-stream-stop") {
+      stopLoraStreamActive();
       return;
     }
     if (btn.id === "uwb-at-send") {

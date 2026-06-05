@@ -254,7 +254,10 @@ menu "RegattaOne — TDMA (PPS-synchronized UTC slots)"
     config TDMA_ENFORCE_LORA_TX
         bool "Reject LoRa transmit outside assigned slot"
         depends on REGATTAONE_TDMA_ENABLE && REGATTAONE_SX1262_ENABLE
-        default y
+        default n
+        help
+            When disabled, LoRa TX uses CAD/CSMA only (recommended for broadcast).
+            TDMA timebase and UWB gating can stay enabled separately.
 
     config TDMA_ENFORCE_UWB
         bool "Gate UWB activity on TDMA slot (ryuw122_tdma_can_use_now)"

@@ -115,7 +115,7 @@ Firmware uses **[RadioLib](https://github.com/jgromes/RadioLib)** in `components
 
 - UART: **UART2** (`GPS_UART_PORT_NUM=2`) so **UART1** remains free for RYUW122.
 - Baud: **9600** default (common NMEA rate). Many modules ship at **115200** — match `GPS_UART_BAUD` to your module or reconfigure the GPS.
-- **PPS:** rising edge ~1 Hz when locked. See **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)** for UTC timebase, TDMA slots, LoRa/UWB gates, and APIs. Summary: PPS + `$xxRMC` → UTC µs clock → shared slot schedule. BLE `$PREGPPS,...` on 0xFEFD. NMEA not logged to serial.
+- **PPS:** rising edge ~1 Hz when locked. See **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)** for UTC timebase and TDMA slots. **LoRa TX** uses **CAD/CSMA** by default; **UWB** can use the same slot schedule (`TDMA_ENFORCE_UWB`). BLE `$PREGPPS,...` on 0xFEFD. NMEA not logged to serial.
 
 Configure TDMA: **menuconfig → RegattaOne — TDMA** (or see [TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)).
 
