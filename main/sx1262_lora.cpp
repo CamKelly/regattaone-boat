@@ -19,6 +19,7 @@
 #include "tdma.h"
 
 #include <cstdarg>
+#include <cstdio>
 #include <cstring>
 
 static const char *TAG = "sx1262";
@@ -158,6 +159,154 @@ static bool sx1262_handle_radio_error_locked(int code)
 #endif
     return false;
 }
+
+#if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
+
+static constexpr size_t SX1262_TX_STAMP_BYTES = 4U;
+
+/** Build over-the-air buffer; may prepend 4-byte UTC ms (LE) when GPS UTC is valid. */
+static size_t sx1262_build_on_air(const sx1262_tx_item_t &item, uint8_t *out, size_t out_cap)
+{
+    if (gps_timebase_utc_valid()) {
+        const size_t on_air_len = SX1262_TX_STAMP_BYTES + item.len;
+        if (on_air_len <= out_cap && on_air_len <= 255U) {
+            const uint32_t tx_ms = (uint32_t)(gps_timebase_now_us() / 1000LL);
+            memcpy(out, &tx_ms, SX1262_TX_STAMP_BYTES);
+            memcpy(out + SX1262_TX_STAMP_BYTES, item.data, item.len);
+            return on_air_len;
+        }
+    }
+    if (item.len > out_cap || item.len > 255U) {
+        return 0;
+    }
+    memcpy(out, item.data, item.len);
+    return item.len;
+}
+
+static bool sx1262_parse_legacy_ts_prefix(const uint8_t *data, size_t len, int64_t *tx_utc_us, const uint8_t **payload,
+                                          size_t *payload_len)
+{
+    if (data == nullptr || len < 5U || tx_utc_us == nullptr || payload == nullptr || payload_len == nullptr) {
+        return false;
+    }
+    if (memcmp(data, "TS=", 3) != 0) {
+        return false;
+    }
+
+    size_t i = 3U;
+    int64_t ts = 0;
+    bool any = false;
+    while (i < len && data[i] >= '0' && data[i] <= '9') {
+        any = true;
+        ts = ts * 10LL + (int64_t)(data[i] - '0');
+        i++;
+    }
+    if (!any || i >= len || data[i] != '\n') {
+        return false;
+    }
+    i++;
+
+    *tx_utc_us = ts;
+    *payload = data + i;
+    *payload_len = len - i;
+    return true;
+}
+
+static bool sx1262_one_way_latency_ms_u32(uint32_t tx_ms, uint32_t rx_ms, int64_t *latency_ms)
+{
+    if (latency_ms == nullptr || !gps_timebase_utc_valid()) {
+        return false;
+    }
+    const uint32_t delta_ms = rx_ms - tx_ms;
+    if (delta_ms > 120U * 1000U) {
+        return false;
+    }
+    *latency_ms = (int64_t)delta_ms;
+    return true;
+}
+
+static bool sx1262_one_way_latency_ms_us(int64_t tx_utc_us, int64_t rx_utc_us, int64_t *latency_ms)
+{
+    if (latency_ms == nullptr || tx_utc_us <= 0 || rx_utc_us <= 0 || !gps_timebase_utc_valid()) {
+        return false;
+    }
+    const int64_t delta_us = rx_utc_us - tx_utc_us;
+    if (delta_us < 0 || delta_us > 120LL * 1000000LL) {
+        return false;
+    }
+    *latency_ms = (delta_us + 999) / 1000;
+    return true;
+}
+
+static bool sx1262_likely_binary_stamp(const uint8_t *data, size_t len)
+{
+    if (data == nullptr || len <= SX1262_TX_STAMP_BYTES) {
+        return false;
+    }
+    if (len >= 3U && memcmp(data, "TS=", 3) == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < SX1262_TX_STAMP_BYTES; i++) {
+        const uint8_t b = data[i];
+        if (b < 0x20U || b > 0x7EU) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void sx1262_log_rx_packet(const uint8_t *buf, size_t len, float rssi, float snr)
+{
+    const uint8_t *payload = buf;
+    size_t payload_len = len;
+    int64_t latency_ms = -1;
+    bool stripped_stamp = false;
+
+    int64_t legacy_tx_utc_us = 0;
+    if (sx1262_parse_legacy_ts_prefix(buf, len, &legacy_tx_utc_us, &payload, &payload_len)) {
+        stripped_stamp = true;
+        int64_t ms = 0;
+        if (sx1262_one_way_latency_ms_us(legacy_tx_utc_us, gps_timebase_now_us(), &ms)) {
+            latency_ms = ms;
+        }
+    } else if (len >= SX1262_TX_STAMP_BYTES) {
+        uint32_t tx_ms = 0;
+        memcpy(&tx_ms, buf, SX1262_TX_STAMP_BYTES);
+        const uint32_t rx_ms = (uint32_t)(gps_timebase_now_us() / 1000LL);
+        int64_t ms = 0;
+        if (sx1262_one_way_latency_ms_u32(tx_ms, rx_ms, &ms)) {
+            latency_ms = ms;
+            payload = buf + SX1262_TX_STAMP_BYTES;
+            payload_len = len - SX1262_TX_STAMP_BYTES;
+            stripped_stamp = true;
+        } else if (sx1262_likely_binary_stamp(buf, len)) {
+            payload = buf + SX1262_TX_STAMP_BYTES;
+            payload_len = len - SX1262_TX_STAMP_BYTES;
+            stripped_stamp = true;
+        }
+    }
+
+    if (latency_ms >= 0) {
+        ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB, latency %lld ms: %.*s", (unsigned)payload_len,
+                 (double)rssi, (double)snr, (long long)latency_ms, (int)payload_len, (const char *)payload);
+        lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f latency %lld ms: %.*s\n", (unsigned)payload_len,
+                          (double)rssi, (double)snr, (long long)latency_ms, (int)payload_len,
+                          (const char *)payload);
+    } else if (stripped_stamp) {
+        ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB (latency n/a, GPS/PPS not synced): %.*s",
+                 (unsigned)payload_len, (double)rssi, (double)snr, (int)payload_len, (const char *)payload);
+        lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f (latency n/a, GPS/PPS not synced): %.*s\n",
+                          (unsigned)payload_len, (double)rssi, (double)snr, (int)payload_len,
+                          (const char *)payload);
+    } else {
+        ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB: %.*s", (unsigned)payload_len, (double)rssi,
+                 (double)snr, (int)payload_len, (const char *)payload);
+        lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f: %.*s\n", (unsigned)payload_len, (double)rssi,
+                          (double)snr, (int)payload_len, (const char *)payload);
+    }
+}
+
+#endif /* CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY */
 
 const char *sx1262_lora_status_text(void)
 {
@@ -400,10 +549,14 @@ static void sx1262_rx_task(void *arg)
             } else {
                 buf[len] = '\0';
             }
+#if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
+            sx1262_log_rx_packet(buf, len, s_radio->getRSSI(), s_radio->getSNR());
+#else
             ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB: %.*s", (unsigned)len, s_radio->getRSSI(),
                      s_radio->getSNR(), (int)len, (const char *)buf);
             lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f: %.*s\n", (unsigned)len, (double)s_radio->getRSSI(),
                               (double)s_radio->getSNR(), (int)len, (const char *)buf);
+#endif
         } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
             ESP_LOGW(TAG, "RX CRC mismatch RSSI %.1f SNR %.1f", (double)s_radio->getRSSI(), (double)s_radio->getSNR());
             lora_line_notifyf("! RX CRC mismatch RSSI %.1f SNR %.1f\n", (double)s_radio->getRSSI(),
@@ -498,7 +651,21 @@ static void sx1262_tx_task(void *arg)
             continue;
         }
 
-        const int tx_state = s_radio->transmit(item.data, item.len);
+        uint8_t on_air[256];
+        size_t on_air_len = item.len;
+#if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
+        on_air_len = sx1262_build_on_air(item, on_air, sizeof(on_air));
+        if (on_air_len == 0U) {
+            xSemaphoreGive(s_radio_mtx);
+            ESP_LOGW(TAG, "TX framing failed (%u bytes)", (unsigned)item.len);
+            vTaskDelay(pdMS_TO_TICKS(80));
+            continue;
+        }
+#else
+        memcpy(on_air, item.data, item.len);
+#endif
+
+        const int tx_state = s_radio->transmit(on_air, on_air_len);
         if (tx_state != RADIOLIB_ERR_NONE) {
             (void)sx1262_restart_receive_locked();
             xSemaphoreGive(s_radio_mtx);

@@ -162,6 +162,16 @@ menu "RegattaOne — SX1262 LoRa (SPI, RadioLib)"
             When startReceive / CAD / TX fails repeatedly, call begin() again to
             recover from a stuck SX1262 state.
 
+    config SX1262_GPS_LATENCY
+        bool "GPS UTC timestamp on TX for one-way latency on RX"
+        depends on REGATTAONE_SX1262_ENABLE && REGATTAONE_GPS_ENABLE
+        default y
+        help
+            When GPS UTC is valid at transmit time, prefix the over-the-air payload
+            with 4 bytes of UTC milliseconds (little-endian). The receiver computes
+            one-way latency when its GPS timebase is also synced (requires PPS +
+            NMEA on both boats).
+
 endmenu
 
 menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
