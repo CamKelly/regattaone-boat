@@ -47,6 +47,54 @@ struct sx1262_tx_item_t {
 
 static sx1262_tx_item_t s_tx_q[CONFIG_SX1262_TX_QUEUE_DEPTH];
 static size_t s_tx_q_count = 0;
+static uint32_t s_consecutive_radio_errors = 0;
+
+static const char *radiolib_err_name(int code)
+{
+    switch (code) {
+    case RADIOLIB_ERR_NONE:
+        return "ERR_NONE";
+    case RADIOLIB_ERR_CHIP_NOT_FOUND:
+        return "ERR_CHIP_NOT_FOUND";
+    case RADIOLIB_ERR_TX_TIMEOUT:
+        return "ERR_TX_TIMEOUT";
+    case RADIOLIB_ERR_RX_TIMEOUT:
+        return "ERR_RX_TIMEOUT";
+    case RADIOLIB_ERR_CRC_MISMATCH:
+        return "ERR_CRC_MISMATCH";
+    case RADIOLIB_ERR_WRONG_MODEM:
+        return "ERR_WRONG_MODEM";
+    case RADIOLIB_CHANNEL_FREE:
+        return "CHANNEL_FREE";
+    case RADIOLIB_LORA_DETECTED:
+        return "LORA_DETECTED";
+    case RADIOLIB_ERR_SPI_CMD_FAILED:
+        return "ERR_SPI_CMD_FAILED";
+    case RADIOLIB_ERR_SPI_CMD_TIMEOUT:
+        return "ERR_SPI_CMD_TIMEOUT";
+    case RADIOLIB_ERR_SPI_CMD_INVALID:
+        return "ERR_SPI_CMD_INVALID";
+    default:
+        return "ERR_UNKNOWN";
+    }
+}
+
+static float sx1262_tcxo_voltage_v(void)
+{
+    return (float)CONFIG_SX1262_TCXO_VOLTAGE_MV / 1000.0f;
+}
+
+static int sx1262_modem_begin_locked(void)
+{
+    const float freq_mhz = (float)SX1262_FREQ_HZ / 1000000.0f;
+    return s_radio->begin(freq_mhz, kLoRaBwKhz, kLoRaSf, kLoRaCr, RADIOLIB_SX126X_SYNC_WORD_PRIVATE,
+                          (int8_t)SX1262_TX_POWER_DBM, 8, sx1262_tcxo_voltage_v(), false);
+}
+
+static void sx1262_note_radio_ok(void)
+{
+    s_consecutive_radio_errors = 0;
+}
 
 static spi_host_device_t sx1262_spi_host(void)
 {
@@ -72,6 +120,43 @@ static void lora_line_notifyf(const char *fmt, ...)
     if (n > 0) {
         ble_sen0140_lora_line_notify((const uint8_t *)line, (size_t)n);
     }
+}
+
+static bool sx1262_recover_modem_locked(void)
+{
+    ESP_LOGW(TAG, "recovering modem (re-begin, tcxo=%.3f V)", (double)sx1262_tcxo_voltage_v());
+    lora_line_notifyf("! radio recover (re-begin, tcxo %.3f V)\n", (double)sx1262_tcxo_voltage_v());
+
+    const int st = sx1262_modem_begin_locked();
+    if (st != RADIOLIB_ERR_NONE) {
+        ESP_LOGE(TAG, "recover begin failed: %s (%d)", radiolib_err_name(st), st);
+        return false;
+    }
+
+    const int rx = s_radio->startReceive();
+    if (rx != RADIOLIB_ERR_NONE) {
+        ESP_LOGE(TAG, "recover startReceive failed: %s (%d)", radiolib_err_name(rx), rx);
+        return false;
+    }
+
+    sx1262_note_radio_ok();
+    ESP_LOGI(TAG, "modem recovered");
+    lora_line_notifyf("! radio recovered\n");
+    return true;
+}
+
+static bool sx1262_handle_radio_error_locked(int code)
+{
+#if CONFIG_SX1262_RECOVER_AFTER_ERRORS > 0
+    s_consecutive_radio_errors++;
+    if (s_consecutive_radio_errors >= (uint32_t)CONFIG_SX1262_RECOVER_AFTER_ERRORS) {
+        s_consecutive_radio_errors = 0;
+        return sx1262_recover_modem_locked();
+    }
+#else
+    (void)code;
+#endif
+    return false;
 }
 
 const char *sx1262_lora_status_text(void)
@@ -231,7 +316,8 @@ static void rx_error_throttled(int state)
     s_err_count++;
 
     if (s_err_count == 1U || (s_err_count % 32U) == 0U) {
-        ESP_LOGW(TAG, "RX error: %d (count=%lu)", state, (unsigned long)s_err_count);
+        ESP_LOGW(TAG, "RX error: %s (%d, count=%lu)", radiolib_err_name(state), state,
+                 (unsigned long)s_err_count);
     }
 
     const int64_t now_us = (int64_t)esp_timer_get_time();
@@ -239,17 +325,18 @@ static void rx_error_throttled(int state)
         return;
     }
     s_last_ble_notify_us = now_us;
-    lora_line_notifyf("! RX error %d (radio busy / DIO1 - see serial log)\n", state);
+    lora_line_notifyf("! RX error %s (%d)\n", radiolib_err_name(state), state);
 }
 
 static bool sx1262_restart_receive_locked(void)
 {
     const int st = s_radio->startReceive();
-    if (st != RADIOLIB_ERR_NONE) {
-        ESP_LOGW(TAG, "startReceive: %d", st);
-        return false;
+    if (st == RADIOLIB_ERR_NONE) {
+        sx1262_note_radio_ok();
+        return true;
     }
-    return true;
+    ESP_LOGW(TAG, "startReceive: %s (%d)", radiolib_err_name(st), st);
+    return sx1262_handle_radio_error_locked(st);
 }
 
 static uint32_t cad_backoff_ms(size_t payload_len)
@@ -298,10 +385,8 @@ static void sx1262_rx_task(void *arg)
 
         const uint32_t irq = s_radio->getIrqFlags();
         if (!(irq & RADIOLIB_SX126X_IRQ_RX_DONE)) {
-            (void)s_radio->finishReceive();
-            (void)sx1262_restart_receive_locked();
+            /* DIO1 high without RX_DONE (CAD/TX/stale IRQ on shared DIO1): ignore. */
             xSemaphoreGive(s_radio_mtx);
-            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
@@ -407,8 +492,8 @@ static void sx1262_tx_task(void *arg)
         if (cad != RADIOLIB_CHANNEL_FREE) {
             (void)sx1262_restart_receive_locked();
             xSemaphoreGive(s_radio_mtx);
-            ESP_LOGW(TAG, "scanChannel failed: %d", cad);
-            lora_line_notifyf("! CAD error %d\n", cad);
+            ESP_LOGW(TAG, "scanChannel failed: %s (%d)", radiolib_err_name(cad), cad);
+            lora_line_notifyf("! CAD error %s (%d)\n", radiolib_err_name(cad), cad);
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -417,8 +502,8 @@ static void sx1262_tx_task(void *arg)
         if (tx_state != RADIOLIB_ERR_NONE) {
             (void)sx1262_restart_receive_locked();
             xSemaphoreGive(s_radio_mtx);
-            ESP_LOGW(TAG, "transmit failed: %d", tx_state);
-            lora_line_notifyf("! TX failed %d\n", tx_state);
+            ESP_LOGW(TAG, "transmit failed: %s (%d)", radiolib_err_name(tx_state), tx_state);
+            lora_line_notifyf("! TX failed %s (%d)\n", radiolib_err_name(tx_state), tx_state);
             vTaskDelay(pdMS_TO_TICKS(80));
             continue;
         }
@@ -455,8 +540,7 @@ extern "C" esp_err_t sx1262_lora_init(void)
     s_radio = new SX1262(s_module);
 
     const float freq_mhz = (float)SX1262_FREQ_HZ / 1000000.0f;
-    const int state = s_radio->begin(freq_mhz, kLoRaBwKhz, kLoRaSf, kLoRaCr, RADIOLIB_SX126X_SYNC_WORD_PRIVATE,
-                                     (int8_t)SX1262_TX_POWER_DBM, 8, 1.6f, false);
+    const int state = sx1262_modem_begin_locked();
     if (state != RADIOLIB_ERR_NONE) {
         if (state == RADIOLIB_ERR_CHIP_NOT_FOUND) {
             ESP_LOGE(TAG,
@@ -464,17 +548,19 @@ extern "C" esp_err_t sx1262_lora_init(void)
                      SX1262_SPI_MOSI_GPIO, SX1262_SPI_MISO_GPIO, SX1262_SPI_SCLK_GPIO, SX1262_SPI_CS_GPIO,
                      SX1262_RESET_GPIO, SX1262_BUSY_GPIO);
         } else {
-            ESP_LOGE(TAG, "SX1262 begin failed: %d", state);
+            ESP_LOGE(TAG, "SX1262 begin failed: %s (%d) tcxo=%.3f V (menuconfig SX1262_TCXO_VOLTAGE_MV)",
+                     radiolib_err_name(state), state, (double)sx1262_tcxo_voltage_v());
         }
         set_status(SX1262_LORA_STATUS_INIT_FAILED);
         return ESP_FAIL;
     }
 
     ESP_LOGI(TAG,
-             "SX1262 ready: SPI%d MOSI=%d MISO=%d SCK=%d CS=%d RST=%d DIO1=%d BUSY=%d freq=%.3f MHz bw=%.0f sf=%u cr=%u tx=%d dBm",
+             "SX1262 ready: SPI%d MOSI=%d MISO=%d SCK=%d CS=%d RST=%d DIO1=%d BUSY=%d freq=%.3f MHz bw=%.0f sf=%u cr=%u tx=%d dBm tcxo=%.3f V",
              CONFIG_SX1262_SPI_HOST_NUM, SX1262_SPI_MOSI_GPIO, SX1262_SPI_MISO_GPIO, SX1262_SPI_SCLK_GPIO,
              SX1262_SPI_CS_GPIO, SX1262_RESET_GPIO, SX1262_DIO1_GPIO, SX1262_BUSY_GPIO, (double)freq_mhz,
-             (double)kLoRaBwKhz, (unsigned)kLoRaSf, (unsigned)kLoRaCr, SX1262_TX_POWER_DBM);
+             (double)kLoRaBwKhz, (unsigned)kLoRaSf, (unsigned)kLoRaCr, SX1262_TX_POWER_DBM,
+             (double)sx1262_tcxo_voltage_v());
 
     s_modem_ready = true;
     set_status(SX1262_LORA_STATUS_NOT_STARTED);

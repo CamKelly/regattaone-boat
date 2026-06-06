@@ -142,6 +142,26 @@ menu "RegattaOne — SX1262 LoRa (SPI, RadioLib)"
         default 100
         range 20 500
 
+    config SX1262_TCXO_VOLTAGE_MV
+        int "TCXO reference on DIO3 (mV); 0 = crystal (XTAL) module"
+        depends on REGATTAONE_SX1262_ENABLE
+        default 0
+        range 0 3300
+        help
+            RadioLib begin() tcxoVoltage argument. Most SX1262 breakouts (Ebyte E22,
+            Waveshare, etc.) use a crystal — set 0. TCXO modules (some Heltec boards)
+            need 1600 (1.6 V) or the value from the module datasheet. Wrong setting
+            often causes SPI command errors (-706/-707) after init.
+
+    config SX1262_RECOVER_AFTER_ERRORS
+        int "Re-begin modem after this many consecutive radio errors (0 = off)"
+        depends on REGATTAONE_SX1262_ENABLE
+        default 3
+        range 0 32
+        help
+            When startReceive / CAD / TX fails repeatedly, call begin() again to
+            recover from a stuck SX1262 state.
+
 endmenu
 
 menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
