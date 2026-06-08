@@ -3,6 +3,7 @@
 #
 # Usage:
 #   ./scripts/idf-s3.sh devkit-mini set-target esp32s3
+#   ./scripts/idf-s3.sh freenove set-target esp32s3
 #   ./scripts/idf-s3.sh devkit-mini build flash monitor
 #   ./scripts/idf-s3.sh waveshare-zero build flash monitor
 #
@@ -10,7 +11,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BOARD="${1:?usage: $0 <devkit-mini|waveshare-zero> [idf.py args...]}"
+BOARD="${1:?usage: $0 <devkit-mini|freenove|waveshare-zero> [idf.py args...]}"
 shift
 
 ensure_idf_env() {
@@ -42,12 +43,15 @@ case "$BOARD" in
   devkit-mini|mini|devkit)
     FRAG="sdkconfig.defaults.esp32s3.board-devkit-mini"
     ;;
+  freenove|freenove-wroom-lite|fnk0102)
+    FRAG="sdkconfig.defaults.esp32s3.board-freenove-wroom-lite"
+    ;;
   waveshare-zero|zero|waveshare)
     FRAG="sdkconfig.defaults.esp32s3.board-waveshare-zero"
     ;;
   *)
     echo "Unknown board: $BOARD" >&2
-    echo "Use: devkit-mini | waveshare-zero" >&2
+    echo "Use: devkit-mini | freenove | waveshare-zero" >&2
     exit 1
     ;;
 esac

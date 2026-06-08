@@ -5,7 +5,8 @@ This document describes pin plans for **two ESP32-S3 carriers** supported by fir
 | Board | Module | Select in build |
 | ----- | ------ | ---------------- |
 | **ESP32-S3-DevKitM-1** / WEMOS LOLIN Mini | **ESP32-S3-MINI-1** | `scripts/idf-s3.sh devkit-mini …` |
-| **Waveshare ESP32-S3-Zero** | **ESP32-S3FH4R2** (4 MB flash, 2 MB PSRAM) | `scripts/idf-s3.sh waveshare-zero …` |
+| **Freenove ESP32-S3 WROOM Lite** | **ESP32-S3-WROOM-1** | `scripts/idf-s3.sh freenove …` — pinout: **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)** |
+| **Waveshare ESP32-S3-Zero** | **ESP32-S3FH4R2** (4 MB flash, 2 MB PSRAM) | `scripts/idf-s3.sh waveshare-zero …` — pinout: **[WAVESHARE-ESP32S3-ZERO-PINOUT.md](WAVESHARE-ESP32S3-ZERO-PINOUT.md)** |
 
 The Blues **Notecard** is replaced by an **SX1262** LoRa module over **SPI** (RadioLib). **GPS** uses **NMEA 0183** on UART plus **PPS**. **REYAX RYUW122** UWB stays on UART. **SEN0140** IMU stays on I2C.
 
@@ -22,6 +23,11 @@ The Blues **Notecard** is replaced by an **SX1262** LoRa module over **SPI** (Ra
 rm -f sdkconfig
 ./scripts/idf-s3.sh devkit-mini set-target esp32s3
 ./scripts/idf-s3.sh devkit-mini build flash monitor
+
+# Freenove ESP32-S3 WROOM Lite:
+rm -f sdkconfig
+./scripts/idf-s3.sh freenove set-target esp32s3
+./scripts/idf-s3.sh freenove build flash monitor
 
 # Waveshare ESP32-S3-Zero:
 rm -f sdkconfig
@@ -56,6 +62,31 @@ When switching boards, delete **`sdkconfig`** (or run `idf.py fullclean`) so sta
 
 ---
 
+## Pin summary — Freenove ESP32-S3 WROOM Lite
+
+Same GPIO assignment as **DevKit Mini** — all four peripherals enabled by default. Full header pinout: **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)**.
+
+| Function | Signal | SoC GPIO | PCB label | Notes |
+| -------- | ------ | -------- | --------- | ----- |
+| **IMU I2C** | SDA | **10** | **10** (left) | SEN0140 |
+| | SCL | **11** | **11** (left) | |
+| **LoRa SPI** | MOSI | **13** | **13** (left) | SX1262 |
+| | MISO | **14** | **14** (left) | |
+| | SCLK | **12** | **12** (left) | SPI2 / FSPI |
+| | CS | **9** | **9** (left) | |
+| | RESET | **8** | **8** (left) | |
+| | DIO1 | **7** | **7** (left) | |
+| | BUSY | **6** | **6** (left) | |
+| **GPS UART** | ESP TX → GPS RX | **4** | **4** (left) | UART2 |
+| | ESP RX ← GPS TX | **5** | **5** (left) | |
+| **GPS PPS** | 1 Hz pulse in | **21** | **21** (right) | WS2812 LED is silkscreen **48** on this board |
+| **UWB UART** | ESP TX → module RX | **17** | **17** (left) | UART1, RYUW122 |
+| | ESP RX ← module TX | **18** | **18** (left) | |
+
+Avoid silkscreen **35–37** (PSRAM), **48** (WS2812), **TX/RX** (console), **19/20** (USB).
+
+---
+
 ## Pin summary — Waveshare ESP32-S3-Zero
 
 Default firmware for **`waveshare-zero`** is **GPS + LoRa only** on **castellated edge pins GP4–GP13**. These pads are **not used** on this plan: **GP14–GP18**, **GP38–GP42**, **GP45** (and **GP33–GP37** are not broken out).
@@ -75,7 +106,7 @@ Default firmware for **`waveshare-zero`** is **GPS + LoRa only** on **castellate
 | **IMU I2C** | — | — | — | Disabled (`REGATTAONE_SEN0140_ENABLE=n`) |
 | **UWB UART** | — | — | — | Disabled (`REGATTAONE_RYUW122_ENABLE=n`) |
 
-**Zero-specific:** **GP21** = onboard **WS2812** (do not use). **TX/RX** silkscreen = **GP43/GP44** (USB console). Enable IMU/UWB or PPS later in **menuconfig** only if you wire pads outside this plan.
+**Zero-specific:** **GP21** = onboard **WS2812** (do not use). **TX** / **RX** silkscreen = GPIO **43** / **44** (USB console). Enable IMU/UWB or PPS later in **menuconfig** only if you wire pads outside this plan.
 
 **Solder checklist (GPS + LoRa):** GP4, GP5, GP6, GP7, GP8, GP9, GP10, GP12, GP13, plus **3.3 V** and **GND** to each module.
 
@@ -153,6 +184,7 @@ Same as [WIRING-SEN0140.md](WIRING-SEN0140.md) — **GPIO10 SDA**, **GPIO11 SCL*
 | **0, 3, 45, 46** | Strapping — avoid if possible (GP45 exposed on Zero bottom) |
 | **43, 44** | USB Serial/JTAG (console; Zero **TX/RX** header) |
 | **21** | Waveshare Zero onboard **WS2812** — use GP16 for GPS PPS instead |
+| **48** | Freenove WROOM Lite onboard **WS2812** — GPS PPS uses **GPIO21** on Freenove |
 
 ---
 
@@ -162,6 +194,10 @@ Same as [WIRING-SEN0140.md](WIRING-SEN0140.md) — **GPIO10 SDA**, **GPIO11 SCL*
 # DevKit Mini (ESP32-S3-MINI-1 carrier):
 ./scripts/idf-s3.sh devkit-mini set-target esp32s3
 ./scripts/idf-s3.sh devkit-mini build flash monitor
+
+# Freenove ESP32-S3 WROOM Lite:
+./scripts/idf-s3.sh freenove set-target esp32s3
+./scripts/idf-s3.sh freenove build flash monitor
 
 # Waveshare ESP32-S3-Zero:
 ./scripts/idf-s3.sh waveshare-zero set-target esp32s3

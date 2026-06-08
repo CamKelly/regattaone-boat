@@ -1,6 +1,6 @@
 # RegattaOne Boat
 
-ESP-IDF **firmware** for **ESP32-S3** (**DevKitM-1 / WEMOS Mini** or **Waveshare ESP32-S3-Zero**) or **ESP32-C3** that bridges an **SX1262 LoRa** module (SPI / RadioLib), a **GPS** (NMEA 0183 UART + PPS), a **REYAX RYUW122_Lite** UWB module (UART), optional **SEN0140** IMU (I2C), and **Chrome over Web Bluetooth** on the same NimBLE GATT service. An **Angular + Ionic** web app connects to the device and shows **LoRa**, **GPS**, and **UWB** traffic.
+ESP-IDF **firmware** for **ESP32-S3** (**DevKitM-1 / WEMOS Mini**, **Freenove ESP32-S3 WROOM Lite**, or **Waveshare ESP32-S3-Zero**) or **ESP32-C3** that bridges an **SX1262 LoRa** module (SPI / RadioLib), a **GPS** (NMEA 0183 UART + PPS), a **REYAX RYUW122_Lite** UWB module (UART), optional **SEN0140** IMU (I2C), and **Chrome over Web Bluetooth** on the same NimBLE GATT service. An **Angular + Ionic** web app connects to the device and shows **LoRa**, **GPS**, and **UWB** traffic.
 
 BLE advertised name: random **4-character** code (A–Z, a–z, 0–9), persisted in NVS until you assign a boat ID.
 
@@ -13,7 +13,7 @@ BLE advertised name: random **4-character** code (A–Z, a–z, 0–9), persiste
 | **Firmware** (`main/`) | NimBLE GATT **0xFEF0**; optional **SEN0140** IMU task (**0xFEF1**); **SX1262** LoRa SPI (RadioLib, menuconfig); **GPS** NMEA UART + PPS; **RYUW122** UART lines → **0xFEF9** notify. |
 | **Web app** (`web/`) | **Web Bluetooth**: connect by service UUID, **LoRa** / **GPS** / **UWB** tabs. |
 | **Backend** (`backend/`) | Firebase Cloud Functions, Firestore rules, and admin PWA (`backend/client/`) — optional cloud stack, not required for on-boat BLE bring-up. |
-| **Wiring** | **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** — DevKit Mini or Waveshare Zero ↔ SX1262 ↔ GPS ↔ RYUW122 ↔ SEN0140. **PPS / TDMA:** **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)**. |
+| **Wiring** | **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** — DevKit Mini, Freenove WROOM Lite, or Waveshare Zero ↔ SX1262 ↔ GPS ↔ RYUW122 ↔ SEN0140. Pinouts: **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)**, **[WAVESHARE-ESP32S3-ZERO-PINOUT.md](WAVESHARE-ESP32S3-ZERO-PINOUT.md)**. **PPS / TDMA:** **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)**. |
 
 ---
 
@@ -40,6 +40,7 @@ From the **repository root**:
 ```bash
 # ESP32-S3 — pick board (see WIRING-ESP32S3-LORA-GPS.md)
 ./scripts/idf-s3.sh devkit-mini set-target esp32s3      # DevKitM-1 / WEMOS Mini
+# ./scripts/idf-s3.sh freenove set-target esp32s3     # Freenove ESP32-S3 WROOM Lite
 # ./scripts/idf-s3.sh waveshare-zero set-target esp32s3 # Waveshare ESP32-S3-Zero
 
 ./scripts/idf-s3.sh devkit-mini build
