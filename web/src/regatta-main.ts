@@ -1,7 +1,9 @@
 import {
   clearGpsLeafletMap,
+  initGpsLeafletMapStyle,
   invalidateGpsLeafletMapSize,
   recenterGpsLeafletMap,
+  setGpsLeafletMapStyle,
   updateGpsLeafletMap,
 } from "./lib/gps-leaflet-map";
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
@@ -1727,6 +1729,18 @@ export function startRegattaApp(): void {
     }
     if (btn.id === "boat-id-save") {
       void saveBoatIdToDevice();
+      return;
+    }
+    if (btn.id === "gps-map-recenter") {
+      recenterGpsLeafletMap();
+      return;
+    }
+    if (btn.id === "gps-map-style-street") {
+      setGpsLeafletMapStyle("street");
+      return;
+    }
+    if (btn.id === "gps-map-style-satellite") {
+      setGpsLeafletMapStyle("satellite");
     }
   });
   document.addEventListener("keydown", (ev) => {
@@ -1789,9 +1803,7 @@ export function startRegattaApp(): void {
 
   connectBtn.addEventListener("click", () => void connectBle());
 
-  document.querySelector("#gps-map-recenter")?.addEventListener("click", () => {
-    recenterGpsLeafletMap();
-  });
+  initGpsLeafletMapStyle();
 
   document.querySelector("#ble-tabs")?.addEventListener("click", (ev) => {
     const tab = (ev.target as HTMLElement | null)?.closest(".ant-tabs-tab");

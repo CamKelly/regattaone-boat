@@ -213,8 +213,26 @@
                   id="gps-map"
                   class="gps-map gps-map--hidden"
                   role="application"
-                  aria-label="GPS position on OpenStreetMap"
+                  aria-label="GPS position map"
                 ></div>
+                <div id="gps-map-style" class="gps-map-style" role="group" aria-label="Map style" hidden>
+                  <button
+                    type="button"
+                    id="gps-map-style-street"
+                    class="gps-map-style-btn gps-map-style-btn--active"
+                    aria-pressed="true"
+                  >
+                    Map
+                  </button>
+                  <button
+                    type="button"
+                    id="gps-map-style-satellite"
+                    class="gps-map-style-btn"
+                    aria-pressed="false"
+                  >
+                    Satellite
+                  </button>
+                </div>
                 <button type="button" id="gps-map-recenter" class="gps-map-recenter" hidden>
                   Recenter
                 </button>
