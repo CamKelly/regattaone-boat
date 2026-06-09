@@ -2,8 +2,9 @@
 # Wiring: WIRING-ESP32S3-LORA-GPS.md § Freenove WROOM Lite
 # Pinout: FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md
 #
-# Module may be 8 MB flash — if esptool reports size mismatch, set:
-#   CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y and unset CONFIG_ESPTOOLPY_FLASHSIZE_4MB
+# ESP32-S3-WROOM-1 on this board: 8 MB flash (overrides shared 4 MB default).
+# CONFIG_ESPTOOLPY_FLASHSIZE_4MB is not set
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 
 CONFIG_REGATTAONE_S3_BOARD_FREENOVE_WROOM_LITE=y
 # CONFIG_REGATTAONE_S3_BOARD_DEVKIT_MINI is not set

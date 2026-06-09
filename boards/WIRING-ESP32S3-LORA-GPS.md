@@ -5,7 +5,7 @@ This document describes pin plans for **two ESP32-S3 carriers** supported by fir
 | Board | Module | Select in build |
 | ----- | ------ | ---------------- |
 | **ESP32-S3-DevKitM-1** / WEMOS LOLIN Mini | **ESP32-S3-MINI-1** | `scripts/idf-s3.sh devkit-mini …` |
-| **Freenove ESP32-S3 WROOM Lite** | **ESP32-S3-WROOM-1** | `scripts/idf-s3.sh freenove …` — pinout: **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)** |
+| **Freenove ESP32-S3 WROOM Lite** | **ESP32-S3-WROOM-1** (8 MB flash) | `scripts/idf-s3.sh freenove …` — pinout: **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)** |
 | **Waveshare ESP32-S3-Zero** | **ESP32-S3FH4R2** (4 MB flash, 2 MB PSRAM) | `scripts/idf-s3.sh waveshare-zero …` — pinout: **[WAVESHARE-ESP32S3-ZERO-PINOUT.md](WAVESHARE-ESP32S3-ZERO-PINOUT.md)** |
 
 The Blues **Notecard** is replaced by an **SX1262** LoRa module over **SPI** (RadioLib). **GPS** uses **NMEA 0183** on UART plus **PPS**. **REYAX RYUW122** UWB stays on UART. **SEN0140** IMU stays on I2C.

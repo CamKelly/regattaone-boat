@@ -1,6 +1,6 @@
 # Freenove ESP32-S3 WROOM Lite — pinout
 
-Reference for the **[Freenove ESP32-S3 WROOM Lite](https://store.freenove.com/products/fnk0102)** (ESP32-S3-WROOM-1 module on a dual-row breakout). Logic level is **3.3 V** on all GPIO.
+Reference for the **[Freenove ESP32-S3 WROOM Lite](https://store.freenove.com/products/fnk0102)** (**ESP32-S3-WROOM-1**, **8 MB flash**, octal PSRAM on GPIO35–37). Dual-row breakout; logic level **3.3 V** on all GPIO.
 
 RegattaOne wiring (GPS, LoRa, IMU, UWB): **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** § Freenove WROOM Lite.
 
