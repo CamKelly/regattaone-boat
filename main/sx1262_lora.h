@@ -62,6 +62,12 @@ esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len);
 /** Enqueue with TDMA gate skipped in the TX worker (testing). */
 esp_err_t sx1262_lora_transmit_unscheduled(const uint8_t *data, size_t len);
 
+/** Discard pending stream/manual TX (e.g. when entering mesh mode). */
+void sx1262_lora_clear_tx_queue(void);
+
+/** Mesh heartbeat TX (CAD, only when lora_mesh_active). */
+esp_err_t sx1262_lora_mesh_transmit(const uint8_t *data, size_t len);
+
 #endif /* CONFIG_REGATTAONE_SX1262_ENABLE */
 
 #ifdef __cplusplus

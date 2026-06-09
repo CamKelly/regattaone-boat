@@ -12,6 +12,11 @@ export const BLE_IMU_CHAR_UUID = "0000fef1-0000-1000-8000-00805f9b34fb";
 export const BLE_LORA_TX_CHAR_UUID = "0000fef7-0000-1000-8000-00805f9b34fb";
 /** Notify: LoRa RX, CRC errors, TX queue/CAD events, and `! STATUS:` radio health. */
 export const BLE_LORA_LINE_CHAR_UUID = "0000fef8-0000-1000-8000-00805f9b34fb";
+/**
+ * Read/notify: LoRa session stats + mesh roster JSON.
+ * Write `stream=1` / `stream=0` (auto-send TX) or `mesh=1` / `mesh=0` (democratic ID mode).
+ */
+export const BLE_LORA_STATS_CHAR_UUID = "0000fefe-0000-1000-8000-00805f9b34fb";
 /** Notify: UTF-8 NMEA 0183 lines from GPS UART. */
 export const BLE_GPS_LINE_CHAR_UUID = "0000fefd-0000-1000-8000-00805f9b34fb";
 /** Notify: UTF-8 lines from RYUW122 UART. */

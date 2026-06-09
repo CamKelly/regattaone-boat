@@ -38,6 +38,9 @@ BLE advertised name: random **4-character** code (A–Z, a–z, 0–9), persiste
 From the **repository root**:
 
 ```bash
+# remove last build / config
+rm -rf build
+rm -f sdkconfig
 # ESP32-S3 — pick board (see WIRING-ESP32S3-LORA-GPS.md)
 ./scripts/idf-s3.sh devkit-mini set-target esp32s3      # DevKitM-1 / WEMOS Mini
 # ./scripts/idf-s3.sh freenove set-target esp32s3     # Freenove ESP32-S3 WROOM Lite
@@ -84,6 +87,7 @@ Service **16-bit UUID `0xFEF0`** (full UUID `0000fef0-0000-1000-8000-00805f9b34f
 | IMU | `0xFEF1` | Notify | Binary IMU packet (`sen0140_ble_imu_pkt_t`) if SEN0140 task runs. |
 | **LoRa TX** | **`0xFEF7`** | **Write** | UTF-8 payload (optional `TTL=<ms>\n` prefix). |
 | **LoRa RX / status** | **`0xFEF8`** | **Notify** | UTF-8 lines from LoRa RX and `! STATUS:` diagnostics. |
+| **LoRa stats** | **`0xFEFE`** | **Read/Notify/Write** | Session JSON (`tx`, per-sender RX gaps, `mesh` peer roster). Write `stream=1`/`0` (auto-send) or `mesh=1`/`0` (democratic ephemeral mesh IDs). |
 | **UWB UART line** | **`0xFEF9`** | **Notify** | UTF-8 line(s) from RYUW122 (chunked if long). |
 | UWB AT | `0xFEFA` | Write | AT command (CRLF appended if missing); responses on **0xFEF9**. |
 | Boat ID | `0xFEFB` | Read/Write | User boat id (NVS). |

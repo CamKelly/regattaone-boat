@@ -16,6 +16,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "lora_mesh.h"
+#include "lora_stats.h"
 #include "tdma.h"
 
 #include <cstdarg>
@@ -34,9 +36,10 @@ static sx1262_lora_status_t s_status = SX1262_LORA_STATUS_NOT_STARTED;
 static SemaphoreHandle_t s_radio_mtx = nullptr;
 static SemaphoreHandle_t s_tx_q_mtx = nullptr;
 
-static constexpr float kLoRaBwKhz = 125.0f;
-static constexpr uint8_t kLoRaSf = 9;
-static constexpr uint8_t kLoRaCr = 7;
+static constexpr float kLoRaBwKhz = 500.0f;
+static constexpr uint8_t kLoRaSf = 7;
+static constexpr uint8_t kLoRaCr = 5; /* RadioLib CR denominator → 4/5 */
+static constexpr uint16_t kLoRaPreambleLen = 8;
 static constexpr uint32_t kRxPollMs = (uint32_t)CONFIG_SX1262_RX_POLL_MS;
 
 struct sx1262_tx_item_t {
@@ -44,6 +47,7 @@ struct sx1262_tx_item_t {
     uint16_t len;
     int64_t deadline_us;
     bool skip_tdma;
+    bool stream_stat;
 };
 
 static sx1262_tx_item_t s_tx_q[CONFIG_SX1262_TX_QUEUE_DEPTH];
@@ -89,7 +93,7 @@ static int sx1262_modem_begin_locked(void)
 {
     const float freq_mhz = (float)SX1262_FREQ_HZ / 1000000.0f;
     return s_radio->begin(freq_mhz, kLoRaBwKhz, kLoRaSf, kLoRaCr, RADIOLIB_SX126X_SYNC_WORD_PRIVATE,
-                          (int8_t)SX1262_TX_POWER_DBM, 8, sx1262_tcxo_voltage_v(), false);
+                          (int8_t)SX1262_TX_POWER_DBM, kLoRaPreambleLen, sx1262_tcxo_voltage_v(), false);
 }
 
 static void sx1262_note_radio_ok(void)
@@ -123,6 +127,8 @@ static void lora_line_notifyf(const char *fmt, ...)
     }
 }
 
+static bool sx1262_restart_receive_locked(void);
+
 static bool sx1262_recover_modem_locked(void)
 {
     ESP_LOGW(TAG, "recovering modem (re-begin, tcxo=%.3f V)", (double)sx1262_tcxo_voltage_v());
@@ -146,18 +152,45 @@ static bool sx1262_recover_modem_locked(void)
     return true;
 }
 
+static bool sx1262_error_triggers_immediate_recover(int code)
+{
+    return code == RADIOLIB_ERR_WRONG_MODEM || code == RADIOLIB_ERR_SPI_CMD_FAILED
+        || code == RADIOLIB_ERR_SPI_CMD_TIMEOUT || code == RADIOLIB_ERR_TX_TIMEOUT;
+}
+
 static bool sx1262_handle_radio_error_locked(int code)
 {
 #if CONFIG_SX1262_RECOVER_AFTER_ERRORS > 0
-    s_consecutive_radio_errors++;
-    if (s_consecutive_radio_errors >= (uint32_t)CONFIG_SX1262_RECOVER_AFTER_ERRORS) {
-        s_consecutive_radio_errors = 0;
-        return sx1262_recover_modem_locked();
+    const uint32_t threshold = (uint32_t)CONFIG_SX1262_RECOVER_AFTER_ERRORS;
+    const bool hard = sx1262_error_triggers_immediate_recover(code);
+
+    if (!hard) {
+        s_consecutive_radio_errors++;
+    }
+
+    if (hard || s_consecutive_radio_errors >= threshold) {
+        if (sx1262_recover_modem_locked()) {
+            s_consecutive_radio_errors = 0;
+            return true;
+        }
+        /* Recover failed — retry on the next hard error or threshold hit. */
+        s_consecutive_radio_errors = threshold;
+        return false;
     }
 #else
     (void)code;
 #endif
     return false;
+}
+
+/** Log + count/recover; returns true when modem is back in RX. */
+static bool sx1262_after_radio_failure_locked(int code, const char *op)
+{
+    ESP_LOGW(TAG, "%s: %s (%d)", op, radiolib_err_name(code), code);
+    if (sx1262_handle_radio_error_locked(code)) {
+        return true;
+    }
+    return sx1262_restart_receive_locked();
 }
 
 #if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
@@ -304,6 +337,7 @@ static void sx1262_log_rx_packet(const uint8_t *buf, size_t len, float rssi, flo
         lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f: %.*s\n", (unsigned)payload_len, (double)rssi,
                           (double)snr, (int)payload_len, (const char *)payload);
     }
+    lora_stats_rx_packet((const char *)payload, payload_len);
 }
 
 #endif /* CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY */
@@ -386,6 +420,9 @@ static bool parse_tx_write(const uint8_t *in, size_t in_len, uint8_t *payload, s
 
 static esp_err_t tx_q_push(const uint8_t *data, size_t len, uint32_t ttl_ms, bool skip_tdma)
 {
+    if (lora_mesh_active()) {
+        return ESP_ERR_INVALID_STATE;
+    }
     if (!s_modem_ready || data == nullptr || len == 0U || len > 255U) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -408,6 +445,10 @@ static esp_err_t tx_q_push(const uint8_t *data, size_t len, uint32_t ttl_ms, boo
     item.len = (uint16_t)len;
     item.deadline_us = now_us + ttl_us;
     item.skip_tdma = skip_tdma;
+    item.stream_stat = lora_stats_stream_active();
+    if (item.stream_stat) {
+        lora_stats_tx_stream_queued();
+    }
     const size_t depth = s_tx_q_count;
     xSemaphoreGive(s_tx_q_mtx);
 
@@ -457,6 +498,16 @@ static bool tx_q_non_empty(void)
     return have;
 }
 
+static void tx_q_clear(void)
+{
+    if (s_tx_q_mtx == nullptr) {
+        return;
+    }
+    xSemaphoreTake(s_tx_q_mtx, portMAX_DELAY);
+    s_tx_q_count = 0U;
+    xSemaphoreGive(s_tx_q_mtx);
+}
+
 /** Avoid flooding 0xFEF8 notifies (starves NimBLE mbuf pool → GATT write fails). */
 static void rx_error_throttled(int state)
 {
@@ -484,8 +535,7 @@ static bool sx1262_restart_receive_locked(void)
         sx1262_note_radio_ok();
         return true;
     }
-    ESP_LOGW(TAG, "startReceive: %s (%d)", radiolib_err_name(st), st);
-    return sx1262_handle_radio_error_locked(st);
+    return sx1262_after_radio_failure_locked(st, "startReceive");
 }
 
 static uint32_t cad_backoff_ms(size_t payload_len)
@@ -544,20 +594,26 @@ static void sx1262_rx_task(void *arg)
 
         if (state == RADIOLIB_ERR_NONE) {
             const size_t len = s_radio->getPacketLength();
-            if (len >= sizeof(buf)) {
-                buf[sizeof(buf) - 1U] = '\0';
-            } else {
-                buf[len] = '\0';
-            }
+            if (len >= LORA_MESH_PKT_LEN && buf[0] == LORA_MESH_MAGIC) {
+                lora_mesh_on_rx(buf, len, (int64_t)esp_timer_get_time());
+            } else if (!lora_mesh_active()) {
+                if (len >= sizeof(buf)) {
+                    buf[sizeof(buf) - 1U] = '\0';
+                } else {
+                    buf[len] = '\0';
+                }
 #if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
-            sx1262_log_rx_packet(buf, len, s_radio->getRSSI(), s_radio->getSNR());
+                sx1262_log_rx_packet(buf, len, s_radio->getRSSI(), s_radio->getSNR());
 #else
-            ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB: %.*s", (unsigned)len, s_radio->getRSSI(),
-                     s_radio->getSNR(), (int)len, (const char *)buf);
-            lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f: %.*s\n", (unsigned)len, (double)s_radio->getRSSI(),
-                              (double)s_radio->getSNR(), (int)len, (const char *)buf);
+                ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB: %.*s", (unsigned)len, s_radio->getRSSI(),
+                         s_radio->getSNR(), (int)len, (const char *)buf);
+                lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f: %.*s\n", (unsigned)len, (double)s_radio->getRSSI(),
+                                  (double)s_radio->getSNR(), (int)len, (const char *)buf);
+                lora_stats_rx_packet((const char *)buf, len);
 #endif
+            }
         } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+            lora_stats_rx_bad();
             ESP_LOGW(TAG, "RX CRC mismatch RSSI %.1f SNR %.1f", (double)s_radio->getRSSI(), (double)s_radio->getSNR());
             lora_line_notifyf("! RX CRC mismatch RSSI %.1f SNR %.1f\n", (double)s_radio->getRSSI(),
                               (double)s_radio->getSNR());
@@ -588,6 +644,9 @@ static void sx1262_tx_task(void *arg)
 
         const int64_t now_us = (int64_t)esp_timer_get_time();
         if (now_us >= item.deadline_us) {
+            if (item.stream_stat) {
+                lora_stats_tx_stream_timeout();
+            }
             tx_q_pop();
             ESP_LOGW(TAG, "TX expired (%u bytes)", (unsigned)item.len);
 #if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_LORA_TX
@@ -643,10 +702,9 @@ static void sx1262_tx_task(void *arg)
             continue;
         }
         if (cad != RADIOLIB_CHANNEL_FREE) {
-            (void)sx1262_restart_receive_locked();
-            xSemaphoreGive(s_radio_mtx);
-            ESP_LOGW(TAG, "scanChannel failed: %s (%d)", radiolib_err_name(cad), cad);
             lora_line_notifyf("! CAD error %s (%d)\n", radiolib_err_name(cad), cad);
+            (void)sx1262_after_radio_failure_locked(cad, "scanChannel");
+            xSemaphoreGive(s_radio_mtx);
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
@@ -667,14 +725,16 @@ static void sx1262_tx_task(void *arg)
 
         const int tx_state = s_radio->transmit(on_air, on_air_len);
         if (tx_state != RADIOLIB_ERR_NONE) {
-            (void)sx1262_restart_receive_locked();
-            xSemaphoreGive(s_radio_mtx);
-            ESP_LOGW(TAG, "transmit failed: %s (%d)", radiolib_err_name(tx_state), tx_state);
             lora_line_notifyf("! TX failed %s (%d)\n", radiolib_err_name(tx_state), tx_state);
+            (void)sx1262_after_radio_failure_locked(tx_state, "transmit");
+            xSemaphoreGive(s_radio_mtx);
             vTaskDelay(pdMS_TO_TICKS(80));
             continue;
         }
 
+        if (item.stream_stat) {
+            lora_stats_tx_stream_ok();
+        }
         tx_q_pop();
         (void)sx1262_restart_receive_locked();
         xSemaphoreGive(s_radio_mtx);
@@ -760,9 +820,54 @@ extern "C" esp_err_t sx1262_lora_start(void)
         xSemaphoreGive(s_radio_mtx);
     }
 
+    lora_mesh_init();
+    lora_mesh_start_task();
+
     s_tasks_started = true;
     set_status(SX1262_LORA_STATUS_READY);
     ESP_LOGI(TAG, "LoRa RX/TX tasks started (CAD queue, TTL default %d ms)", CONFIG_SX1262_TX_DEFAULT_TTL_MS);
+    return ESP_OK;
+}
+
+extern "C" void sx1262_lora_clear_tx_queue(void)
+{
+    tx_q_clear();
+}
+
+extern "C" esp_err_t sx1262_lora_mesh_transmit(const uint8_t *data, size_t len)
+{
+    if (!lora_mesh_active() || !s_modem_ready || s_radio == nullptr || s_radio_mtx == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (data == nullptr || len != LORA_MESH_PKT_LEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (xSemaphoreTake(s_radio_mtx, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    const int cad = s_radio->scanChannel();
+    if (cad == RADIOLIB_LORA_DETECTED) {
+        (void)sx1262_restart_receive_locked();
+        xSemaphoreGive(s_radio_mtx);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (cad != RADIOLIB_CHANNEL_FREE) {
+        (void)sx1262_after_radio_failure_locked(cad, "mesh scanChannel");
+        xSemaphoreGive(s_radio_mtx);
+        return ESP_FAIL;
+    }
+
+    const int tx_state = s_radio->transmit(data, len);
+    if (tx_state != RADIOLIB_ERR_NONE) {
+        (void)sx1262_after_radio_failure_locked(tx_state, "mesh transmit");
+        xSemaphoreGive(s_radio_mtx);
+        return ESP_FAIL;
+    }
+
+    (void)sx1262_restart_receive_locked();
+    xSemaphoreGive(s_radio_mtx);
     return ESP_OK;
 }
 
@@ -821,6 +926,15 @@ extern "C" esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len)
 }
 
 extern "C" esp_err_t sx1262_lora_transmit_unscheduled(const uint8_t *data, size_t len)
+{
+    (void)data;
+    (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+extern "C" void sx1262_lora_clear_tx_queue(void) {}
+
+extern "C" esp_err_t sx1262_lora_mesh_transmit(const uint8_t *data, size_t len)
 {
     (void)data;
     (void)len;

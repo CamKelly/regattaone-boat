@@ -1,6 +1,10 @@
 # Waveshare ESP32-S3-Zero — GPS + LoRa only (edge castellated GP4–GP13).
 # Wiring: WIRING-ESP32S3-LORA-GPS.md § Waveshare Zero
 #
+# Module: ESP32-S3FH4R2 — 4 MB flash, 2 MB PSRAM.
+# CONFIG_ESPTOOLPY_FLASHSIZE_8MB is not set
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+#
 # Unavailable on this build (do not wire): GP14–GP18, GP38–GP42, GP45.
 # IMU (GP10/11 I2C) and UWB (GP17/18) disabled until those pads are usable.
 # GPS PPS off (GP16 unavailable) — NMEA works; TDMA needs PPS or menuconfig change.

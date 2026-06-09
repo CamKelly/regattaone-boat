@@ -12,7 +12,9 @@ set(regattaone_srcs
     "gps_pps_capture.c"
     "tdma.c"
     "tdma_scheduler.c"
-    "sx1262_lora.cpp")
+    "sx1262_lora.cpp"
+    "lora_stats.c"
+    "lora_mesh.c")
 
 # RadioLib: components/RadioLib (vendored). HAL: main/EspHal.h (ESP-IDF example style, S3 SPI).
 # sx1262_lora.cpp is compiled unconditionally; body is #if CONFIG_REGATTAONE_SX1262_ENABLE.

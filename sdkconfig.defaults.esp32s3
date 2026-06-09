@@ -1,8 +1,11 @@
 # ESP32-S3 — shared defaults (all board variants).
+# LoRa stats JSON + GATT discovery need headroom on the NimBLE host task.
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192
 # Pick a board pin map via scripts/idf-s3.sh or sdkconfig.defaults.esp32s3.board-*.
 #
-# Flash: 4 MB (typical ESP32-S3-MINI-1 and ESP32-S3FH4R2 / Waveshare Zero).
-# For 8 MB modules, set CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y in the board fragment.
+# Flash size is set per board in sdkconfig.defaults.esp32s3.board-*:
+#   devkit-mini / waveshare-zero → 4 MB
+#   freenove-wroom-lite          → 8 MB
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
 # Feature flags (pins are in board-specific fragments)

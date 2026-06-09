@@ -30,6 +30,8 @@
 #include "ryuw122_uart.h"
 #endif
 #if CONFIG_REGATTAONE_SX1262_ENABLE
+#include "lora_mesh.h"
+#include "lora_stats.h"
 #include "sx1262_lora.h"
 #endif
 
@@ -48,6 +50,8 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_BOAT_ID_UUID       0xfefb
 /** Read/write: device type — port | starboard | fixed_dgps_mark | waypoint | boat. */
 #define SEN0140_GATT_DEVICE_TYPE_UUID     0xfefc
+/** Read: LoRa stats JSON. Write: `stream=1` / `stream=0`. Notify: JSON on change. */
+#define SEN0140_GATT_LORA_STATS_UUID      0xfefe
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 200U
@@ -75,11 +79,14 @@ _Static_assert(sizeof(sen0140_ble_imu_pkt_t) == 42, "BLE IMU packet size");
 
 static uint16_t s_chr_val_handle;
 static uint16_t s_lora_line_chr_val_handle;
+static uint16_t s_lora_stats_chr_val_handle;
+static bool s_lora_stats_notify_enabled;
 static uint16_t s_gps_line_chr_val_handle;
 static uint16_t s_uwb_line_chr_val_handle;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool s_notify_enabled;
 static bool s_lora_line_notify_enabled;
+static char s_lora_stats_json[8192];
 static bool s_gps_line_notify_enabled;
 static bool s_uwb_line_notify_enabled;
 static uint16_t s_seq;
@@ -305,16 +312,73 @@ static int gatt_svr_access_lora_tx(uint16_t conn_handle, uint16_t attr_handle, s
     if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
         return BLE_ATT_ERR_UNLIKELY;
     }
+    if (lora_mesh_active()) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
     s_lora_line_len = 0U;
     s_lora_line_buf[0] = '\0';
     esp_err_t err = sx1262_lora_transmit(buf, om_len);
     if (err == ESP_OK) {
         return 0;
     }
-    if (err == ESP_ERR_NO_MEM) {
+    if (err == ESP_ERR_NO_MEM || err == ESP_ERR_INVALID_STATE) {
         return BLE_ATT_ERR_INSUFFICIENT_RES;
     }
     return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int gatt_svr_access_lora_stats(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                      void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const size_t n = lora_stats_format_json(s_lora_stats_json, sizeof(s_lora_stats_json));
+        if (n == 0U) {
+            return 0;
+        }
+        return os_mbuf_append(ctxt->om, s_lora_stats_json, (uint16_t)n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (om_len == 0U || om_len > 32U) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        char buf[33];
+        if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        buf[om_len] = '\0';
+        if (strncmp(buf, "stream=1", 8) == 0) {
+            if (lora_mesh_active()) {
+                return BLE_ATT_ERR_UNLIKELY;
+            }
+            lora_stats_set_stream_active(true);
+            lora_stats_request_notify();
+            return 0;
+        }
+        if (strncmp(buf, "stream=0", 8) == 0) {
+            lora_stats_set_stream_active(false);
+            lora_stats_request_notify();
+            return 0;
+        }
+        if (strncmp(buf, "mesh=1", 6) == 0) {
+            lora_stats_set_stream_active(false);
+            lora_mesh_set_active(true);
+            return 0;
+        }
+        if (strncmp(buf, "mesh=0", 6) == 0) {
+            lora_mesh_set_active(false);
+            lora_stats_request_notify();
+            return 0;
+        }
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    return BLE_ATT_ERR_READ_NOT_PERMITTED;
 }
 
 static int gatt_svr_access_lora_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
@@ -436,6 +500,12 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                     .val_handle = &s_lora_line_chr_val_handle,
                 },
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_LORA_STATS_UUID),
+                    .access_cb = gatt_svr_access_lora_stats,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+                    .val_handle = &s_lora_stats_chr_val_handle,
+                },
 #endif
 #if CONFIG_REGATTAONE_GPS_ENABLE
                 {
@@ -530,6 +600,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
         s_notify_enabled = false;
         s_lora_line_notify_enabled = false;
+        s_lora_stats_notify_enabled = false;
         s_gps_line_notify_enabled = false;
         s_uwb_line_notify_enabled = false;
         ble_advertise();
@@ -553,6 +624,18 @@ static int gap_event(struct ble_gap_event *event, void *arg)
 #if CONFIG_REGATTAONE_SX1262_ENABLE
             if (s_lora_line_notify_enabled) {
                 sx1262_lora_on_line_notify_subscribed();
+            }
+#endif
+        }
+        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_lora_stats_chr_val_handle)) {
+            s_lora_stats_notify_enabled = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "lora stats notify=%d", (int)s_lora_stats_notify_enabled);
+#if CONFIG_REGATTAONE_SX1262_ENABLE
+            if (s_lora_stats_notify_enabled) {
+                const size_t n = lora_stats_format_json(s_lora_stats_json, sizeof(s_lora_stats_json));
+                if (n > 0U) {
+                    ble_sen0140_lora_stats_notify((const uint8_t *)s_lora_stats_json, n);
+                }
             }
 #endif
         }
@@ -671,10 +754,10 @@ esp_err_t ble_sen0140_init(void)
 
     ESP_LOGI(TAG, "NimBLE host task started — watch for \"stack sync\" then \"GAP advertising\"");
     ESP_LOGI(TAG,
-             "NimBLE GATT (svc %04x imu %04x lora_tx %04x lora_rx %04x gps %04x uwb %04x uwb_at %04x)",
+             "NimBLE GATT (svc %04x imu %04x lora_tx %04x lora_rx %04x lora_stats %04x gps %04x uwb %04x uwb_at %04x)",
              SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_LORA_TX_UUID,
-             SEN0140_GATT_LORA_LINE_UUID, SEN0140_GATT_GPS_LINE_UUID, SEN0140_GATT_UWB_LINE_UUID,
-             SEN0140_GATT_UWB_AT_UUID);
+             SEN0140_GATT_LORA_LINE_UUID, SEN0140_GATT_LORA_STATS_UUID, SEN0140_GATT_GPS_LINE_UUID,
+             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID);
     return ESP_OK;
 }
 
@@ -778,6 +861,14 @@ void ble_sen0140_lora_line_notify(const uint8_t *data, size_t len)
     lora_line_store(data, len);
 #endif
     ble_line_notify(s_lora_line_chr_val_handle, s_lora_line_notify_enabled, data, len);
+}
+
+void ble_sen0140_lora_stats_notify(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+    ble_line_notify(s_lora_stats_chr_val_handle, s_lora_stats_notify_enabled, data, len);
 }
 
 void ble_sen0140_gps_line_notify(const uint8_t *data, size_t len)

@@ -359,3 +359,41 @@
 .log-header .field-label {
   margin: 0;
 }
+
+.lora-stats-table-wrap {
+  overflow-x: auto;
+  margin: 4px 0 8px;
+}
+
+.lora-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.lora-stats-table th,
+.lora-stats-table td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--ion-color-step-150, #d7d8da);
+}
+
+.lora-stats-table th {
+  font-weight: 600;
+}
+
+.lora-view-toggle-row {
+  margin: 0 0 8px;
+}
+
+.lora-panel-mesh[hidden] {
+  display: none !important;
+}
+
+#lora-panel-normal[hidden] {
+  display: none !important;
+}
+
+.lora-mesh-peer-self td {
+  font-weight: 600;
+}
