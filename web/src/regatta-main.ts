@@ -88,6 +88,7 @@ interface LoraMeshPeer {
 
 interface LoraMeshRxMsg {
   from: number;
+  seq: number;
   text: string;
   last_ms: number;
 }
@@ -1072,7 +1073,7 @@ function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
         msg_tx_fail?: number;
         msg_rx?: number;
         peers?: Array<{ id?: number; type?: number; last_ms?: number }>;
-        rx_msgs?: Array<{ from?: number; text?: string; last_ms?: number }>;
+        rx_msgs?: Array<{ from?: number; seq?: number; text?: string; last_ms?: number }>;
       };
     };
     const senders: LoraStatsSender[] = [];
@@ -1115,6 +1116,7 @@ function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
         }
         rx_msgs.push({
           from: Number(msg.from),
+          seq: Number(msg.seq ?? 0),
           text: String(msg.text),
           last_ms: Number(msg.last_ms ?? 0),
         });
@@ -1173,10 +1175,14 @@ function mergeMeshRxFromStats(
 ): void {
   for (const msg of next.rx_msgs) {
     const dup = prev.rx_msgs.some(
-      (p) => p.from === msg.from && p.text === msg.text && p.last_ms === msg.last_ms,
+      (p) =>
+        p.from === msg.from &&
+        p.seq === msg.seq &&
+        p.text === msg.text &&
+        p.last_ms === msg.last_ms,
     );
     if (!dup) {
-      appendMeshMessageLog(session, `← from ${msg.from}: ${msg.text}`);
+      appendMeshMessageLog(session, `← from ${msg.from} seq ${msg.seq}: ${msg.text}`);
     }
   }
 }
@@ -1470,7 +1476,11 @@ function ingestLoraLine(session: BleBoatSession, chunk: string): void {
     if (
       trimmed.startsWith(">> mesh TX") ||
       trimmed.startsWith("<< mesh RX") ||
-      trimmed.startsWith("! mesh TX")
+      trimmed.startsWith(">> mesh ACK") ||
+      trimmed.startsWith("<< mesh ACK") ||
+      trimmed.startsWith("<< mesh NACK") ||
+      trimmed.startsWith("! mesh TX") ||
+      trimmed.startsWith("! mesh CRC")
     ) {
       appendMeshMessageLog(session, trimmed);
       continue;

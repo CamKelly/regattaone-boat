@@ -1,7 +1,9 @@
 /*
  * LoRa democratic mesh ID mode — ephemeral 16-bit IDs + heartbeats (RAM only).
  * Heartbeat: magic 'M' + id(2 BE) + type(1) = 4 bytes.
- * Unicast:  magic 'U' + dst(2 BE) + src(2 BE) + UTF-8 payload (max 200 bytes).
+ * Unicast:  magic 'U' + dst(2 BE) + src(2 BE) + seq(2 BE) + crc16(2 BE) + UTF-8 (max 200).
+ * ACK:       magic 'A' + dst(2 BE) + src(2 BE) + seq(2 BE) = 7 bytes.
+ * NACK:      magic 'K' + dst(2 BE) + src(2 BE) + seq(2 BE) = 7 bytes.
  * Duplicate-ID collisions: random backoff (1–5 s) then repick (no MAC on air).
  */
 #pragma once
@@ -19,10 +21,13 @@ extern "C" {
 #endif
 
 #define LORA_MESH_PKT_LEN           4U
-#define LORA_MESH_UNICAST_HDR_LEN   5U
+#define LORA_MESH_UNICAST_HDR_LEN   9U
+#define LORA_MESH_CTRL_PKT_LEN      7U
 #define LORA_MESH_MSG_MAX           200U
 #define LORA_MESH_MAGIC             0x4DU
 #define LORA_MESH_UNICAST_MAGIC     0x55U
+#define LORA_MESH_ACK_MAGIC         0x41U
+#define LORA_MESH_NACK_MAGIC        0x4BU
 
 typedef enum {
     LORA_MESH_STATE_OFF = 0,
@@ -39,10 +44,10 @@ void lora_mesh_set_active(bool active);
 bool lora_mesh_active(void);
 lora_mesh_state_t lora_mesh_get_state(void);
 
-/** Periodic tick (listen timeout, reclaim, heartbeat schedule). */
+/** Periodic tick (listen timeout, reclaim, heartbeat schedule, msg retries). */
 void lora_mesh_tick(int64_t now_us);
 
-/** Parse mesh heartbeat or unicast RX. */
+/** Parse mesh heartbeat, unicast, ACK, or NACK RX. */
 void lora_mesh_on_rx(const uint8_t *data, size_t len, int64_t now_us);
 
 /** Handle mesh_tx=<id>\\n<utf8> on 0xFEFE. ESP_ERR_NOT_FOUND if not mesh_tx. */

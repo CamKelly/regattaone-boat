@@ -594,8 +594,10 @@ static void sx1262_rx_task(void *arg)
 
         if (state == RADIOLIB_ERR_NONE) {
             const size_t len = s_radio->getPacketLength();
-            if (len >= LORA_MESH_PKT_LEN
-                && (buf[0] == LORA_MESH_MAGIC || buf[0] == LORA_MESH_UNICAST_MAGIC)) {
+            if (((len >= LORA_MESH_PKT_LEN && buf[0] == LORA_MESH_MAGIC)
+                 || (len >= LORA_MESH_CTRL_PKT_LEN
+                     && (buf[0] == LORA_MESH_ACK_MAGIC || buf[0] == LORA_MESH_NACK_MAGIC))
+                 || (len > LORA_MESH_UNICAST_HDR_LEN && buf[0] == LORA_MESH_UNICAST_MAGIC))) {
                 lora_mesh_on_rx(buf, len, (int64_t)esp_timer_get_time());
             } else if (!lora_mesh_active()) {
                 if (len >= sizeof(buf)) {
