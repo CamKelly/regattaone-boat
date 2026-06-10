@@ -594,7 +594,8 @@ static void sx1262_rx_task(void *arg)
 
         if (state == RADIOLIB_ERR_NONE) {
             const size_t len = s_radio->getPacketLength();
-            if (len >= LORA_MESH_PKT_LEN && buf[0] == LORA_MESH_MAGIC) {
+            if (len >= LORA_MESH_PKT_LEN
+                && (buf[0] == LORA_MESH_MAGIC || buf[0] == LORA_MESH_UNICAST_MAGIC)) {
                 lora_mesh_on_rx(buf, len, (int64_t)esp_timer_get_time());
             } else if (!lora_mesh_active()) {
                 if (len >= sizeof(buf)) {
@@ -839,7 +840,8 @@ extern "C" esp_err_t sx1262_lora_mesh_transmit(const uint8_t *data, size_t len)
     if (!lora_mesh_active() || !s_modem_ready || s_radio == nullptr || s_radio_mtx == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (data == nullptr || len != LORA_MESH_PKT_LEN) {
+    if (data == nullptr || len < LORA_MESH_PKT_LEN
+        || len > LORA_MESH_UNICAST_HDR_LEN + LORA_MESH_MSG_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
 

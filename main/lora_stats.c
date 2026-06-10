@@ -7,6 +7,8 @@
 #include "ble_sen0140.h"
 #include "lora_mesh.h"
 
+#include "esp_log.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -58,6 +60,8 @@ static void stats_notify(void)
     const size_t n = lora_stats_format_json(s_json_buf, sizeof(s_json_buf));
     if (n > 0) {
         ble_sen0140_lora_stats_notify((const uint8_t *)s_json_buf, n);
+    } else {
+        ESP_LOGW("lora_stats", "stats JSON format failed — BLE/UI will not update");
     }
 }
 
@@ -296,20 +300,23 @@ size_t lora_stats_format_json(char *out, size_t out_cap)
 
     size_t pos = (size_t)n;
     bool first = true;
-    for (int i = 0; i < LORA_STATS_MAX_SENDERS; i++) {
-        const lora_stats_sender_t *s = &s_senders[i];
-        if (!s->used) {
-            continue;
+    /* Mesh roster must fit — skip stream senders while mesh mode is on. */
+    if (!lora_mesh_active()) {
+        for (int i = 0; i < LORA_STATS_MAX_SENDERS; i++) {
+            const lora_stats_sender_t *s = &s_senders[i];
+            if (!s->used) {
+                continue;
+            }
+            const int m = snprintf(out + pos, out_cap - pos,
+                                   "%s{\"sig\":\"%s\",\"first\":%lu,\"last\":%lu,\"missing\":%lu,\"rx\":%lu}",
+                                   first ? "" : ",", s->sig, (unsigned long)s->first_seq, (unsigned long)s->last_seq,
+                                   (unsigned long)s->missing, (unsigned long)s->rx_count);
+            if (m < 0 || (size_t)m >= out_cap - pos) {
+                break;
+            }
+            pos += (size_t)m;
+            first = false;
         }
-        const int m = snprintf(out + pos, out_cap - pos,
-                               "%s{\"sig\":\"%s\",\"first\":%lu,\"last\":%lu,\"missing\":%lu,\"rx\":%lu}",
-                               first ? "" : ",", s->sig, (unsigned long)s->first_seq, (unsigned long)s->last_seq,
-                               (unsigned long)s->missing, (unsigned long)s->rx_count);
-        if (m < 0 || (size_t)m >= out_cap - pos) {
-            break;
-        }
-        pos += (size_t)m;
-        first = false;
     }
 
     if (pos + 1 >= out_cap) {

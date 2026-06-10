@@ -1,11 +1,14 @@
 /*
  * LoRa democratic mesh ID mode — ephemeral 16-bit IDs + heartbeats (RAM only).
- * Binary on-air heartbeat: magic 'M' + id(2 BE) + type(1) = 4 bytes.
+ * Heartbeat: magic 'M' + id(2 BE) + type(1) = 4 bytes.
+ * Unicast:  magic 'U' + dst(2 BE) + src(2 BE) + UTF-8 payload (max 200 bytes).
  * Duplicate-ID collisions: random backoff (1–5 s) then repick (no MAC on air).
  */
 #pragma once
 
 #include "sdkconfig.h"
+
+#include "esp_err.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,8 +18,11 @@
 extern "C" {
 #endif
 
-#define LORA_MESH_PKT_LEN       4U
-#define LORA_MESH_MAGIC         0x4DU
+#define LORA_MESH_PKT_LEN           4U
+#define LORA_MESH_UNICAST_HDR_LEN   5U
+#define LORA_MESH_MSG_MAX           200U
+#define LORA_MESH_MAGIC             0x4DU
+#define LORA_MESH_UNICAST_MAGIC     0x55U
 
 typedef enum {
     LORA_MESH_STATE_OFF = 0,
@@ -36,8 +42,11 @@ lora_mesh_state_t lora_mesh_get_state(void);
 /** Periodic tick (listen timeout, reclaim, heartbeat schedule). */
 void lora_mesh_tick(int64_t now_us);
 
-/** Parse a validated mesh heartbeat RX. */
+/** Parse mesh heartbeat or unicast RX. */
 void lora_mesh_on_rx(const uint8_t *data, size_t len, int64_t now_us);
+
+/** Handle mesh_tx=<id>\\n<utf8> on 0xFEFE. ESP_ERR_NOT_FOUND if not mesh_tx. */
+esp_err_t lora_mesh_stats_write(const char *buf, size_t len);
 
 /** Build this node's heartbeat into @p out (LORA_MESH_PKT_LEN bytes). */
 void lora_mesh_build_heartbeat(uint8_t out[LORA_MESH_PKT_LEN]);
@@ -89,6 +98,12 @@ static inline bool lora_mesh_append_json(char *out, size_t out_cap, size_t *pos)
     (void)out_cap;
     (void)pos;
     return true;
+}
+static inline esp_err_t lora_mesh_stats_write(const char *buf, size_t len)
+{
+    (void)buf;
+    (void)len;
+    return ESP_ERR_NOT_FOUND;
 }
 
 #endif

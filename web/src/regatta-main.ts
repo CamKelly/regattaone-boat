@@ -86,6 +86,12 @@ interface LoraMeshPeer {
   last_ms: number;
 }
 
+interface LoraMeshRxMsg {
+  from: number;
+  text: string;
+  last_ms: number;
+}
+
 interface LoraMeshSnapshot {
   active: boolean;
   state: LoraMeshState;
@@ -95,7 +101,11 @@ interface LoraMeshSnapshot {
   tx_fail: number;
   rx: number;
   collision_yield: number;
+  msg_tx_ok: number;
+  msg_tx_fail: number;
+  msg_rx: number;
   peers: LoraMeshPeer[];
+  rx_msgs: LoraMeshRxMsg[];
 }
 
 interface LoraStatsSnapshot {
@@ -114,7 +124,11 @@ const defaultLoraMesh = (): LoraMeshSnapshot => ({
   tx_fail: 0,
   rx: 0,
   collision_yield: 0,
+  msg_tx_ok: 0,
+  msg_tx_fail: 0,
+  msg_rx: 0,
   peers: [],
+  rx_msgs: [],
 });
 
 const defaultLoraStats = (): LoraStatsSnapshot => ({
@@ -220,6 +234,7 @@ interface BleBoatSession {
 
 const sessions = new Map<string, BleBoatSession>();
 let activeSessionId: string | null = null;
+let meshStatsPollTimer: ReturnType<typeof setInterval> | null = null;
 
 let connectBtn!: HTMLButtonElement;
 let bleStatusEl: HTMLElement | null = null;
@@ -1051,7 +1066,11 @@ function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
         tx_fail?: number;
         rx?: number;
         collision_yield?: number;
+        msg_tx_ok?: number;
+        msg_tx_fail?: number;
+        msg_rx?: number;
         peers?: Array<{ id?: number; type?: number; last_ms?: number }>;
+        rx_msgs?: Array<{ from?: number; text?: string; last_ms?: number }>;
       };
     };
     const senders: LoraStatsSender[] = [];
@@ -1086,6 +1105,19 @@ function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
       }
       peers.sort((a, b) => a.id - b.id);
     }
+    const rx_msgs: LoraMeshRxMsg[] = [];
+    if (Array.isArray(meshRaw?.rx_msgs)) {
+      for (const msg of meshRaw.rx_msgs) {
+        if (msg.from === undefined || !msg.text) {
+          continue;
+        }
+        rx_msgs.push({
+          from: Number(msg.from),
+          text: String(msg.text),
+          last_ms: Number(msg.last_ms ?? 0),
+        });
+      }
+    }
     const myIdRaw = meshRaw?.my_id;
     return {
       tx: {
@@ -1104,7 +1136,11 @@ function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
         tx_fail: Number(meshRaw?.tx_fail ?? 0),
         rx: Number(meshRaw?.rx ?? 0),
         collision_yield: Number(meshRaw?.collision_yield ?? 0),
+        msg_tx_ok: Number(meshRaw?.msg_tx_ok ?? 0),
+        msg_tx_fail: Number(meshRaw?.msg_tx_fail ?? 0),
+        msg_rx: Number(meshRaw?.msg_rx ?? 0),
         peers,
+        rx_msgs,
       },
     };
   } catch {
@@ -1112,25 +1148,52 @@ function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
   }
 }
 
-function ingestLoraStatsChunk(session: BleBoatSession, chunk: string): void {
-  if (!chunk) {
-    return;
-  }
-  session.loraStatsNotifyBuf += chunk;
-  const parsed = parseLoraStatsJson(session.loraStatsNotifyBuf.trim());
-  if (!parsed) {
-    if (session.loraStatsNotifyBuf.length > 16384) {
-      session.loraStatsNotifyBuf = "";
-    }
-    return;
-  }
-  session.loraStatsNotifyBuf = "";
+function applyLoraStats(session: BleBoatSession, parsed: LoraStatsSnapshot): void {
   session.loraStats = parsed;
   session.loraMeshRunning = parsed.mesh.active;
   renderLoraStats(session);
   renderLoraMesh(session);
   syncLoraStreamUi(session);
   syncLoraMeshUi(session);
+}
+
+function ingestLoraStatsChunk(session: BleBoatSession, chunk: string): void {
+  if (!chunk) {
+    return;
+  }
+
+  // BLE read (and lucky single notify) delivers a full JSON object — parse directly.
+  const solo = parseLoraStatsJson(chunk.trim());
+  if (solo) {
+    session.loraStatsNotifyBuf = "";
+    applyLoraStats(session, solo);
+    return;
+  }
+
+  // Multi-chunk notify: 0xFEFE JSON is split into ~200-byte BLE packets.
+  if (chunk.startsWith('{"tx"')) {
+    session.loraStatsNotifyBuf = chunk;
+  } else {
+    session.loraStatsNotifyBuf += chunk;
+  }
+
+  const parsed = parseLoraStatsJson(session.loraStatsNotifyBuf.trim());
+  if (!parsed) {
+    if (session.loraStatsNotifyBuf.length > 512) {
+      console.warn(
+        "LoRa stats JSON reassembly failed",
+        session.name,
+        session.loraStatsNotifyBuf.slice(0, 120),
+        "…",
+      );
+    }
+    if (session.loraStatsNotifyBuf.length > 16384) {
+      session.loraStatsNotifyBuf = "";
+    }
+    return;
+  }
+  session.loraStatsNotifyBuf = "";
+  applyLoraStats(session, parsed);
 }
 
 async function readLoraStatsFromDevice(session: BleBoatSession): Promise<void> {
@@ -1142,7 +1205,14 @@ async function readLoraStatsFromDevice(session: BleBoatSession): Promise<void> {
     if (!val || val.byteLength === 0) {
       return;
     }
-    ingestLoraStatsChunk(session, new TextDecoder().decode(val));
+    const text = new TextDecoder().decode(val);
+    const solo = parseLoraStatsJson(text.trim());
+    if (solo) {
+      session.loraStatsNotifyBuf = "";
+      applyLoraStats(session, solo);
+      return;
+    }
+    // BLE read is MTU-limited (~253 B) — truncated reads must not clobber notify reassembly.
   } catch (e) {
     console.warn("BLE LoRa stats read failed", session.name, e);
   }
@@ -1184,6 +1254,7 @@ function syncLoraTabView(session: BleBoatSession | null): void {
   if (meshRow) {
     meshRow.hidden = view !== "normal";
   }
+  syncMeshStatsPoll(session);
 }
 
 function meshSelfLabel(mesh: LoraMeshSnapshot): string {
@@ -1200,6 +1271,17 @@ function meshSelfLabel(mesh: LoraMeshSnapshot): string {
   return `This device: mesh active · type ${type}`;
 }
 
+function renderLoraMeshRxLog(session: BleBoatSession): void {
+  const el = document.querySelector<HTMLPreElement>("#lora-mesh-rx-log");
+  if (!el || session.deviceId !== activeSessionId) {
+    return;
+  }
+  const lines = session.loraStats.mesh.rx_msgs.map(
+    (msg) => `[${formatAgo(msg.last_ms)}] from ${msg.from}: ${msg.text}`,
+  );
+  el.textContent = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+}
+
 function renderLoraMesh(session: BleBoatSession): void {
   if (session.deviceId !== activeSessionId) {
     return;
@@ -1208,23 +1290,29 @@ function renderLoraMesh(session: BleBoatSession): void {
   const statsEl = document.querySelector("#lora-mesh-stats");
   const tbody = document.querySelector("#lora-mesh-peers-body");
   const m = session.loraStats.mesh;
+  const myId = m.my_id;
   if (selfEl) {
     selfEl.textContent = meshSelfLabel(m);
   }
   if (statsEl) {
+    const peerCount = m.peers.filter((p) => myId === null || p.id !== myId).length;
     statsEl.textContent =
-      `Mesh TX ok: ${m.tx_ok}, fail: ${m.tx_fail}, RX: ${m.rx}` +
+      `Mesh TX ok: ${m.tx_ok}, fail: ${m.tx_fail}, RX: ${m.rx} · peers: ${peerCount}` +
       (m.collision_yield > 0 ? ` · yields: ${m.collision_yield}` : "");
   }
   if (!tbody) {
     return;
   }
   tbody.textContent = "";
-  const myId = m.my_id;
   for (const p of m.peers) {
     const tr = document.createElement("tr");
-    if (myId !== null && p.id === myId) {
+    const isSelf = myId !== null && p.id === myId;
+    if (isSelf) {
       tr.classList.add("lora-mesh-peer-self");
+    } else {
+      tr.classList.add("lora-mesh-peer-clickable");
+      tr.dataset["meshPeerId"] = String(p.id);
+      tr.title = "Click to send a message";
     }
     for (const cell of [String(p.id), meshTypeLabel(p.type), formatAgo(p.last_ms)]) {
       const td = document.createElement("td");
@@ -1233,6 +1321,49 @@ function renderLoraMesh(session: BleBoatSession): void {
     }
     tbody.appendChild(tr);
   }
+  renderLoraMeshRxLog(session);
+}
+
+async function promptAndSendMeshMessage(session: BleBoatSession, destId: number): Promise<void> {
+  if (!session.charLoraStats) {
+    return;
+  }
+  if (session.loraStats.mesh.state !== "locked") {
+    window.alert("Mesh must be locked (you need a mesh ID) before sending messages.");
+    return;
+  }
+  const text = window.prompt(`Message to mesh ID ${destId}:`, "");
+  if (text === null) {
+    return;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  if (trimmed.length > 200) {
+    window.alert("Message must be 200 characters or fewer.");
+    return;
+  }
+  try {
+    await gattWrite(
+      session,
+      "stats",
+      new TextEncoder().encode(`mesh_tx=${destId}\n${trimmed}`),
+    );
+    await readLoraStatsFromDevice(session);
+    renderLoraMesh(session);
+  } catch (e) {
+    console.warn("BLE mesh message write failed", session.name, e);
+    window.alert("Failed to send message. Check BLE connection and that mesh is active.");
+  }
+}
+
+function syncMeshStatsPoll(session: BleBoatSession | null): void {
+  if (meshStatsPollTimer !== null) {
+    clearInterval(meshStatsPollTimer);
+    meshStatsPollTimer = null;
+  }
+  // Stats arrive via BLE notify (chunked). Polling read truncates at MTU and broke reassembly.
 }
 
 function syncLoraMeshUi(session: BleBoatSession | null): void {
@@ -1246,6 +1377,7 @@ function syncLoraMeshUi(session: BleBoatSession | null): void {
     stopBtn.disabled = !session || !meshActive;
   }
   syncLoraTabView(session);
+  syncMeshStatsPoll(session);
 }
 
 function renderLoraStats(session: BleBoatSession): void {
@@ -1436,6 +1568,10 @@ function clearUiPanels(): void {
   }
   if (meshPeers) {
     meshPeers.textContent = "";
+  }
+  const meshRxLog = document.querySelector("#lora-mesh-rx-log");
+  if (meshRxLog) {
+    meshRxLog.textContent = "";
   }
   syncLoraStreamUi(null);
   syncLoraMeshUi(null);
@@ -2140,6 +2276,15 @@ export function startRegattaApp(): void {
 
   document.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
+    const peerRow = target?.closest<HTMLTableRowElement>("tr.lora-mesh-peer-clickable");
+    if (peerRow?.dataset["meshPeerId"]) {
+      const session = getActiveSession();
+      const destId = Number(peerRow.dataset["meshPeerId"]);
+      if (session && Number.isFinite(destId)) {
+        void promptAndSendMeshMessage(session, destId);
+      }
+      return;
+    }
     const btn = target?.closest("button");
     if (!btn) {
       return;

@@ -344,14 +344,25 @@ static int gatt_svr_access_lora_stats(uint16_t conn_handle, uint16_t attr_handle
 
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
         uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (om_len == 0U || om_len > 32U) {
+        if (om_len == 0U || om_len > 288U) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
-        char buf[33];
+        char buf[289];
         if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
             return BLE_ATT_ERR_UNLIKELY;
         }
         buf[om_len] = '\0';
+        {
+            const esp_err_t mesh_err = lora_mesh_stats_write(buf, om_len);
+            if (mesh_err == ESP_OK) {
+                lora_stats_request_notify();
+                return 0;
+            }
+            if (mesh_err != ESP_ERR_NOT_FOUND) {
+                return mesh_err == ESP_ERR_INVALID_ARG ? BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN
+                                                       : BLE_ATT_ERR_UNLIKELY;
+            }
+        }
         if (strncmp(buf, "stream=1", 8) == 0) {
             if (lora_mesh_active()) {
                 return BLE_ATT_ERR_UNLIKELY;
@@ -368,6 +379,7 @@ static int gatt_svr_access_lora_stats(uint16_t conn_handle, uint16_t attr_handle
         if (strncmp(buf, "mesh=1", 6) == 0) {
             lora_stats_set_stream_active(false);
             lora_mesh_set_active(true);
+            lora_stats_request_notify();
             return 0;
         }
         if (strncmp(buf, "mesh=0", 6) == 0) {

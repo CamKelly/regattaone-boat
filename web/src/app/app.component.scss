@@ -397,3 +397,11 @@
 .lora-mesh-peer-self td {
   font-weight: 600;
 }
+
+.lora-mesh-peer-clickable {
+  cursor: pointer;
+}
+
+.lora-mesh-peer-clickable:hover td {
+  background: var(--ion-color-step-50, #f5f5f5);
+}
