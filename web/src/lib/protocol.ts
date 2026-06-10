@@ -14,7 +14,7 @@ export const BLE_LORA_TX_CHAR_UUID = "0000fef7-0000-1000-8000-00805f9b34fb";
 export const BLE_LORA_LINE_CHAR_UUID = "0000fef8-0000-1000-8000-00805f9b34fb";
 /**
  * Read/notify: LoRa session stats + mesh roster JSON.
- * Write `stream=1`/`0`, `mesh=1`/`0`, or `mesh_tx=<id>\\n<text>` (unicast while mesh locked).
+ * Write `stream=1`/`0`, `mesh=1`/`0`, `stats=1` (refresh notify), or `mesh_tx=<id>\\n<text>`.
  */
 export const BLE_LORA_STATS_CHAR_UUID = "0000fefe-0000-1000-8000-00805f9b34fb";
 /** Notify: UTF-8 NMEA 0183 lines from GPS UART. */

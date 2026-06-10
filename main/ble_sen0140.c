@@ -387,6 +387,10 @@ static int gatt_svr_access_lora_stats(uint16_t conn_handle, uint16_t attr_handle
             lora_stats_request_notify();
             return 0;
         }
+        if (strncmp(buf, "stats=1", 7) == 0) {
+            lora_stats_request_notify();
+            return 0;
+        }
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
     }
 
