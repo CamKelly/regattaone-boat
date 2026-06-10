@@ -220,6 +220,8 @@ interface BleBoatSession {
   loraStreamTimer: ReturnType<typeof setTimeout> | null;
   loraTabView: "normal" | "mesh";
   loraMeshRunning: boolean;
+  /** Sent/received mesh lines for the inbox below the peer table. */
+  meshMessageLog: string[];
   uwbBusy: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -1148,7 +1150,39 @@ function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
   }
 }
 
+function appendMeshMessageLog(session: BleBoatSession, line: string): void {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return;
+  }
+  const last = session.meshMessageLog[session.meshMessageLog.length - 1];
+  if (last === trimmed) {
+    return;
+  }
+  session.meshMessageLog.push(trimmed);
+  if (session.meshMessageLog.length > 48) {
+    session.meshMessageLog = session.meshMessageLog.slice(-32);
+  }
+  renderLoraMeshRxLog(session);
+}
+
+function mergeMeshRxFromStats(
+  session: BleBoatSession,
+  prev: LoraMeshSnapshot,
+  next: LoraMeshSnapshot,
+): void {
+  for (const msg of next.rx_msgs) {
+    const dup = prev.rx_msgs.some(
+      (p) => p.from === msg.from && p.text === msg.text && p.last_ms === msg.last_ms,
+    );
+    if (!dup) {
+      appendMeshMessageLog(session, `← from ${msg.from}: ${msg.text}`);
+    }
+  }
+}
+
 function applyLoraStats(session: BleBoatSession, parsed: LoraStatsSnapshot): void {
+  mergeMeshRxFromStats(session, session.loraStats.mesh, parsed.mesh);
   session.loraStats = parsed;
   session.loraMeshRunning = parsed.mesh.active;
   renderLoraStats(session);
@@ -1276,10 +1310,8 @@ function renderLoraMeshRxLog(session: BleBoatSession): void {
   if (!el || session.deviceId !== activeSessionId) {
     return;
   }
-  const lines = session.loraStats.mesh.rx_msgs.map(
-    (msg) => `[${formatAgo(msg.last_ms)}] from ${msg.from}: ${msg.text}`,
-  );
-  el.textContent = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+  el.textContent =
+    session.meshMessageLog.length > 0 ? `${session.meshMessageLog.join("\n")}\n` : "";
 }
 
 function renderLoraMesh(session: BleBoatSession): void {
@@ -1350,7 +1382,9 @@ async function promptAndSendMeshMessage(session: BleBoatSession, destId: number)
       "stats",
       new TextEncoder().encode(`mesh_tx=${destId}\n${trimmed}`),
     );
-    await readLoraStatsFromDevice(session);
+    const sentLine = `→ sent to ${destId}: ${trimmed}`;
+    appendMeshMessageLog(session, sentLine);
+    console.info("mesh message queued", { destId, text: trimmed, device: session.name });
     renderLoraMesh(session);
   } catch (e) {
     console.warn("BLE mesh message write failed", session.name, e);
@@ -1431,6 +1465,14 @@ function ingestLoraLine(session: BleBoatSession, chunk: string): void {
     if (trimmed.startsWith("! STATUS:")) {
       session.loraRadioStatus = trimmed.slice("! STATUS:".length).trim();
       renderLoraStatus(session);
+      continue;
+    }
+    if (
+      trimmed.startsWith(">> mesh TX") ||
+      trimmed.startsWith("<< mesh RX") ||
+      trimmed.startsWith("! mesh TX")
+    ) {
+      appendMeshMessageLog(session, trimmed);
       continue;
     }
     if (isLoraRxLogLine(trimmed)) {
@@ -1834,10 +1876,12 @@ function stopLoraMesh(session: BleBoatSession | null): void {
   }
   const wasRunning = session.loraMeshRunning || session.loraStats.mesh.active;
   session.loraMeshRunning = false;
+  session.meshMessageLog = [];
   if (wasRunning) {
     void writeLoraMeshGate(session, false);
   }
   if (session.deviceId === activeSessionId) {
+    renderLoraMeshRxLog(session);
     syncLoraMeshUi(session);
     syncLoraStreamUi(session);
   }
@@ -2086,6 +2130,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     loraStreamTimer: null,
     loraTabView: "normal",
     loraMeshRunning: false,
+    meshMessageLog: [],
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
@@ -2152,6 +2197,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     loraStreamTimer: null,
     loraTabView: "normal",
     loraMeshRunning: false,
+    meshMessageLog: [],
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
