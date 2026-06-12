@@ -29,6 +29,9 @@
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
 #include "ryuw122_uart.h"
 #endif
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+#include "meshtastic_client.h"
+#endif
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 #include "lora_mesh.h"
 #include "lora_stats.h"
@@ -52,6 +55,10 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_DEVICE_TYPE_UUID     0xfefc
 /** Read: LoRa stats JSON. Write: `stream=1` / `stream=0`. Notify: JSON on change. */
 #define SEN0140_GATT_LORA_STATS_UUID      0xfefe
+/** Meshtastic companion UART: notify RX bytes, write TX bytes. */
+#define SEN0140_GATT_MESHTASTIC_RX_UUID    0xfee5
+#define SEN0140_GATT_MESHTASTIC_TX_UUID    0xfee6
+#define SEN0140_GATT_MESHTASTIC_STATS_UUID 0xfee7
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 200U
@@ -83,6 +90,13 @@ static uint16_t s_lora_stats_chr_val_handle;
 static bool s_lora_stats_notify_enabled;
 static uint16_t s_gps_line_chr_val_handle;
 static uint16_t s_uwb_line_chr_val_handle;
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+static uint16_t s_meshtastic_rx_chr_val_handle;
+static uint16_t s_meshtastic_stats_chr_val_handle;
+static bool s_meshtastic_rx_notify_enabled;
+static bool s_meshtastic_stats_notify_enabled;
+static char s_meshtastic_stats_json[4096];
+#endif
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool s_notify_enabled;
 static bool s_lora_line_notify_enabled;
@@ -450,6 +464,79 @@ static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, 
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+static int gatt_svr_access_meshtastic_rx(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                         void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int gatt_svr_access_meshtastic_tx(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                         void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    const uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+    if (om_len == 0U || om_len > 512U) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    uint8_t buf[512];
+    if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    const esp_err_t err = meshtastic_client_ble_write(buf, om_len);
+    if (err == ESP_OK) {
+        return 0;
+    }
+    if (err == ESP_ERR_NOT_FOUND) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int gatt_svr_access_meshtastic_stats(uint16_t conn_handle, uint16_t attr_handle,
+                                            struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const size_t n = meshtastic_client_format_json(s_meshtastic_stats_json, sizeof(s_meshtastic_stats_json));
+        if (n == 0U) {
+            return 0;
+        }
+        return os_mbuf_append(ctxt->om, s_meshtastic_stats_json, (uint16_t)n) == 0 ? 0
+                                                                                   : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (om_len == 0U || om_len > 64U) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        char buf[65];
+        if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        buf[om_len] = '\0';
+        const esp_err_t err = meshtastic_client_stats_write(buf, om_len);
+        return err == ESP_OK ? 0 : BLE_ATT_ERR_UNLIKELY;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+#endif
+
 static int gatt_svr_access_uwb_at(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                   void *arg)
 {
@@ -542,6 +629,25 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .access_cb = gatt_svr_access_uwb_at,
                     .flags = BLE_GATT_CHR_F_WRITE,
                 },
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_MESHTASTIC_RX_UUID),
+                    .access_cb = gatt_svr_access_meshtastic_rx,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                    .val_handle = &s_meshtastic_rx_chr_val_handle,
+                },
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_MESHTASTIC_TX_UUID),
+                    .access_cb = gatt_svr_access_meshtastic_tx,
+                    .flags = BLE_GATT_CHR_F_WRITE,
+                },
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_MESHTASTIC_STATS_UUID),
+                    .access_cb = gatt_svr_access_meshtastic_stats,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_NOTIFY,
+                    .val_handle = &s_meshtastic_stats_chr_val_handle,
+                },
+#endif
                 {
                     .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_BOAT_ID_UUID),
                     .access_cb = gatt_svr_access_boat_id,
@@ -619,6 +725,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_lora_stats_notify_enabled = false;
         s_gps_line_notify_enabled = false;
         s_uwb_line_notify_enabled = false;
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+        s_meshtastic_rx_notify_enabled = false;
+        s_meshtastic_stats_notify_enabled = false;
+#endif
         ble_advertise();
         return 0;
 
@@ -663,6 +773,19 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_uwb_line_notify_enabled = event->subscribe.cur_notify;
             ESP_LOGI(TAG, "uwb line notify=%d", (int)s_uwb_line_notify_enabled);
         }
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_meshtastic_rx_chr_val_handle)) {
+            s_meshtastic_rx_notify_enabled = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "meshtastic rx notify=%d", (int)s_meshtastic_rx_notify_enabled);
+        }
+        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_meshtastic_stats_chr_val_handle)) {
+            s_meshtastic_stats_notify_enabled = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "meshtastic stats notify=%d", (int)s_meshtastic_stats_notify_enabled);
+            if (s_meshtastic_stats_notify_enabled) {
+                meshtastic_client_request_stats_notify();
+            }
+        }
+#endif
         return 0;
 
     case BLE_GAP_EVENT_MTU:
@@ -926,4 +1049,30 @@ void ble_sen0140_uwb_line_notify(const uint8_t *data, size_t len)
         len -= chunk;
     }
     ble_notify_give();
+}
+
+void ble_sen0140_meshtastic_rx_notify(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+    ble_line_notify(s_meshtastic_rx_chr_val_handle, s_meshtastic_rx_notify_enabled, data, len);
+#else
+    (void)data;
+    (void)len;
+#endif
+}
+
+void ble_sen0140_meshtastic_stats_notify(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+    ble_line_notify(s_meshtastic_stats_chr_val_handle, s_meshtastic_stats_notify_enabled, data, len);
+#else
+    (void)data;
+    (void)len;
+#endif
 }

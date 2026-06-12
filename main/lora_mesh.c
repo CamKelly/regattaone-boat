@@ -38,6 +38,7 @@ static const char *TAG = "lora_mesh";
 #define LORA_MESH_CTRL_QUEUE_MAX         8U
 #define LORA_MESH_MSG_TTL_US             (30LL * 1000000LL)
 #define LORA_MESH_MSG_RETRY_US           (3LL * 1000000LL)
+#define LORA_MESH_STATS_NOTIFY_US        (5LL * 1000000LL)
 
 typedef struct lora_mesh_rx_msg {
     uint16_t from_id;
@@ -91,6 +92,7 @@ static lora_mesh_tx_pending_t s_tx_queue[LORA_MESH_TX_QUEUE_MAX];
 static lora_mesh_ctrl_pending_t s_ctrl_queue[LORA_MESH_CTRL_QUEUE_MAX];
 static size_t s_ctrl_queue_count;
 static uint16_t s_next_tx_seq;
+static int64_t s_last_stats_notify_us;
 static bool s_task_started;
 
 static int64_t mesh_now_us(void)
@@ -395,8 +397,19 @@ static void peer_upsert(uint16_t id, uint8_t type, int64_t now_us)
         p->next = s_peers;
         s_peers = p;
     }
-    p->type = type;
+    if (type != 0U) {
+        p->type = type;
+    }
     p->last_heard_us = now_us;
+}
+
+/** Refresh peer liveness without requiring a heartbeat (e.g. ACK or unicast). */
+static void mesh_peer_touch(uint16_t id, uint8_t type, int64_t now_us)
+{
+    if (id < LORA_MESH_ID_MIN) {
+        return;
+    }
+    peer_upsert(id, type, now_us);
 }
 
 static void peer_prune_stale(int64_t now_us)
@@ -522,6 +535,7 @@ static void lock_id(uint16_t id, int64_t now_us)
     s_my_id = id;
     s_state = LORA_MESH_STATE_LOCKED;
     s_next_tx_seq = 0;
+    s_last_stats_notify_us = 0;
     /* Send first heartbeat on next tick — not 15 s later. */
     s_next_heartbeat_us = now_us;
     ESP_LOGI(TAG, "locked mesh id=%u type=%u", (unsigned)id, (unsigned)device_type_get());
@@ -598,6 +612,7 @@ void lora_mesh_set_active(bool active)
         tx_queue_clear();
         ctrl_queue_clear();
         s_next_tx_seq = 0;
+        s_last_stats_notify_us = 0;
         s_msg_tx_ok = 0;
         s_msg_tx_fail = 0;
         s_msg_rx = 0;
@@ -648,7 +663,7 @@ static void on_rx_heartbeat(const uint8_t *data, size_t len, int64_t now_us)
         return;
     }
 
-    peer_upsert(id, type, now_us);
+    mesh_peer_touch(id, type, now_us);
     ESP_LOGI(TAG, "heartbeat rx id=%u type=%u", (unsigned)id, (unsigned)type);
     lora_stats_request_notify();
 }
@@ -684,7 +699,7 @@ static void on_rx_unicast(const uint8_t *data, size_t len, int64_t now_us)
         return;
     }
 
-    peer_upsert(src, 0, now_us);
+    mesh_peer_touch(src, 0, now_us);
     lora_mesh_peer_t *peer = peer_find(src);
     if (peer == NULL) {
         ctrl_queue_push(LORA_MESH_NACK_MAGIC, src, seq);
@@ -738,6 +753,7 @@ static void on_rx_ack(const uint8_t *data, size_t len, int64_t now_us)
         return;
     }
 
+    mesh_peer_touch(src, 0, now_us);
     ESP_LOGI(TAG, "unicast ACK seq=%u from id=%u", (unsigned)seq, (unsigned)src);
     mesh_line_notifyf("<< mesh ACK seq %u from %u\n", (unsigned)seq, (unsigned)src);
     tx_queue_remove(q);
@@ -762,6 +778,7 @@ static void on_rx_nack(const uint8_t *data, size_t len, int64_t now_us)
         return;
     }
 
+    mesh_peer_touch(src, 0, now_us);
     ESP_LOGW(TAG, "unicast NACK seq=%u from id=%u — retry", (unsigned)seq, (unsigned)src);
     mesh_line_notifyf("<< mesh NACK seq %u from %u — retry\n", (unsigned)seq, (unsigned)src);
     q->last_tx_us = 0;
@@ -879,6 +896,10 @@ void lora_mesh_tick(int64_t now_us)
     if (s_state == LORA_MESH_STATE_LOCKED) {
         ctrl_queue_tick(now_us);
         tx_queue_tick(now_us);
+        if (s_last_stats_notify_us == 0 || now_us - s_last_stats_notify_us >= LORA_MESH_STATS_NOTIFY_US) {
+            lora_stats_request_notify();
+            s_last_stats_notify_us = now_us;
+        }
     }
 }
 

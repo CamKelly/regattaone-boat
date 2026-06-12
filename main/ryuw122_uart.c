@@ -27,6 +27,7 @@ static const char *TAG = "ryuw122";
 static int s_uart_baud;
 static int s_tx_gpio;
 static int s_rx_gpio;
+static bool s_probe_ok;
 
 /** Set after BLE/web AT write; task reads harder until line idle. */
 static volatile bool s_post_tx_drain;
@@ -197,6 +198,17 @@ static void ryuw122_ble_at_task(void *arg)
         if (xQueueReceive(s_ble_at_q, &job, portMAX_DELAY) != pdTRUE) {
             continue;
         }
+        if (!s_probe_ok) {
+            ESP_LOGI(TAG, "re-probing UART before AT (boot probe failed)");
+            s_probe_ok = ryuw122_autoprobe();
+            if (!s_probe_ok) {
+                static const char msg[] =
+                    "+ERR: no REYAX AT reply — swap TX/RX: ESP 17→module RX, ESP 18←module TX; 3.3V+GND\n";
+                ble_sen0140_uwb_line_notify((const uint8_t *)msg, sizeof(msg) - 1U);
+                continue;
+            }
+            ESP_LOGI(TAG, "UART probe OK: TX=GPIO%d RX=GPIO%d @ %d", s_tx_gpio, s_rx_gpio, s_uart_baud);
+        }
         esp_err_t err = ryuw122_uart_at_cmd(job.cmd, 5000);
         if (err == ESP_ERR_TIMEOUT) {
             static const char msg[] = "+ERR: no UART reply (check TX/RX swap, baud, 3.3V)\n";
@@ -339,11 +351,14 @@ esp_err_t ryuw122_uart_start(void)
         vTaskDelay(pdMS_TO_TICKS(CONFIG_RYUW122_BOOT_DELAY_MS));
     }
 
-    if (!ryuw122_autoprobe()) {
+    s_probe_ok = ryuw122_autoprobe();
+    if (!s_probe_ok) {
         ESP_LOGW(TAG,
-                 "No valid AT reply at boot — using menuconfig TX=GPIO%d RX=GPIO%d @ %d baud "
-                 "(cross-connect ESP TX→module RX; check 3.3V/GND)",
+                 "No valid AT reply at boot — using menuconfig TX=GPIO%d RX=GPIO%d @ %d baud",
                  CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
+        ESP_LOGW(TAG,
+                 "REYAX wiring: ESP GPIO%d (TX) → module RX; ESP GPIO%d (RX) ← module TX; common GND; 3.3V",
+                 CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO);
         ryuw122_apply_uart(CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
         s_tx_gpio = CONFIG_RYUW122_UART_TX_GPIO;
         s_rx_gpio = CONFIG_RYUW122_UART_RX_GPIO;

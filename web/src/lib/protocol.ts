@@ -27,6 +27,17 @@ export const BLE_UWB_AT_CHAR_UUID = "0000fefa-0000-1000-8000-00805f9b34fb";
 export const BLE_BOAT_ID_CHAR_UUID = "0000fefb-0000-1000-8000-00805f9b34fb";
 /** Read/write device type (stored in device NVS). */
 export const BLE_DEVICE_TYPE_CHAR_UUID = "0000fefc-0000-1000-8000-00805f9b34fb";
+/** Notify: Meshtastic line log (`<<` / `>>` / `!` status lines). */
+export const BLE_MESHTASTIC_RX_CHAR_UUID = "0000fee5-0000-1000-8000-00805f9b34fb";
+/**
+ * Write Meshtastic commands: `send=<nodeNum>\\n<text>`, `send=broadcast\\n<text>`, `config=1`.
+ */
+export const BLE_MESHTASTIC_TX_CHAR_UUID = "0000fee6-0000-1000-8000-00805f9b34fb";
+/**
+ * Read/notify: Meshtastic node roster + message stats JSON.
+ * Write `stats=1` to refresh notify.
+ */
+export const BLE_MESHTASTIC_STATS_CHAR_UUID = "0000fee7-0000-1000-8000-00805f9b34fb";
 
 export type DeviceType =
   | "port"

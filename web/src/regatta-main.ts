@@ -31,6 +31,9 @@ import {
   BLE_LORA_LINE_CHAR_UUID,
   BLE_LORA_STATS_CHAR_UUID,
   BLE_LORA_TX_CHAR_UUID,
+  BLE_MESHTASTIC_RX_CHAR_UUID,
+  BLE_MESHTASTIC_STATS_CHAR_UUID,
+  BLE_MESHTASTIC_TX_CHAR_UUID,
   BLE_SERVICE_UUID,
   BLE_UWB_AT_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
@@ -53,7 +56,7 @@ import {
 } from "./lib/ble-transport";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-06-03a";
+const WEB_BLE_REV = "2026-06-04d";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -116,6 +119,31 @@ interface LoraStatsSnapshot {
   mesh: LoraMeshSnapshot;
 }
 
+interface MeshtasticNode {
+  num: number;
+  name: string;
+  short: string;
+  last_ms: number;
+}
+
+interface MeshtasticRxMsg {
+  from: number;
+  from_name: string;
+  text: string;
+  last_ms: number;
+}
+
+interface MeshtasticStatsSnapshot {
+  connected: boolean;
+  config_ok: boolean;
+  my_num: number | null;
+  tx_ok: number;
+  tx_fail: number;
+  rx: number;
+  nodes: MeshtasticNode[];
+  rx_msgs: MeshtasticRxMsg[];
+}
+
 const defaultLoraMesh = (): LoraMeshSnapshot => ({
   active: false,
   state: "off",
@@ -138,6 +166,25 @@ const defaultLoraStats = (): LoraStatsSnapshot => ({
   senders: [],
   mesh: defaultLoraMesh(),
 });
+
+const defaultMeshtasticStats = (): MeshtasticStatsSnapshot => ({
+  connected: false,
+  config_ok: false,
+  my_num: null,
+  tx_ok: 0,
+  tx_fail: 0,
+  rx: 0,
+  nodes: [],
+  rx_msgs: [],
+});
+
+function hasDirectLoRa(session: BleBoatSession | null): boolean {
+  return session?.charLoraTx != null;
+}
+
+function hasMeshtastic(session: BleBoatSession | null): boolean {
+  return session?.charMeshtasticRx != null;
+}
 
 const MESH_TYPE_CODES: DeviceType[] = [
   "port",
@@ -178,6 +225,9 @@ const BLE_OPTIONAL_SERVICES = [
   BLE_UWB_AT_CHAR_UUID,
   BLE_BOAT_ID_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
+  BLE_MESHTASTIC_RX_CHAR_UUID,
+  BLE_MESHTASTIC_TX_CHAR_UUID,
+  BLE_MESHTASTIC_STATS_CHAR_UUID,
 ];
 
 interface BleBoatSession {
@@ -190,6 +240,9 @@ interface BleBoatSession {
   charLoraTx: BleGattCharacteristicLike | null;
   charLoraLine: BleGattCharacteristicLike | null;
   charLoraStats: BleGattCharacteristicLike | null;
+  charMeshtasticRx: BleGattCharacteristicLike | null;
+  charMeshtasticTx: BleGattCharacteristicLike | null;
+  charMeshtasticStats: BleGattCharacteristicLike | null;
   charGpsLine: BleGattCharacteristicLike | null;
   charUwbLine: BleGattCharacteristicLike | null;
   charUwbAt: BleGattCharacteristicLike | null;
@@ -225,6 +278,11 @@ interface BleBoatSession {
   loraMeshRunning: boolean;
   /** Sent/received mesh lines for the inbox below the peer table. */
   meshMessageLog: string[];
+  meshtasticStats: MeshtasticStatsSnapshot;
+  meshtasticStatsReceivedWallMs: number;
+  meshtasticStatsNotifyBuf: string;
+  meshtasticLineLogText: string;
+  meshtasticTxDraft: string;
   uwbBusy: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -232,6 +290,8 @@ interface BleBoatSession {
   onImuNotify: (ev: Event) => void;
   onLoraLineNotify: (ev: Event) => void;
   onLoraStatsNotify: (ev: Event) => void;
+  onMeshtasticLineNotify: (ev: Event) => void;
+  onMeshtasticStatsNotify: (ev: Event) => void;
   onGpsLineNotify: (ev: Event) => void;
   onUwbLineNotify: (ev: Event) => void;
   onDisconnected: () => void;
@@ -240,6 +300,7 @@ interface BleBoatSession {
 const sessions = new Map<string, BleBoatSession>();
 let activeSessionId: string | null = null;
 let meshUiRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let meshtasticUiRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 let connectBtn!: HTMLButtonElement;
 let bleStatusEl: HTMLElement | null = null;
@@ -491,8 +552,8 @@ function updateBleToolbar(note?: string): void {
   if (!active.charUwbAt) {
     missing.push("UWB");
   }
-  if (!active.charLoraTx) {
-    missing.push("LoRa");
+  if (!active.charLoraTx && !active.charMeshtasticRx) {
+    missing.push("LoRa/Mesh");
   }
   if (!active.charGpsLine) {
     missing.push("GPS");
@@ -548,6 +609,8 @@ function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charImu?.removeEventListener("characteristicvaluechanged", session.onImuNotify);
   session.charLoraLine?.removeEventListener("characteristicvaluechanged", session.onLoraLineNotify);
   session.charLoraStats?.removeEventListener("characteristicvaluechanged", session.onLoraStatsNotify);
+  session.charMeshtasticRx?.removeEventListener("characteristicvaluechanged", session.onMeshtasticLineNotify);
+  session.charMeshtasticStats?.removeEventListener("characteristicvaluechanged", session.onMeshtasticStatsNotify);
   session.charGpsLine?.removeEventListener("characteristicvaluechanged", session.onGpsLineNotify);
   session.charUwbLine?.removeEventListener("characteristicvaluechanged", session.onUwbLineNotify);
 }
@@ -559,6 +622,9 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   session.charLoraTx = null;
   session.charLoraLine = null;
   session.charLoraStats = null;
+  session.charMeshtasticRx = null;
+  session.charMeshtasticTx = null;
+  session.charMeshtasticStats = null;
   session.charGpsLine = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
@@ -604,6 +670,23 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     console.warn("BLE LoRa stats unavailable", session.name, e);
   }
   try {
+    session.charMeshtasticRx = await svc.getCharacteristic(BLE_MESHTASTIC_RX_CHAR_UUID);
+    session.charMeshtasticRx.addEventListener("characteristicvaluechanged", session.onMeshtasticLineNotify);
+  } catch (e) {
+    console.warn("BLE Meshtastic RX unavailable", session.name, e);
+  }
+  try {
+    session.charMeshtasticTx = await svc.getCharacteristic(BLE_MESHTASTIC_TX_CHAR_UUID);
+  } catch (e) {
+    console.warn("BLE Meshtastic TX unavailable", session.name, e);
+  }
+  try {
+    session.charMeshtasticStats = await svc.getCharacteristic(BLE_MESHTASTIC_STATS_CHAR_UUID);
+    session.charMeshtasticStats.addEventListener("characteristicvaluechanged", session.onMeshtasticStatsNotify);
+  } catch (e) {
+    console.warn("BLE Meshtastic stats unavailable", session.name, e);
+  }
+  try {
     session.charGpsLine = await svc.getCharacteristic(BLE_GPS_LINE_CHAR_UUID);
     session.charGpsLine.addEventListener("characteristicvaluechanged", session.onGpsLineNotify);
   } catch (e) {
@@ -621,6 +704,10 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     session.charDeviceType = null;
     console.warn("BLE device type unavailable", session.name, e);
   }
+
+  markMeshtasticBleReady(session);
+  syncLoraTabVisibility(session);
+  syncMeshtasticTabVisibility(session);
 }
 
 async function ensureLoraComms(session: BleBoatSession): Promise<void> {
@@ -785,7 +872,11 @@ function clearGpsDisplay(session: BleBoatSession | null): void {
   }
 }
 
-function appendStreamLine(session: BleBoatSession, field: "loraLineLogText", chunk: string): void {
+function appendStreamLine(
+  session: BleBoatSession,
+  field: "loraLineLogText" | "meshtasticLineLogText",
+  chunk: string,
+): void {
   if (chunk.length === 0) {
     return;
   }
@@ -800,6 +891,8 @@ function appendStreamLine(session: BleBoatSession, field: "loraLineLogText", chu
   }
   if (field === "loraLineLogText") {
     renderLoraLog(session);
+  } else {
+    renderMeshtasticLog(session);
   }
 }
 
@@ -855,9 +948,13 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
     const statsBaseline = session.loraStatsReceivedWallMs;
     await setCommsNotifications(session, true);
     await syncLoraStatsFromDevice(session, statsBaseline);
-    if (session.loraStats.mesh.active) {
+    if (session.loraStats.mesh.active && hasDirectLoRa(session)) {
       session.loraMeshRunning = true;
       session.loraTabView = "mesh";
+    }
+    if (hasMeshtastic(session)) {
+      const mtBaseline = session.meshtasticStatsReceivedWallMs;
+      await syncMeshtasticStatsFromDevice(session, mtBaseline);
     }
     imuTabActive = true;
     await setImuNotifications(session, true);
@@ -887,6 +984,9 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charLoraTx = null;
   session.charLoraLine = null;
   session.charLoraStats = null;
+  session.charMeshtasticRx = null;
+  session.charMeshtasticTx = null;
+  session.charMeshtasticStats = null;
   session.charGpsLine = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
@@ -894,6 +994,7 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charDeviceType = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
+  syncMeshtasticUiRefresh(null);
   if (session.gatt.connected) {
     try {
       await session.gatt.disconnect();
@@ -979,6 +1080,8 @@ async function setCommsNotifications(session: BleBoatSession, enabled: boolean):
     session.charUwbLine,
     session.charLoraLine,
     session.charLoraStats,
+    session.charMeshtasticRx,
+    session.charMeshtasticStats,
     session.charGpsLine,
   ].filter((c): c is BleGattCharacteristicLike => c !== null);
   const results: PromiseSettledResult<unknown>[] = [];
@@ -1011,7 +1114,7 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
   }
 }
 
-type GattWriteTarget = "lora" | "uwb" | "boatid" | "type" | "stats";
+type GattWriteTarget = "lora" | "uwb" | "boatid" | "type" | "stats" | "meshtastic" | "mtstats";
 
 function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BleGattCharacteristicLike | null {
   if (target === "lora") {
@@ -1019,6 +1122,12 @@ function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget
   }
   if (target === "stats") {
     return session.charLoraStats;
+  }
+  if (target === "meshtastic") {
+    return session.charMeshtasticTx;
+  }
+  if (target === "mtstats") {
+    return session.charMeshtasticStats;
   }
   if (target === "uwb") {
     return session.charUwbAt;
@@ -1327,17 +1436,22 @@ function syncLoraTabView(session: BleBoatSession | null): void {
   const normalPanel = document.querySelector<HTMLElement>("#lora-panel-normal");
   const meshPanel = document.querySelector<HTMLElement>("#lora-panel-mesh");
   const meshRow = document.querySelector<HTMLElement>("#lora-view-mesh-row");
+  const directLoRa = hasDirectLoRa(session);
   const view = session?.loraTabView ?? "normal";
   if (normalPanel) {
     normalPanel.hidden = view !== "normal";
   }
   if (meshPanel) {
-    meshPanel.hidden = view !== "mesh";
+    meshPanel.hidden = view !== "mesh" || !directLoRa;
   }
   if (meshRow) {
-    meshRow.hidden = view !== "normal";
+    meshRow.hidden = view !== "normal" || !directLoRa;
+  }
+  if (!directLoRa && session) {
+    session.loraTabView = "normal";
   }
   syncMeshUiRefresh(session);
+  syncMeshtasticTabVisibility(session);
 }
 
 function meshSelfLabel(mesh: LoraMeshSnapshot): string {
@@ -1463,16 +1577,459 @@ function syncMeshUiRefresh(session: BleBoatSession | null): void {
 }
 
 function syncLoraMeshUi(session: BleBoatSession | null): void {
+  const directLoRa = hasDirectLoRa(session);
   const meshActive = session?.loraStats.mesh.active === true || session?.loraMeshRunning === true;
   const startBtn = document.querySelector<HTMLButtonElement>("#lora-mesh-start");
   const stopBtn = document.querySelector<HTMLButtonElement>("#lora-mesh-stop");
   if (startBtn) {
-    startBtn.disabled = !session || meshActive;
+    startBtn.disabled = !session || !directLoRa || meshActive;
   }
   if (stopBtn) {
-    stopBtn.disabled = !session || !meshActive;
+    stopBtn.disabled = !session || !directLoRa || !meshActive;
   }
   syncLoraTabView(session);
+}
+
+function syncLoraTabVisibility(session: BleBoatSession | null): void {
+  const tab = document.querySelector<HTMLElement>("#lora-tab");
+  if (tab) {
+    tab.hidden = !hasDirectLoRa(session);
+  }
+}
+
+function syncMeshtasticTabVisibility(session: BleBoatSession | null): void {
+  const tab = document.querySelector<HTMLElement>("#meshtastic-tab");
+  if (tab) {
+    tab.hidden = !hasMeshtastic(session);
+  }
+}
+
+function markMeshtasticBleReady(session: BleBoatSession): void {
+  if (!hasMeshtastic(session)) {
+    return;
+  }
+  session.meshtasticStats = {
+    ...session.meshtasticStats,
+    connected: true,
+  };
+}
+
+function meshtasticAgeMs(session: BleBoatSession, ageAtReceiptMs: number): number {
+  if (session.meshtasticStatsReceivedWallMs <= 0) {
+    return ageAtReceiptMs;
+  }
+  return ageAtReceiptMs + (Date.now() - session.meshtasticStatsReceivedWallMs);
+}
+
+function parseMeshtasticStatsJson(raw: string): MeshtasticStatsSnapshot | null {
+  try {
+    const data = JSON.parse(raw) as {
+      connected?: boolean;
+      config_ok?: boolean;
+      my_num?: number | null;
+      tx_ok?: number;
+      tx_fail?: number;
+      rx?: number;
+      nodes?: Array<{ num?: number; name?: string; short?: string; last_ms?: number }>;
+      rx_msgs?: Array<{ from?: number; from_name?: string; text?: string; last_ms?: number }>;
+    };
+    const nodes: MeshtasticNode[] = [];
+    if (Array.isArray(data.nodes)) {
+      for (const n of data.nodes) {
+        if (n.num === undefined) {
+          continue;
+        }
+        nodes.push({
+          num: Number(n.num),
+          name: String(n.name ?? ""),
+          short: String(n.short ?? ""),
+          last_ms: Number(n.last_ms ?? 0),
+        });
+      }
+      nodes.sort((a, b) => a.num - b.num);
+    }
+    const rx_msgs: MeshtasticRxMsg[] = [];
+    if (Array.isArray(data.rx_msgs)) {
+      for (const m of data.rx_msgs) {
+        if (m.from === undefined || !m.text) {
+          continue;
+        }
+        rx_msgs.push({
+          from: Number(m.from),
+          from_name: String(m.from_name ?? ""),
+          text: String(m.text),
+          last_ms: Number(m.last_ms ?? 0),
+        });
+      }
+    }
+    const myRaw = data.my_num;
+    return {
+      connected: data.connected === true,
+      config_ok: data.config_ok === true,
+      my_num: myRaw === null || myRaw === undefined ? null : Number(myRaw),
+      tx_ok: Number(data.tx_ok ?? 0),
+      tx_fail: Number(data.tx_fail ?? 0),
+      rx: Number(data.rx ?? 0),
+      nodes,
+      rx_msgs,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function ingestMeshtasticStatsChunk(session: BleBoatSession, chunk: string): void {
+  if (!chunk) {
+    return;
+  }
+  const solo = parseMeshtasticStatsJson(chunk.trim());
+  if (solo) {
+    session.meshtasticStatsNotifyBuf = "";
+    applyMeshtasticStats(session, solo);
+    return;
+  }
+  session.meshtasticStatsNotifyBuf += chunk;
+  const parsed = parseMeshtasticStatsJson(session.meshtasticStatsNotifyBuf.trim());
+  if (parsed) {
+    session.meshtasticStatsNotifyBuf = "";
+    applyMeshtasticStats(session, parsed);
+  }
+}
+
+function parseMeshtasticLogPeer(line: string): { num: number; name: string } | null {
+  const trimmed = line.trim();
+  const hex = /^<< 0x([0-9A-Fa-f]{1,8}):/.exec(trimmed);
+  if (hex) {
+    return { num: parseInt(hex[1], 16), name: `0x${hex[1].toUpperCase()}` };
+  }
+  const dec = /^<< (\d+):/.exec(trimmed);
+  if (dec) {
+    const num = Number(dec[1]);
+    return Number.isFinite(num) ? { num, name: String(num) } : null;
+  }
+  const named = /^<< ([^:\n]+):/.exec(trimmed);
+  if (named && !named[1].startsWith("0x")) {
+    return { num: 0, name: named[1] };
+  }
+  return null;
+}
+
+function mergeMeshtasticPeersFromLog(session: BleBoatSession): void {
+  const peers = new Map<number, MeshtasticNode>();
+  for (const existing of session.meshtasticStats.nodes) {
+    peers.set(existing.num, existing);
+  }
+  const lines = session.meshtasticLineLogText.split("\n");
+  let rx = 0;
+  let tx = 0;
+  let configOk = session.meshtasticStats.config_ok;
+  for (const line of lines) {
+    if (line.startsWith("! config ready")) {
+      configOk = true;
+    }
+    if (line.startsWith("<< ")) {
+      rx++;
+      const peer = parseMeshtasticLogPeer(line);
+      if (peer && peer.num !== 0) {
+        const prev = peers.get(peer.num);
+        peers.set(peer.num, {
+          num: peer.num,
+          name: peer.name,
+          short: prev?.short ?? "",
+          last_ms: prev?.last_ms ?? 0,
+        });
+      }
+    } else if (line.startsWith(">> ")) {
+      tx++;
+    }
+  }
+  const mergedNodes = [...peers.values()].sort((a, b) => a.num - b.num);
+  session.meshtasticStats = {
+    ...session.meshtasticStats,
+    connected: true,
+    config_ok: configOk,
+    tx_ok: Math.max(session.meshtasticStats.tx_ok, tx),
+    rx: Math.max(session.meshtasticStats.rx, rx),
+    nodes: mergedNodes.length > 0 ? mergedNodes : session.meshtasticStats.nodes,
+  };
+  if (rx > 0 || mergedNodes.length > 0) {
+    session.meshtasticStatsReceivedWallMs = Date.now();
+  }
+}
+
+function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
+  if (!chunk) {
+    return;
+  }
+  appendStreamLine(session, "meshtasticLineLogText", chunk);
+  mergeMeshtasticPeersFromLog(session);
+  renderMeshtastic(session);
+  syncMeshtasticUiRefresh(session);
+}
+
+function applyMeshtasticStats(session: BleBoatSession, parsed: MeshtasticStatsSnapshot): void {
+  session.meshtasticStats = parsed;
+  session.meshtasticStatsReceivedWallMs = Date.now();
+  mergeMeshtasticPeersFromLog(session);
+  renderMeshtastic(session);
+  syncMeshtasticUiRefresh(session);
+}
+
+async function requestMeshtasticStatsNotify(session: BleBoatSession): Promise<void> {
+  if (!session.charMeshtasticStats) {
+    return;
+  }
+  try {
+    await gattWrite(session, "mtstats", new TextEncoder().encode("stats=1"));
+  } catch (e) {
+    console.warn("BLE Meshtastic stats refresh failed", session.name, e);
+  }
+}
+
+async function readMeshtasticStatsValue(session: BleBoatSession): Promise<boolean> {
+  if (!session.charMeshtasticStats) {
+    return false;
+  }
+  try {
+    const val = await runGattOp(session, () => session.charMeshtasticStats!.readValue());
+    if (!val || val.byteLength === 0) {
+      return false;
+    }
+    const before = session.meshtasticStatsReceivedWallMs;
+    ingestMeshtasticStatsChunk(session, new TextDecoder().decode(val));
+    return session.meshtasticStatsReceivedWallMs > before;
+  } catch (e) {
+    console.warn("BLE Meshtastic stats read failed", session.name, e);
+    return false;
+  }
+}
+
+async function syncMeshtasticStatsFromDevice(
+  session: BleBoatSession,
+  baselineWallMs = session.meshtasticStatsReceivedWallMs,
+  timeoutMs = 2500,
+): Promise<void> {
+  if (!session.charMeshtasticStats) {
+    mergeMeshtasticPeersFromLog(session);
+    renderMeshtastic(session);
+    return;
+  }
+  await requestMeshtasticStatsNotify(session);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (session.meshtasticStatsReceivedWallMs > baselineWallMs) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (await readMeshtasticStatsValue(session)) {
+    return;
+  }
+  mergeMeshtasticPeersFromLog(session);
+  renderMeshtastic(session);
+}
+
+async function refreshMeshtasticRoster(session: BleBoatSession): Promise<void> {
+  if (!hasMeshtastic(session)) {
+    window.alert("Meshtastic not available on this device.");
+    return;
+  }
+  if (!session.charMeshtasticStats) {
+    window.alert("Missing 0xFEE7 stats — reflash Freenove firmware with Meshtastic client.");
+    return;
+  }
+  const btn = document.querySelector<HTMLButtonElement>("#meshtastic-roster-refresh");
+  if (btn) {
+    btn.disabled = true;
+  }
+  const baseline = session.meshtasticStatsReceivedWallMs;
+  try {
+    if (session.charMeshtasticTx) {
+      await gattWrite(session, "meshtastic", new TextEncoder().encode("config=1"));
+    }
+    await new Promise((r) => setTimeout(r, 2500));
+    await syncMeshtasticStatsFromDevice(session, baseline, 5000);
+    if (session.meshtasticStats.nodes.length === 0) {
+      mergeMeshtasticPeersFromLog(session);
+    }
+    renderMeshtastic(session);
+  } catch (e) {
+    console.warn("Meshtastic roster refresh failed", session.name, e);
+    window.alert("Failed to refresh roster. Check BLE connection.");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+    }
+  }
+}
+
+function renderMeshtasticLog(session: BleBoatSession): void {
+  if (session.deviceId !== activeSessionId) {
+    return;
+  }
+  const el = document.querySelector<HTMLPreElement>("#meshtastic-line-log");
+  if (el) {
+    el.textContent = session.meshtasticLineLogText;
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+function meshtasticSelfLabel(session: BleBoatSession): string {
+  if (!hasMeshtastic(session)) {
+    return "This device: Meshtastic unavailable";
+  }
+  if (!session.charMeshtasticStats) {
+    return "This device: BLE OK — reflash firmware for 0xFEE7 stats";
+  }
+  if (session.meshtasticStatsReceivedWallMs === 0 && session.meshtasticStats.nodes.length === 0) {
+    return "This device: waiting for companion UART…";
+  }
+  const stats = session.meshtasticStats;
+  if (!stats.config_ok) {
+    return "This device: waiting for Meshtastic config…";
+  }
+  if (stats.my_num !== null) {
+    return `This device: node #${stats.my_num}`;
+  }
+  return "This device: Meshtastic connected";
+}
+
+function renderMeshtastic(session: BleBoatSession): void {
+  if (session.deviceId !== activeSessionId) {
+    return;
+  }
+  const statusEl = document.querySelector("#meshtastic-status");
+  const selfEl = document.querySelector("#meshtastic-self");
+  const statsEl = document.querySelector("#meshtastic-stats");
+  const tbody = document.querySelector("#meshtastic-peers-body");
+  const m = session.meshtasticStats;
+  const bleReady = hasMeshtastic(session);
+  if (statusEl) {
+    if (!bleReady) {
+      statusEl.textContent = "Meshtastic: not available on this device";
+    } else if (!session.charMeshtasticStats) {
+      statusEl.textContent = "Meshtastic: BLE partial — missing 0xFEE7 (reflash firmware)";
+    } else if (m.config_ok) {
+      statusEl.textContent = "Meshtastic: connected (config ready)";
+    } else if (session.meshtasticStatsReceivedWallMs > 0) {
+      statusEl.textContent = "Meshtastic: connected (loading roster…)";
+    } else {
+      statusEl.textContent = "Meshtastic: BLE connected (waiting for companion UART)";
+    }
+  }
+  if (selfEl) {
+    selfEl.textContent = meshtasticSelfLabel(session);
+  }
+  if (statsEl) {
+    statsEl.textContent = `TX ok: ${m.tx_ok}, fail: ${m.tx_fail}, RX: ${m.rx} · nodes: ${m.nodes.length}`;
+  }
+  if (!tbody) {
+    return;
+  }
+  tbody.textContent = "";
+  for (const n of m.nodes) {
+    const tr = document.createElement("tr");
+    tr.classList.add("lora-mesh-peer-clickable");
+    tr.dataset["mtPeerNum"] = String(n.num);
+    tr.title = "Click to send a message";
+    const label = n.name || (n.short ? n.short : `0x${n.num.toString(16)}`);
+    for (const cell of [String(n.num), label, formatAgo(meshtasticAgeMs(session, n.last_ms))]) {
+      const td = document.createElement("td");
+      td.textContent = cell;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  renderMeshtasticLog(session);
+}
+
+function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
+  if (meshtasticUiRefreshTimer !== null) {
+    clearInterval(meshtasticUiRefreshTimer);
+    meshtasticUiRefreshTimer = null;
+  }
+  if (!session || session.deviceId !== activeSessionId || !hasMeshtastic(session)) {
+    return;
+  }
+  meshtasticUiRefreshTimer = setInterval(() => {
+    const active = getActiveSession();
+    if (!active || active.deviceId !== activeSessionId) {
+      return;
+    }
+    renderMeshtastic(active);
+  }, 1000);
+}
+
+async function promptAndSendMeshtasticMessage(session: BleBoatSession, destNum: number): Promise<void> {
+  if (!session.charMeshtasticTx) {
+    return;
+  }
+  if (!session.meshtasticStats.config_ok) {
+    window.alert("Meshtastic config is not ready yet. Wait for the roster to load.");
+    return;
+  }
+  const text = window.prompt(`Message to node ${destNum}:`, "");
+  if (text === null) {
+    return;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return;
+  }
+  if (trimmed.length > 200) {
+    window.alert("Message must be 200 characters or fewer.");
+    return;
+  }
+  try {
+    await gattWrite(
+      session,
+      "meshtastic",
+      new TextEncoder().encode(`send=${destNum}\n${trimmed}`),
+    );
+    console.info("meshtastic message queued", { destNum, text: trimmed, device: session.name });
+    await requestMeshtasticStatsNotify(session);
+    renderMeshtastic(session);
+  } catch (e) {
+    console.warn("BLE Meshtastic message write failed", session.name, e);
+    window.alert("Failed to send message. Check BLE connection.");
+  }
+}
+
+async function sendMeshtasticBroadcast(session: BleBoatSession): Promise<void> {
+  if (!session.charMeshtasticTx) {
+    return;
+  }
+  const input = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
+  const text = (input?.value ?? session.meshtasticTxDraft).trim();
+  if (!text) {
+    return;
+  }
+  if (text.length > 200) {
+    window.alert("Message must be 200 characters or fewer.");
+    return;
+  }
+  try {
+    await gattWrite(session, "meshtastic", new TextEncoder().encode(`send=broadcast\n${text}`));
+    if (input) {
+      input.value = "";
+    }
+    session.meshtasticTxDraft = "";
+    await requestMeshtasticStatsNotify(session);
+    renderMeshtastic(session);
+  } catch (e) {
+    console.warn("BLE Meshtastic broadcast failed", session.name, e);
+    window.alert("Failed to send broadcast.");
+  }
+}
+
+function clearMeshtasticLog(session: BleBoatSession | null): void {
+  if (session) {
+    session.meshtasticLineLogText = "";
+  }
+  const el = document.querySelector("#meshtastic-line-log");
+  if (el) {
+    el.textContent = "";
+  }
 }
 
 function renderLoraStats(session: BleBoatSession): void {
@@ -1517,6 +2074,33 @@ function isLoraRxLogLine(trimmed: string): boolean {
   return trimmed.startsWith("RX ");
 }
 
+function meshLinePeerId(trimmed: string): number | null {
+  const from = trimmed.match(/<< mesh (?:RX|ACK|NACK).* from (\d+)/);
+  if (from) {
+    return Number(from[1]);
+  }
+  return null;
+}
+
+/** Bump peer "last heard" from mesh line traffic when stats notify is delayed. */
+function touchMeshPeerHeard(session: BleBoatSession, peerId: number): void {
+  if (!Number.isFinite(peerId) || peerId <= 0) {
+    return;
+  }
+  let peer = session.loraStats.mesh.peers.find((p) => p.id === peerId);
+  if (!peer) {
+    peer = { id: peerId, type: 0, last_ms: 0 };
+    session.loraStats.mesh.peers.push(peer);
+    session.loraStats.mesh.peers.sort((a, b) => a.id - b.id);
+  } else {
+    peer.last_ms = 0;
+  }
+  session.loraStatsReceivedWallMs = Date.now();
+  if (session.deviceId === activeSessionId) {
+    renderLoraMesh(session);
+  }
+}
+
 function ingestLoraLine(session: BleBoatSession, chunk: string): void {
   for (const line of chunk.split("\n")) {
     const trimmed = line.trim();
@@ -1538,6 +2122,10 @@ function ingestLoraLine(session: BleBoatSession, chunk: string): void {
       trimmed.startsWith("! mesh CRC")
     ) {
       appendMeshMessageLog(session, trimmed);
+      const peerId = meshLinePeerId(trimmed);
+      if (peerId !== null) {
+        touchMeshPeerHeard(session, peerId);
+      }
       continue;
     }
     if (isLoraRxLogLine(trimmed)) {
@@ -1601,8 +2189,10 @@ function renderImuDisplay(session: BleBoatSession): void {
 function saveUiToSession(session: BleBoatSession): void {
   const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
+  const mtInput = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
   session.loraTxDraft = loraInput?.value ?? "";
   session.uwbAtDraft = uwbInput?.value ?? "";
+  session.meshtasticTxDraft = mtInput?.value ?? "";
   const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
   session.boatIdDraft = boatIdInput?.value ?? session.boatIdDraft;
   const typeSelect = document.querySelector<HTMLSelectElement>("#device-type-select");
@@ -1615,17 +2205,23 @@ function saveUiToSession(session: BleBoatSession): void {
 function loadSessionToUi(session: BleBoatSession): void {
   const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
+  const mtInput = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
   if (loraInput) {
     loraInput.value = session.loraTxDraft;
   }
   if (uwbInput) {
     uwbInput.value = session.uwbAtDraft;
   }
+  if (mtInput) {
+    mtInput.value = session.meshtasticTxDraft;
+  }
   renderImuDisplay(session);
   renderLoraLog(session);
   renderLoraStatus(session);
   renderLoraStats(session);
   renderLoraMesh(session);
+  mergeMeshtasticPeersFromLog(session);
+  renderMeshtastic(session);
   syncLoraStreamUi(session);
   syncLoraMeshUi(session);
   syncLoraTabView(session);
@@ -1687,9 +2283,23 @@ function clearUiPanels(): void {
   if (meshRxLog) {
     meshRxLog.textContent = "";
   }
+  const mtLog = document.querySelector("#meshtastic-line-log");
+  const mtPeers = document.querySelector("#meshtastic-peers-body");
+  if (mtLog) {
+    mtLog.textContent = "";
+  }
+  if (mtPeers) {
+    mtPeers.textContent = "";
+  }
+  setText("meshtastic-status", "Meshtastic: connect BLE for status");
+  setText("meshtastic-self", "This device: waiting…");
+  setText("meshtastic-stats", "TX ok: 0 · fail: 0 · RX: 0");
   syncLoraStreamUi(null);
   syncLoraMeshUi(null);
   syncLoraTabView(null);
+  syncLoraTabVisibility(null);
+  syncMeshtasticTabVisibility(null);
+  syncMeshtasticUiRefresh(null);
   clearGpsDisplay(null);
 }
 
@@ -1803,6 +2413,24 @@ function createNotifyHandlers(session: BleBoatSession): void {
       return;
     }
     ingestLoraStatsChunk(session, new TextDecoder().decode(v));
+  };
+
+  session.onMeshtasticLineNotify = (ev: Event) => {
+    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
+    const v = ch.value;
+    if (!v || v.byteLength === 0) {
+      return;
+    }
+    ingestMeshtasticLine(session, new TextDecoder().decode(v));
+  };
+
+  session.onMeshtasticStatsNotify = (ev: Event) => {
+    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
+    const v = ch.value;
+    if (!v || v.byteLength === 0) {
+      return;
+    }
+    ingestMeshtasticStatsChunk(session, new TextDecoder().decode(v));
   };
 
   session.onGpsLineNotify = (ev: Event) => {
@@ -2173,6 +2801,9 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     charLoraTx: null,
     charLoraLine: null,
     charLoraStats: null,
+    charMeshtasticRx: null,
+    charMeshtasticTx: null,
+    charMeshtasticStats: null,
     charGpsLine: null,
     charUwbLine: null,
     charUwbAt: null,
@@ -2204,12 +2835,19 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     loraTabView: "normal",
     loraMeshRunning: false,
     meshMessageLog: [],
+    meshtasticStats: defaultMeshtasticStats(),
+    meshtasticStatsReceivedWallMs: 0,
+    meshtasticStatsNotifyBuf: "",
+    meshtasticLineLogText: "",
+    meshtasticTxDraft: "",
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
     onLoraLineNotify: () => {},
     onLoraStatsNotify: () => {},
+    onMeshtasticLineNotify: () => {},
+    onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
@@ -2241,6 +2879,9 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     charLoraTx: null,
     charLoraLine: null,
     charLoraStats: null,
+    charMeshtasticRx: null,
+    charMeshtasticTx: null,
+    charMeshtasticStats: null,
     charGpsLine: null,
     charUwbLine: null,
     charUwbAt: null,
@@ -2272,12 +2913,19 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     loraTabView: "normal",
     loraMeshRunning: false,
     meshMessageLog: [],
+    meshtasticStats: defaultMeshtasticStats(),
+    meshtasticStatsReceivedWallMs: 0,
+    meshtasticStatsNotifyBuf: "",
+    meshtasticLineLogText: "",
+    meshtasticTxDraft: "",
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
     onLoraLineNotify: () => {},
     onLoraStatsNotify: () => {},
+    onMeshtasticLineNotify: () => {},
+    onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
@@ -2405,6 +3053,15 @@ export function startRegattaApp(): void {
       }
       return;
     }
+    const mtPeerRow = target?.closest<HTMLTableRowElement>("tr[data-mt-peer-num]");
+    if (mtPeerRow?.dataset["mtPeerNum"]) {
+      const session = getActiveSession();
+      const destNum = Number(mtPeerRow.dataset["mtPeerNum"]);
+      if (session && Number.isFinite(destNum)) {
+        void promptAndSendMeshtasticMessage(session, destNum);
+      }
+      return;
+    }
     const btn = target?.closest("button");
     if (!btn) {
       return;
@@ -2462,6 +3119,24 @@ export function startRegattaApp(): void {
       clearLoraLog(getActiveSession());
       return;
     }
+    if (btn.id === "meshtastic-roster-refresh") {
+      const session = getActiveSession();
+      if (session) {
+        void refreshMeshtasticRoster(session);
+      }
+      return;
+    }
+    if (btn.id === "meshtastic-tx-broadcast") {
+      const session = getActiveSession();
+      if (session) {
+        void sendMeshtasticBroadcast(session);
+      }
+      return;
+    }
+    if (btn.id === "meshtastic-log-clear") {
+      clearMeshtasticLog(getActiveSession());
+      return;
+    }
     if (btn.id === "device-type-save") {
       void saveDeviceTypeToDevice();
       return;
@@ -2493,6 +3168,13 @@ export function startRegattaApp(): void {
     }
     if (target instanceof HTMLInputElement && target.id === "lora-tx-input") {
       void sendLoraTx();
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.id === "meshtastic-tx-input") {
+      const session = getActiveSession();
+      if (session) {
+        void sendMeshtasticBroadcast(session);
+      }
     }
   });
   document.addEventListener("input", (ev) => {
@@ -2503,6 +3185,10 @@ export function startRegattaApp(): void {
     const target = ev.target;
     if (target instanceof HTMLInputElement && target.id === "lora-tx-input") {
       session.loraTxDraft = target.value;
+      return;
+    }
+    if (target instanceof HTMLInputElement && target.id === "meshtastic-tx-input") {
+      session.meshtasticTxDraft = target.value;
       return;
     }
     if (target instanceof HTMLInputElement && target.id === "uwb-at-input") {

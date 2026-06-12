@@ -63,21 +63,21 @@ EN                       RX
 | **EN** | — | Reset | Chip reset (button silkscreen: EN/RST) |
 | **4** | 4 | ADC1_CH3, Touch4, PWM | RegattaOne: **GPS UART TX** |
 | **5** | 5 | ADC1_CH4, Touch5, PWM | RegattaOne: **GPS UART RX** |
-| **6** | 6 | ADC1_CH5, Touch6, PWM | RegattaOne: **LoRa BUSY** |
-| **7** | 7 | ADC1_CH6, Touch7, PWM | RegattaOne: **LoRa DIO1** |
-| **15** | 15 | ADC2_CH4, U0RTS, PWM | Available |
-| **16** | 16 | ADC2_CH5, U0CTS, PWM | Available |
+| **6** | 6 | ADC1_CH5, Touch6, PWM | Available (was LoRa BUSY on direct-SX1262 builds) |
+| **7** | 7 | ADC1_CH6, Touch7, PWM | Available (was LoRa DIO1) |
+| **15** | 15 | ADC2_CH4, U0RTS, PWM | RegattaOne: **Meshtastic UART RX** ← module TX |
+| **16** | 16 | ADC2_CH5, U0CTS, PWM | RegattaOne: **Meshtastic UART TX** → module RX |
 | **17** | 17 | ADC2_CH6, **U1TXD**, PWM | RegattaOne: **UWB UART TX** |
 | **18** | 18 | ADC2_CH7, **U1RXD**, PWM | RegattaOne: **UWB UART RX** |
-| **8** | 8 | ADC1_CH7, Touch8, PWM | RegattaOne: **LoRa RESET** |
+| **8** | 8 | ADC1_CH7, Touch8, PWM | Available (was LoRa RESET) |
 | **3** | 3 | ADC1_CH2, Touch3, JTAG EN | Strapping — use with care |
 | **46** | 46 | Strapping (LOG) | Avoid if possible |
-| **9** | 9 | ADC1_CH8, Touch9, PWM | RegattaOne: **LoRa CS** |
+| **9** | 9 | ADC1_CH8, Touch9, PWM | Available (was LoRa CS) |
 | **10** | 10 | ADC1_CH9, Touch10, PWM | RegattaOne: **IMU I2C SDA** |
 | **11** | 11 | ADC2_CH0, Touch11, PWM | RegattaOne: **IMU I2C SCL** |
-| **12** | 12 | ADC2_CH1, Touch12, PWM | RegattaOne: **LoRa SCLK** |
-| **13** | 13 | ADC2_CH2, Touch13, PWM | RegattaOne: **LoRa MOSI** |
-| **14** | 14 | ADC2_CH3, Touch14, PWM | RegattaOne: **LoRa MISO** |
+| **12** | 12 | ADC2_CH1, Touch12, PWM | Available (was LoRa SCLK) |
+| **13** | 13 | ADC2_CH2, Touch13, PWM | Available (was LoRa MOSI) |
+| **14** | 14 | ADC2_CH3, Touch14, PWM | Available (was LoRa MISO) |
 | **5V** | — | Power | 5 V (USB / VIN) |
 
 ---
@@ -111,28 +111,45 @@ EN                       RX
 
 ## RegattaOne default (`freenove` build)
 
-Same GPIO map as **ESP32-S3-DevKitM-1** — full peripherals on the headers without pin conflicts.
+LoRa is via a **companion ESP32 running Meshtastic** (UART), not a direct SX1262 on this board.
 
 | Function | GPIO | PCB label (find on board) |
 | -------- | ---- | ------------------------- |
 | **IMU I2C SDA** | 10 | **10** (left) |
 | **IMU I2C SCL** | 11 | **11** (left) |
-| **LoRa MOSI** | 13 | **13** (left) |
-| **LoRa MISO** | 14 | **14** (left) |
-| **LoRa SCLK** | 12 | **12** (left) |
-| **LoRa CS** | 9 | **9** (left) |
-| **LoRa RESET** | 8 | **8** (left) |
-| **LoRa DIO1** | 7 | **7** (left) |
-| **LoRa BUSY** | 6 | **6** (left) |
 | **GPS UART TX → GPS RX** | 4 | **4** (left) |
 | **GPS UART RX ← GPS TX** | 5 | **5** (left) |
 | **GPS PPS** | 21 | **21** (right) |
 | **UWB UART TX → module RX** | 17 | **17** (left) |
 | **UWB UART RX ← module TX** | 18 | **18** (left) |
 
-UART: **GPS = UART2**, **UWB = UART1**. SPI: **LoRa = SPI2 (FSPI)**.
+**REYAX wiring (must cross TX/RX):** ESP **17** → REYAX **RX** pin; ESP **18** ← REYAX **TX** pin; **GND** common. Do **not** wire 17↔17 and 18↔18.
+| **Meshtastic UART TX → module RX** | 16 | **16** (left) |
+| **Meshtastic UART RX ← module TX** | 15 | **15** (left) |
 
-**Wire checklist (PCB labels):** left **4–7**, **8–14**, **17–18**, right **21**, plus **3V3** and **GND** on each module.
+UART: **GPS = UART2**, **UWB = UART1**, **Meshtastic = UART0** (console stays on USB Serial/JTAG).
+
+**Meshtastic companion:** enable the serial module in **PROTO** mode and match baud (default **921600** in firmware).
+
+**Wire checklist (PCB labels):** left **4–5**, **10–11**, **15–18**, right **21**, plus **3V3** and **GND** on each module.
+
+### Waveshare ESP32-S3-Zero companion (**GP8** / **GP9** serial)
+
+Pair with a **Waveshare Zero** running Meshtastic. UART to Freenove (crossed TX/RX):
+
+| Freenove | PCB label | → | Waveshare Zero | PCB label |
+| -------- | --------- | - | -------------- | --------- |
+| Meshtastic TX → companion RX | **16** (left) | → | GPIO **9** | **GP9** (right) |
+| Meshtastic RX ← companion TX | **15** (left) | ← | GPIO **8** | **GP8** (right) |
+| Ground | **GND** (right) | — | **GND** (left) | |
+
+Meshtastic serial module: **PROTO**, **921600**, **TX = 8**, **RX = 9**.
+
+**Note:** **GP8/GP9** are also SX1262 **RESET/CS** on the default Zero LoRa map — only works if your Meshtastic radio uses different GPIO or serial was intentionally placed here with radio remapped.
+
+Alternative without that clash: **GP14** (TX) / **GP15** (RX) on the Zero → Freenove **15/16**.
+
+REYAX UWB remains on Freenove **17/18** only — not shared with the Waveshare link.
 
 ---
 

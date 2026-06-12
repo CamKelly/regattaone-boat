@@ -378,6 +378,54 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
 
 endmenu
 
+menu "RegattaOne — Meshtastic UART (LoRa via companion ESP32)"
+
+    config REGATTAONE_MESHTASTIC_ENABLE
+        bool "Enable Meshtastic Client API (UART PROTO → BLE)"
+        default n
+        help
+            UART to a companion ESP32 running Meshtastic firmware (SX1262 on that board).
+            Set the Meshtastic serial module to PROTO mode and match baud here.
+            Firmware speaks the Meshtastic Client API (ToRadio/FromRadio protobuf).
+            Line log notify 0xFEE5; command write 0xFEE6; roster JSON 0xFEE7.
+
+    config MESHTASTIC_UART_PORT_NUM
+        int "UART controller (0 = UART_NUM_0 on ESP32-S3 when console is USB-JTAG)"
+        range 0 2
+        default 0
+        depends on REGATTAONE_MESHTASTIC_ENABLE
+
+    config MESHTASTIC_UART_BAUD
+        int "UART baud (must match Meshtastic serial module)"
+        default 921600
+        depends on REGATTAONE_MESHTASTIC_ENABLE
+        help
+            Common values: 921600, 115200. Meshtastic serial module baud must match.
+
+    config MESHTASTIC_BOOT_DELAY_MS
+        int "Delay after UART init before first read (companion boot)"
+        range 0 10000
+        default 500
+        depends on REGATTAONE_MESHTASTIC_ENABLE
+
+    config MESHTASTIC_UART_TX_GPIO
+        int "Meshtastic module RX ← ESP TX (GPIO)"
+        range 0 48
+        default 16
+        depends on REGATTAONE_MESHTASTIC_ENABLE
+        help
+            Freenove WROOM Lite: left header GPIO16 (PCB label 16).
+
+    config MESHTASTIC_UART_RX_GPIO
+        int "Meshtastic module TX → ESP RX (GPIO)"
+        range 0 48
+        default 15
+        depends on REGATTAONE_MESHTASTIC_ENABLE
+        help
+            Freenove WROOM Lite: left header GPIO15 (PCB label 15).
+
+endmenu
+
 config REGATTAONE_SEN0140_ENABLE
     bool "Enable SEN0140 10-DOF IMU (I2C probe + BLE 0xFEF1 task)"
     default y

@@ -2,6 +2,8 @@ set(regattaone_srcs
     "boat_id.c"
     "device_type.c"
     "ryuw122_uart.c"
+    "meshtastic_uart.c"
+    "meshtastic_client.c"
     "i2c_bus_mux.c"
     "regattaone-laser.c"
     "sen0140_10dof.c"

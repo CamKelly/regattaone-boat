@@ -24,6 +24,9 @@
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
 #include "ryuw122_uart.h"
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+#include "meshtastic_uart.h"
+#endif
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
 #include "sen0140_10dof.h"
 #endif
@@ -72,7 +75,7 @@ void app_main(void)
 
     ESP_LOGI(
         TAG,
-        "Bring-up: IMU %s | LoRa %s | GPS %s | UWB %s",
+        "Bring-up: IMU %s | LoRa %s | GPS %s | UWB %s | Meshtastic %s",
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
         "on",
 #else
@@ -89,6 +92,11 @@ void app_main(void)
         "off",
 #endif
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
+        "on",
+#else
+        "off",
+#endif
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
         "on"
 #else
         "off"
@@ -120,6 +128,13 @@ void app_main(void)
     err = ryuw122_uart_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "RYUW122 UART: %s", esp_err_to_name(err));
+    }
+#endif
+
+#if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
+    err = meshtastic_uart_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Meshtastic UART: %s", esp_err_to_name(err));
     }
 #endif
 

@@ -110,7 +110,10 @@
 
           <nz-tab nzTitle="UWB · 0xFEFA">
             <p class="tab-hint">
-              AT commands (e.g. <code>AT</code>). Firmware appends <code>CRLF</code> if needed.
+              REYAX RYUW122 on UART1. Cross-connect:
+              <strong>Freenove GPIO 17 (ESP TX) → module RX</strong>,
+              <strong>GPIO 18 (ESP RX) ← module TX</strong>, plus <strong>GND</strong>.
+              AT commands (e.g. <code>AT</code>) — firmware appends <code>CRLF</code> if needed.
             </p>
             <div nz-row [nzGutter]="8" class="uwb-input-row">
               <div nz-col [nzFlex]="'auto'">
@@ -136,7 +139,7 @@
             <pre id="uwb-line-log" class="ble-log uwb-line-log" aria-live="polite"></pre>
           </nz-tab>
 
-          <nz-tab nzTitle="LoRa · 0xFEF7">
+          <nz-tab nzTitle="LoRa · 0xFEF7" id="lora-tab" hidden>
             <div class="lora-view-toggle-row" id="lora-view-mesh-row">
               <button nz-button nzType="default" type="button" id="lora-view-mesh">Mesh roster</button>
             </div>
@@ -264,6 +267,61 @@
               </div>
               <pre id="lora-mesh-rx-log" class="ble-log lora-line-log" aria-live="polite"></pre>
             </div>
+          </nz-tab>
+
+          <nz-tab nzTitle="Meshtastic · 0xFEE5" id="meshtastic-tab" hidden>
+            <p id="meshtastic-status" class="tab-hint">Meshtastic: connect BLE for status</p>
+            <p class="tab-hint">
+              LoRa via companion ESP32 (UART PROTO). Node roster on <code>0xFEE7</code>;
+              line log on <code>0xFEE5</code>; send with <code>0xFEE6</code>
+              (<code>send=&lt;nodeNum&gt;\n&lt;text&gt;</code>). Use <strong>Refresh roster</strong>
+              to re-fetch nodes (<code>config=1</code> then <code>stats=1</code>).
+            </p>
+            <p id="meshtastic-self" class="tab-hint" aria-live="polite">This device: waiting…</p>
+            <p id="meshtastic-stats" class="tab-hint" aria-live="polite">TX ok: 0 · fail: 0 · RX: 0</p>
+            <div nz-row [nzGutter]="8" class="lora-stream-row">
+              <div nz-col [nzFlex]="'none'">
+                <button nz-button nzType="default" type="button" id="meshtastic-roster-refresh">
+                  Refresh roster
+                </button>
+              </div>
+            </div>
+            <div class="lora-stats-table-wrap">
+              <table class="lora-stats-table" aria-label="Meshtastic node roster">
+                <thead>
+                  <tr>
+                    <th>Node #</th>
+                    <th>Name</th>
+                    <th>Last heard</th>
+                  </tr>
+                </thead>
+                <tbody id="meshtastic-peers-body"></tbody>
+              </table>
+            </div>
+            <div nz-row [nzGutter]="8" class="uwb-input-row">
+              <div nz-col [nzFlex]="'auto'">
+                <input
+                  nz-input
+                  id="meshtastic-tx-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="Message text"
+                />
+              </div>
+              <div nz-col [nzFlex]="'none'">
+                <button nz-button nzType="primary" type="button" id="meshtastic-tx-broadcast">
+                  Broadcast
+                </button>
+              </div>
+            </div>
+            <div class="log-header">
+              <label class="field-label" for="meshtastic-line-log">Messages</label>
+              <button nz-button nzType="default" nzSize="small" type="button" id="meshtastic-log-clear">
+                Clear
+              </button>
+            </div>
+            <pre id="meshtastic-line-log" class="ble-log lora-line-log" aria-live="polite"></pre>
           </nz-tab>
 
           <nz-tab nzTitle="GPS · 0xFEFD">

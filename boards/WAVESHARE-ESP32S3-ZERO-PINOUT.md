@@ -140,6 +140,33 @@ Default firmware uses **edge pads GP4–GP13** for GPS + LoRa only. IMU and UWB 
 
 ---
 
+## Meshtastic companion → Freenove WROOM Lite
+
+When this Zero runs **Meshtastic** (not RegattaOne firmware) and talks to a **Freenove** main board over UART.
+
+### In use: **GP8** (TX) + **GP9** (RX)
+
+| Waveshare (Meshtastic serial) | GPIO | PCB label | Wire to Freenove |
+| ----------------------------- | ---- | --------- | ---------------- |
+| Serial **TX** → Freenove RX | **8** | **GP8** (right) | **15** (left) |
+| Serial **RX** ← Freenove TX | **9** | **GP9** (right) | **16** (left) |
+| **GND** | — | **GND** (left) | **GND** (right) |
+
+**Meshtastic device settings** (Serial module): mode **PROTO**, baud **921600**, **TX = GPIO 8**, **RX = GPIO 9**.
+
+**Conflict:** On this board **GP8** / **GP9** are also the default **SX1262 RESET** / **CS** (RegattaOne `waveshare-zero` map). If your LoRa module is wired to those pads, serial and radio cannot share them — either move serial to **GP14/GP15** or remap the radio in Meshtastic.
+
+Do **not** use **TX/RX** silkscreen on the Zero (GPIO **43/44**) — that is the USB console.
+
+### Alternative (no LoRa pin clash): **GP14** / **GP15**
+
+| Serial **TX** | **14** | **GP14** | → Freenove **15** |
+| Serial **RX** | **15** | **GP15** | ← Freenove **16** |
+
+Meshtastic serial: **TX = 14**, **RX = 15**.
+
+---
+
 ## Pins to avoid or use with care
 
 | GPIO | PCB label | Reason |
