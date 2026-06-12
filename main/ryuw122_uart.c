@@ -160,7 +160,7 @@ static bool ryuw122_send_at_probe(int tx_gpio, int rx_gpio, int baud)
 
 static bool ryuw122_autoprobe(void)
 {
-    static const int bauds[] = {115200, 57600, 38400, 9600};
+    const int baud = CONFIG_RYUW122_UART_BAUD;
     const struct {
         int tx;
         int rx;
@@ -170,17 +170,15 @@ static bool ryuw122_autoprobe(void)
     };
 
     for (size_t li = 0; li < sizeof(layouts) / sizeof(layouts[0]); li++) {
-        for (size_t bi = 0; bi < sizeof(bauds) / sizeof(bauds[0]); bi++) {
-            if (ryuw122_send_at_probe(layouts[li].tx, layouts[li].rx, bauds[bi])) {
-                s_tx_gpio = layouts[li].tx;
-                s_rx_gpio = layouts[li].rx;
-                s_uart_baud = bauds[bi];
-                ryuw122_apply_uart(s_tx_gpio, s_rx_gpio, s_uart_baud);
-                if (li > 0U) {
-                    ESP_LOGW(TAG, "TX/RX were swapped — use ESP TX=GPIO%d, RX=GPIO%d", s_tx_gpio, s_rx_gpio);
-                }
-                return true;
+        if (ryuw122_send_at_probe(layouts[li].tx, layouts[li].rx, baud)) {
+            s_tx_gpio = layouts[li].tx;
+            s_rx_gpio = layouts[li].rx;
+            s_uart_baud = baud;
+            ryuw122_apply_uart(s_tx_gpio, s_rx_gpio, s_uart_baud);
+            if (li > 0U) {
+                ESP_LOGW(TAG, "TX/RX were swapped — use ESP TX=GPIO%d, RX=GPIO%d", s_tx_gpio, s_rx_gpio);
             }
+            return true;
         }
     }
     return false;

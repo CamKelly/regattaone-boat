@@ -167,7 +167,7 @@ Unchanged from the prior design — still **UART1** on GPIO **17/18**:
 | **RX** ← ESP TX | IO17 | 17 |
 | **TX** → ESP RX | IO18 | 18 |
 
-Cross-connect TX/RX. Boot probe tries **115200 / 9600 / 57600** (see `ryuw122_uart.c`).
+Cross-connect TX/RX. UART is fixed at **115200** baud; boot probe only checks TX/RX pin order (see `ryuw122_uart.c`).
 
 ---
 
