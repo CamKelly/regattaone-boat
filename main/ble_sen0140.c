@@ -571,7 +571,7 @@ static int gatt_svr_access_uwb_at(uint16_t conn_handle, uint16_t attr_handle, st
     }
     s_uwb_line_len = 0U;
     s_uwb_line_buf[0] = '\0';
-    esp_err_t err = ryuw122_uart_queue_ble_at(buf, n);
+    esp_err_t err = ryuw122_uart_write(buf, n);
     return (err == ESP_OK) ? 0 : BLE_ATT_ERR_UNLIKELY;
 #else
     (void)ctxt;
