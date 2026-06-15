@@ -122,8 +122,9 @@ LoRa is via a **companion ESP32 running Meshtastic** (UART), not a direct SX1262
 | **GPS PPS** | 21 | **21** (right) |
 | **UWB UART TX → module RX** | 17 | **17** (left) |
 | **UWB UART RX ← module TX** | 18 | **18** (left) |
+| **UWB NRST** (optional) | 12 | **12** (left) → REYAX pin 2 |
 
-**REYAX wiring (must cross TX/RX):** ESP **17** → REYAX **RX** pin; ESP **18** ← REYAX **TX** pin; **GND** common. Do **not** wire 17↔17 and 18↔18.
+**REYAX wiring (must cross TX/RX):** ESP **17** → REYAX **RX** pin; ESP **18** ← REYAX **TX** pin; **GND** common. Optional **12** → **NRST** (active-low reset). Do **not** wire 17↔17 and 18↔18.
 | **Meshtastic UART TX → module RX** | 16 | **16** (left) |
 | **Meshtastic UART RX ← module TX** | 15 | **15** (left) |
 

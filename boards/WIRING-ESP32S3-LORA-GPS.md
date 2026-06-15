@@ -166,8 +166,9 @@ Unchanged from the prior design — still **UART1** on GPIO **17/18**:
 | **GND** | GND | — |
 | **RX** ← ESP TX | IO17 | 17 |
 | **TX** → ESP RX | IO18 | 18 |
+| **NRST** ← ESP GPIO (optional) | IO12 | 12 |
 
-Cross-connect TX/RX. UART is fixed at **115200** baud; boot probe only checks TX/RX pin order (see `ryuw122_uart.c`).
+Cross-connect TX/RX. Wire **GPIO12 → NRST** (pin 2) for firmware hardware reset at boot (active low). UART is fixed at **115200** baud.
 
 ---
 

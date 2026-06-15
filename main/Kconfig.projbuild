@@ -332,11 +332,11 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         default 115200
 
     config RYUW122_BOOT_DELAY_MS
-        int "Delay after UART init before AT probe (module power-up)"
+        int "Delay after NRST release before read task (module boot)"
         range 0 5000
         default 1000
         help
-            RYUW122 may need hundreds of ms after power before UART responds.
+            RYUW122 may need hundreds of ms after hardware reset before UART responds.
 
     choice DEVICE_DEFAULT_TYPE
         prompt "Default device type (NVS overrides after BLE save)"
@@ -375,6 +375,25 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         help
             XIAO ESP32-C3: pad D2 = GPIO4 (ESP RX ← module TX). Not D7 (GPIO20 = USB).
             ESP32-S3 Mini: GPIO18 (header IO18) on UART1. Cross-connect: ESP RX ← module TX.
+
+    config RYUW122_NRST_GPIO
+        int "REYAX NRST GPIO (-1 = not wired)"
+        range -1 48 if IDF_TARGET_ESP32S3
+        range -1 21 if IDF_TARGET_ESP32C3
+        range -1 48
+        default 12 if REGATTAONE_S3_BOARD_FREENOVE_WROOM_LITE
+        default -1
+        help
+            Active-low hardware reset (REYAX pin 2). ESP drives high (run); brief
+            low pulse resets the module after UART pins are configured.
+            Freenove WROOM Lite: GPIO12 (PCB label 12) → REYAX NRST.
+
+    config RYUW122_NRST_PULSE_MS
+        int "NRST low pulse width (ms)"
+        range 10 2000
+        default 100
+        help
+            How long to hold NRST low during boot reset. 50–200 ms is typical.
 
 endmenu
 
