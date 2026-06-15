@@ -2,6 +2,8 @@
 
 #include "sdkconfig.h"
 
+#include <stdio.h>
+
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
 
 #include "ble_sen0140.h"
@@ -11,6 +13,7 @@
 #include "driver/uart.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -33,13 +36,38 @@ static void ryuw122_apply_pins(void)
     }
 }
 
+static bool ryuw122_byte_is_printable(uint8_t b)
+{
+    return b == '\t' || (b >= 0x20U && b <= 0x7eU);
+}
+
+static void ryuw122_log_rx_line(const char *line, size_t len)
+{
+    char formatted[RYUW_LINE_MAX * 4 + 1];
+    size_t pos = 0;
+
+    for (size_t i = 0; i < len && pos + 1U < sizeof(formatted); i++) {
+        const uint8_t b = (uint8_t)line[i];
+        if (ryuw122_byte_is_printable(b)) {
+            formatted[pos++] = (char)b;
+            continue;
+        }
+        if (pos + 5U >= sizeof(formatted)) {
+            break;
+        }
+        pos += (size_t)snprintf(formatted + pos, sizeof(formatted) - pos, "\\x%02x", b);
+    }
+    formatted[pos] = '\0';
+    ESP_LOGI(TAG, "RX: %s", formatted);
+}
+
 static void ryuw122_emit_line(char *line, size_t len)
 {
     if (len == 0U) {
         return;
     }
     line[len] = '\0';
-    ESP_LOGI(TAG, "RX: %s", line);
+    ryuw122_log_rx_line(line, len);
     ble_sen0140_uwb_line_notify((const uint8_t *)line, len);
 }
 
@@ -104,12 +132,17 @@ esp_err_t ryuw122_uart_start(void)
         vTaskDelay(pdMS_TO_TICKS(CONFIG_RYUW122_BOOT_DELAY_MS));
     }
 
+    ESP_LOGI(TAG, "creating ryuw122 task (stack=4096 pri=5, free heap=%lu)",
+             (unsigned long)esp_get_free_heap_size());
     if (xTaskCreate(ryuw122_task, "ryuw122", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "ryuw122 task create failed (free heap=%lu)",
+                 (unsigned long)esp_get_free_heap_size());
         vSemaphoreDelete(s_uart_mtx);
         s_uart_mtx = NULL;
         uart_driver_delete(CONFIG_RYUW122_UART_PORT_NUM);
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "ryuw122 task running");
 
     ESP_LOGI(TAG, "UART%d active: TX=GPIO%d RX=GPIO%d @ %d baud", CONFIG_RYUW122_UART_PORT_NUM,
              CONFIG_RYUW122_UART_TX_GPIO, CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
