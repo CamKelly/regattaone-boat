@@ -45,7 +45,6 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_CHR_UUID      0xfef1
 #define SEN0140_GATT_LORA_TX_UUID        0xfef7
 #define SEN0140_GATT_LORA_LINE_UUID      0xfef8
-#define SEN0140_GATT_GPS_LINE_UUID       0xfefd
 #define SEN0140_GATT_UWB_LINE_UUID      0xfef9
 /** Write: UTF-8 AT command (CRLF appended if missing); response lines on FEF9 notify. */
 #define SEN0140_GATT_UWB_AT_UUID        0xfefa
@@ -88,7 +87,6 @@ static uint16_t s_chr_val_handle;
 static uint16_t s_lora_line_chr_val_handle;
 static uint16_t s_lora_stats_chr_val_handle;
 static bool s_lora_stats_notify_enabled;
-static uint16_t s_gps_line_chr_val_handle;
 static uint16_t s_uwb_line_chr_val_handle;
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 static uint16_t s_meshtastic_rx_chr_val_handle;
@@ -101,7 +99,6 @@ static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool s_notify_enabled;
 static bool s_lora_line_notify_enabled;
 static char s_lora_stats_json[8192];
-static bool s_gps_line_notify_enabled;
 static bool s_uwb_line_notify_enabled;
 static uint16_t s_seq;
 
@@ -141,25 +138,6 @@ static void lora_line_store(const uint8_t *data, size_t len)
     memcpy(s_lora_line_buf + s_lora_line_len, data, n);
     s_lora_line_len += n;
     s_lora_line_buf[s_lora_line_len] = '\0';
-}
-#endif
-
-#if CONFIG_REGATTAONE_GPS_ENABLE
-#define GPS_LINE_BUF_MAX 384U
-static char s_gps_line_buf[GPS_LINE_BUF_MAX];
-static size_t s_gps_line_len;
-
-static void gps_line_store(const uint8_t *data, size_t len)
-{
-    if (!data || len == 0U) {
-        s_gps_line_len = 0U;
-        s_gps_line_buf[0] = '\0';
-        return;
-    }
-    size_t n = len < (GPS_LINE_BUF_MAX - 1U) ? len : (GPS_LINE_BUF_MAX - 1U);
-    memcpy(s_gps_line_buf, data, n);
-    s_gps_line_buf[n] = '\0';
-    s_gps_line_len = n;
 }
 #endif
 
@@ -428,24 +406,6 @@ static int gatt_svr_access_lora_line(uint16_t conn_handle, uint16_t attr_handle,
 }
 #endif
 
-#if CONFIG_REGATTAONE_GPS_ENABLE
-static int gatt_svr_access_gps_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
-                                    void *arg)
-{
-    (void)conn_handle;
-    (void)attr_handle;
-    (void)arg;
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        if (s_gps_line_len > 0U) {
-            return os_mbuf_append(ctxt->om, s_gps_line_buf, (uint16_t)s_gps_line_len) == 0 ? 0
-                                                                                            : BLE_ATT_ERR_INSUFFICIENT_RES;
-        }
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
-}
-#endif
-
 static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                     void *arg)
 {
@@ -610,14 +570,6 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .val_handle = &s_lora_stats_chr_val_handle,
                 },
 #endif
-#if CONFIG_REGATTAONE_GPS_ENABLE
-                {
-                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_GPS_LINE_UUID),
-                    .access_cb = gatt_svr_access_gps_line,
-                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-                    .val_handle = &s_gps_line_chr_val_handle,
-                },
-#endif
                 {
                     .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_UWB_LINE_UUID),
                     .access_cb = gatt_svr_access_uwb_line,
@@ -723,7 +675,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_notify_enabled = false;
         s_lora_line_notify_enabled = false;
         s_lora_stats_notify_enabled = false;
-        s_gps_line_notify_enabled = false;
         s_uwb_line_notify_enabled = false;
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
         s_meshtastic_rx_notify_enabled = false;
@@ -764,10 +715,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 }
             }
 #endif
-        }
-        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_gps_line_chr_val_handle)) {
-            s_gps_line_notify_enabled = event->subscribe.cur_notify;
-            ESP_LOGI(TAG, "gps line notify=%d", (int)s_gps_line_notify_enabled);
         }
         if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_uwb_line_chr_val_handle)) {
             s_uwb_line_notify_enabled = event->subscribe.cur_notify;
@@ -893,9 +840,9 @@ esp_err_t ble_sen0140_init(void)
 
     ESP_LOGI(TAG, "NimBLE host task started — watch for \"stack sync\" then \"GAP advertising\"");
     ESP_LOGI(TAG,
-             "NimBLE GATT (svc %04x imu %04x lora_tx %04x lora_rx %04x lora_stats %04x gps %04x uwb %04x uwb_at %04x)",
+             "NimBLE GATT (svc %04x imu %04x lora_tx %04x lora_rx %04x lora_stats %04x uwb %04x uwb_at %04x)",
              SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_LORA_TX_UUID,
-             SEN0140_GATT_LORA_LINE_UUID, SEN0140_GATT_LORA_STATS_UUID, SEN0140_GATT_GPS_LINE_UUID,
+             SEN0140_GATT_LORA_LINE_UUID, SEN0140_GATT_LORA_STATS_UUID,
              SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID);
     return ESP_OK;
 }
@@ -908,7 +855,7 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
 
     /* Comms responses share the NimBLE mbuf pool — throttle IMU while line notifies are on. */
     static TickType_t s_last_imu_notify;
-    if (s_uwb_line_notify_enabled || s_lora_line_notify_enabled || s_gps_line_notify_enabled) {
+    if (s_uwb_line_notify_enabled || s_lora_line_notify_enabled) {
         const TickType_t now = xTaskGetTickCount();
         if (now - s_last_imu_notify < pdMS_TO_TICKS(200)) {
             return;
@@ -1008,17 +955,6 @@ void ble_sen0140_lora_stats_notify(const uint8_t *data, size_t len)
         return;
     }
     ble_line_notify(s_lora_stats_chr_val_handle, s_lora_stats_notify_enabled, data, len);
-}
-
-void ble_sen0140_gps_line_notify(const uint8_t *data, size_t len)
-{
-    if (!data || len == 0U) {
-        return;
-    }
-#if CONFIG_REGATTAONE_GPS_ENABLE
-    gps_line_store(data, len);
-    ble_line_notify(s_gps_line_chr_val_handle, s_gps_line_notify_enabled, data, len);
-#endif
 }
 
 void ble_sen0140_uwb_line_notify(const uint8_t *data, size_t len)

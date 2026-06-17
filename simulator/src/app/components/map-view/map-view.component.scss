@@ -1,0 +1,82 @@
+:host {
+  display: block;
+  height: 100%;
+  min-height: 360px;
+}
+
+.map-card {
+  height: 100%;
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-card ::ng-deep .ant-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-card ::ng-deep .ant-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.map-host {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 360px;
+  height: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+}
+
+.map-host ::ng-deep .ol-viewport {
+  height: 100% !important;
+}
+
+.legend {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+
+.truth-mark {
+  background: #eb2f96;
+}
+
+.truth-boat {
+  background: #722ed1;
+}
+
+.gps {
+  background: #1890ff;
+}
+
+.fusion {
+  background: #52c41a;
+}
+
+.line {
+  background: #ff4d4f;
+  border-radius: 1px;
+  height: 3px;
+  width: 14px;
+  align-self: center;
+}

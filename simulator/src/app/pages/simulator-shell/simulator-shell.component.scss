@@ -1,0 +1,80 @@
+.sim-shell {
+  min-height: 100vh;
+  background: #f0f2f5;
+}
+
+.sim-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: #001529;
+  padding: 0 20px;
+  height: 56px;
+  line-height: 56px;
+}
+
+.sim-title {
+  color: #fff !important;
+  margin: 0 !important;
+  font-size: 18px !important;
+  font-weight: 600 !important;
+}
+
+.sim-content {
+  padding: 12px;
+}
+
+.sim-grid {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  grid-template-rows: minmax(420px, 55vh) minmax(220px, 1fr);
+  gap: 12px;
+  min-height: calc(100vh - 80px);
+}
+
+.sim-map {
+  grid-column: 1;
+  grid-row: 1;
+  min-height: 360px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sim-map app-map-view {
+  flex: 1;
+  min-height: 360px;
+}
+
+.sim-controls {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  max-height: calc(100vh - 80px);
+}
+
+.sim-charts {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+@media (max-width: 1100px) {
+  .sim-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+
+  .sim-controls {
+    grid-column: 1;
+    grid-row: auto;
+    max-height: none;
+  }
+
+  .sim-charts {
+    grid-row: auto;
+  }
+}

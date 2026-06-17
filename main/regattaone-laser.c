@@ -18,9 +18,6 @@
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 #include "sx1262_lora.h"
 #endif
-#if CONFIG_REGATTAONE_GPS_ENABLE
-#include "gps_nmea.h"
-#endif
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
 #include "ryuw122_uart.h"
@@ -75,18 +72,13 @@ void app_main(void)
 
     ESP_LOGI(
         TAG,
-        "Bring-up: IMU %s | LoRa %s | GPS %s | UWB %s | Meshtastic %s",
+        "Bring-up: IMU %s | LoRa %s | UWB %s | Meshtastic %s",
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
         "on",
 #else
         "off",
 #endif
 #if CONFIG_REGATTAONE_SX1262_ENABLE
-        "on",
-#else
-        "off",
-#endif
-#if CONFIG_REGATTAONE_GPS_ENABLE
         "on",
 #else
         "off",
@@ -132,10 +124,10 @@ void app_main(void)
 #endif
 
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
-/*     err = meshtastic_uart_start();
+     err = meshtastic_uart_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Meshtastic UART: %s", esp_err_to_name(err));
-    } */
+    } 
 #endif
 
 #if CONFIG_REGATTAONE_SX1262_ENABLE
@@ -150,19 +142,12 @@ void app_main(void)
     }
 #endif
 
-#if CONFIG_REGATTAONE_GPS_ENABLE
-/*     err = gps_nmea_start();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "GPS NMEA UART: %s", esp_err_to_name(err));
-    } */
-#endif
-
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
-/*     if (sen0140_ok) {
+     if (sen0140_ok) {
         const uint32_t stack = 4096;
         if (xTaskCreate(sensor_task, "sen0140", stack, NULL, 5, NULL) != pdPASS) {
             ESP_LOGE(TAG, "sensor task create failed");
         }
-    } */
+    } 
 #endif
 }

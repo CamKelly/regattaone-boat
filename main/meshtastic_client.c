@@ -37,6 +37,12 @@ typedef struct {
     char long_name[MT_NAME_MAX];
     char short_name[8];
     int64_t last_heard_us;
+    bool has_pos;
+    double lat_deg;
+    double lon_deg;
+    int32_t alt_m;
+    float speed_mps;
+    float heading_deg;
     bool used;
 } mt_node_t;
 
@@ -231,6 +237,40 @@ static bool pb_extract_fixed32(const uint8_t *data, size_t len, uint32_t want_fi
             }
             memcpy(out, b.data + b.pos, 4U);
             b.pos += 4U;
+            return true;
+        }
+        if (!pb_skip(&b, wire)) {
+            return false;
+        }
+    }
+    return false;
+}
+
+static bool pb_extract_sfixed32(const uint8_t *data, size_t len, uint32_t want_field, int32_t *out)
+{
+    uint32_t raw = 0;
+    if (!pb_extract_fixed32(data, len, want_field, &raw)) {
+        return false;
+    }
+    *out = (int32_t)raw;
+    return true;
+}
+
+static bool pb_extract_int32(const uint8_t *data, size_t len, uint32_t want_field, int32_t *out)
+{
+    pb_buf_t b = {.data = data, .len = len, .pos = 0};
+    uint32_t field = 0;
+    uint32_t wire = 0;
+    while (b.pos < b.len) {
+        if (!pb_read_tag(&b, &field, &wire)) {
+            return false;
+        }
+        if (field == want_field && wire == 0U) {
+            uint64_t val = 0;
+            if (!pb_read_varint(&b, &val)) {
+                return false;
+            }
+            *out = (int32_t)val;
             return true;
         }
         if (!pb_skip(&b, wire)) {
@@ -545,6 +585,38 @@ static void handle_mesh_packet(const uint8_t *data, size_t len)
     s_stats_dirty = true;
 }
 
+static void mt_apply_position(mt_node_t *node, const uint8_t *data, size_t len)
+{
+    if (node == NULL || data == NULL || len == 0U) {
+        return;
+    }
+
+    int32_t lat_i = 0;
+    int32_t lon_i = 0;
+    int32_t alt_m = 0;
+    uint32_t ground_speed = 0;
+    uint32_t ground_track = 0;
+
+    const bool have_lat = pb_extract_sfixed32(data, len, 1U, &lat_i);
+    const bool have_lon = pb_extract_sfixed32(data, len, 2U, &lon_i);
+    if (!have_lat || !have_lon) {
+        return;
+    }
+
+    node->lat_deg = (double)lat_i / 10000000.0;
+    node->lon_deg = (double)lon_i / 10000000.0;
+    if (pb_extract_int32(data, len, 3U, &alt_m)) {
+        node->alt_m = alt_m;
+    }
+    if (pb_extract_uint32(data, len, 15U, &ground_speed) && ground_speed > 0U) {
+        node->speed_mps = (float)ground_speed / 1000.0f;
+    }
+    if (pb_extract_uint32(data, len, 16U, &ground_track)) {
+        node->heading_deg = (float)ground_track / 100.0f;
+    }
+    node->has_pos = true;
+}
+
 static void handle_node_info(const uint8_t *data, size_t len)
 {
     uint32_t num = 0;
@@ -575,6 +647,13 @@ static void handle_node_info(const uint8_t *data, size_t len)
                 if (pb_extract_string(user.data, user.len, 3U, short_name, sizeof(short_name))) {
                     strncpy(node->short_name, short_name, sizeof(node->short_name) - 1U);
                 }
+            }
+            continue;
+        }
+        if (field == 3U && wire == 2U) {
+            pb_buf_t pos = {0};
+            if (pb_read_delimited(&b, &pos)) {
+                mt_apply_position(node, pos.data, pos.len);
             }
             continue;
         }
@@ -861,7 +940,14 @@ static size_t format_json_locked(char *out, size_t out_cap)
         if (!json_escape_append(out, out_cap, &pos, short_n, 8)) {
             return 0;
         }
-        n = snprintf(out + pos, out_cap - pos, "\",\"last_ms\":%lld}", (long long)age_ms);
+        if (node->has_pos) {
+            n = snprintf(out + pos, out_cap - pos,
+                         "\",\"last_ms\":%lld,\"lat\":%.6f,\"lon\":%.6f,\"alt_m\":%d,\"speed_mps\":%.2f,\"heading_deg\":%.1f}",
+                         (long long)age_ms, node->lat_deg, node->lon_deg, (int)node->alt_m,
+                         (double)node->speed_mps, (double)node->heading_deg);
+        } else {
+            n = snprintf(out + pos, out_cap - pos, "\",\"last_ms\":%lld}", (long long)age_ms);
+        }
         if (n < 0 || (size_t)n >= out_cap - pos) {
             return 0;
         }

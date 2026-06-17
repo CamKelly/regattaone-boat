@@ -8,12 +8,6 @@ set(regattaone_srcs
     "regattaone-laser.c"
     "sen0140_10dof.c"
     "ble_sen0140.c"
-    "gps_nmea.c"
-    "gps_timebase.c"
-    "gps_hw_timer.c"
-    "gps_pps_capture.c"
-    "tdma.c"
-    "tdma_scheduler.c"
     "sx1262_lora.cpp"
     "lora_stats.c"
     "lora_mesh.c")
@@ -22,7 +16,7 @@ set(regattaone_srcs
 # sx1262_lora.cpp is compiled unconditionally; body is #if CONFIG_REGATTAONE_SX1262_ENABLE.
 idf_component_register(SRCS ${regattaone_srcs}
                        PRIV_REQUIRES spi_flash esp_driver_i2c esp_driver_gpio esp_driver_uart
-                                     esp_driver_spi esp_driver_gptimer esp_driver_mcpwm bt nvs_flash
+                                     esp_driver_spi bt nvs_flash
                                      esp_timer esp_system RadioLib
                        INCLUDE_DIRS "")
 

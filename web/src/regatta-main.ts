@@ -8,25 +8,12 @@ import {
 } from "./lib/gps-leaflet-map";
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
-  applyNmeaLine,
-  defaultGpsFix,
-  estimateHorizontalAccuracyM,
-  fixQualityLabel,
-  fixTypeLabel,
-  formatAccuracyM,
-  formatAltitudeM,
   formatCoordDeg,
-  formatCourseDeg,
-  formatDop,
-  formatSpeedKnots,
-  formatUtc,
   openStreetMapUrl,
-  type GpsFix,
 } from "./lib/nmea-parse";
 import {
   BLE_BOAT_ID_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
-  BLE_GPS_LINE_CHAR_UUID,
   BLE_IMU_CHAR_UUID,
   BLE_LORA_LINE_CHAR_UUID,
   BLE_LORA_STATS_CHAR_UUID,
@@ -124,6 +111,11 @@ interface MeshtasticNode {
   name: string;
   short: string;
   last_ms: number;
+  lat: number | null;
+  lon: number | null;
+  alt_m: number | null;
+  speed_mps: number | null;
+  heading_deg: number | null;
 }
 
 interface MeshtasticRxMsg {
@@ -220,7 +212,6 @@ const BLE_OPTIONAL_SERVICES = [
   BLE_LORA_TX_CHAR_UUID,
   BLE_LORA_LINE_CHAR_UUID,
   BLE_LORA_STATS_CHAR_UUID,
-  BLE_GPS_LINE_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
   BLE_UWB_AT_CHAR_UUID,
   BLE_BOAT_ID_CHAR_UUID,
@@ -243,7 +234,6 @@ interface BleBoatSession {
   charMeshtasticRx: BleGattCharacteristicLike | null;
   charMeshtasticTx: BleGattCharacteristicLike | null;
   charMeshtasticStats: BleGattCharacteristicLike | null;
-  charGpsLine: BleGattCharacteristicLike | null;
   charUwbLine: BleGattCharacteristicLike | null;
   charUwbAt: BleGattCharacteristicLike | null;
   charBoatId: BleGattCharacteristicLike | null;
@@ -259,7 +249,6 @@ interface BleBoatSession {
   /** Wall clock when loraStats was last applied (for live "ago" display). */
   loraStatsReceivedWallMs: number;
   loraStatsNotifyBuf: string;
-  gpsFix: GpsFix;
   uwbLineLogText: string;
   loraTxDraft: string;
   uwbAtDraft: string;
@@ -292,10 +281,11 @@ interface BleBoatSession {
   onLoraStatsNotify: (ev: Event) => void;
   onMeshtasticLineNotify: (ev: Event) => void;
   onMeshtasticStatsNotify: (ev: Event) => void;
-  onGpsLineNotify: (ev: Event) => void;
   onUwbLineNotify: (ev: Event) => void;
   onDisconnected: () => void;
 }
+
+const MESHTASTIC_GPS_SOURCE_SHORT = "1HX";
 
 const sessions = new Map<string, BleBoatSession>();
 let activeSessionId: string | null = null;
@@ -555,9 +545,6 @@ function updateBleToolbar(note?: string): void {
   if (!active.charLoraTx && !active.charMeshtasticRx) {
     missing.push("LoRa/Mesh");
   }
-  if (!active.charGpsLine) {
-    missing.push("GPS");
-  }
   if (missing.length > 0) {
     setBleToolbar(`BLE: ${name}${multi} — ${missing.join(", ")} unavailable`);
     return;
@@ -611,7 +598,6 @@ function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charLoraStats?.removeEventListener("characteristicvaluechanged", session.onLoraStatsNotify);
   session.charMeshtasticRx?.removeEventListener("characteristicvaluechanged", session.onMeshtasticLineNotify);
   session.charMeshtasticStats?.removeEventListener("characteristicvaluechanged", session.onMeshtasticStatsNotify);
-  session.charGpsLine?.removeEventListener("characteristicvaluechanged", session.onGpsLineNotify);
   session.charUwbLine?.removeEventListener("characteristicvaluechanged", session.onUwbLineNotify);
 }
 
@@ -625,7 +611,6 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   session.charMeshtasticRx = null;
   session.charMeshtasticTx = null;
   session.charMeshtasticStats = null;
-  session.charGpsLine = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
   session.charBoatId = null;
@@ -687,12 +672,6 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     console.warn("BLE Meshtastic stats unavailable", session.name, e);
   }
   try {
-    session.charGpsLine = await svc.getCharacteristic(BLE_GPS_LINE_CHAR_UUID);
-    session.charGpsLine.addEventListener("characteristicvaluechanged", session.onGpsLineNotify);
-  } catch (e) {
-    console.warn("BLE GPS NMEA unavailable", session.name, e);
-  }
-  try {
     session.charBoatId = await svc.getCharacteristic(BLE_BOAT_ID_CHAR_UUID);
   } catch (e) {
     session.charBoatId = null;
@@ -738,112 +717,78 @@ async function restoreImuAfterComms(session: BleBoatSession, wasOn: boolean): Pr
   }
 }
 
-function ingestGpsNmea(session: BleBoatSession, chunk: string): void {
-  const trimmed = chunk.trim();
-  if (trimmed.length === 0) {
-    return;
+function findMeshtasticGpsNode(session: BleBoatSession): MeshtasticNode | null {
+  const target = MESHTASTIC_GPS_SOURCE_SHORT.toLowerCase();
+  for (const node of session.meshtasticStats.nodes) {
+    if (node.short.toLowerCase() === target) {
+      return node;
+    }
   }
-  applyNmeaLine(session.gpsFix, trimmed);
-  renderGpsDisplay(session);
+  return null;
 }
 
 function renderGpsDisplay(session: BleBoatSession): void {
   if (session.deviceId !== activeSessionId) {
     return;
   }
-  const fix = session.gpsFix;
-  const acc = estimateHorizontalAccuracyM(fix.hdop);
 
-  const ppsNote =
-    fix.ppsCount !== null
-      ? ` · PPS ${fix.ppsCount}${fix.ppsUpdatedAtMs > 0 ? ` (last edge ${Math.max(0, Math.round(performance.now() - fix.ppsUpdatedAtMs))} ms ago)` : ""}`
-      : "";
-
-  if (fix.updatedAtMs === 0 && fix.ppsCount === null) {
-    setText("gps-meta", "Waiting for NMEA sentences…");
-  } else if (fix.fixValid && fix.lat !== null && fix.lon !== null) {
-    setText(
-      "gps-meta",
-      `Fix OK · last ${fix.lastSentence ?? "?"} · updated ${Math.max(0, Math.round(performance.now() - fix.updatedAtMs))} ms ago${ppsNote}`,
-    );
-  } else {
-    setText(
-      "gps-meta",
-      `No valid fix · last ${fix.lastSentence ?? "?"} · ${fixQualityLabel(fix.fixQuality)}${ppsNote}`,
-    );
+  const node = findMeshtasticGpsNode(session);
+  if (!node) {
+    clearGpsDisplay(null);
+    if (session.meshtasticStatsReceivedWallMs > 0) {
+      setText("gps-meta", `Waiting for Meshtastic node ${MESHTASTIC_GPS_SOURCE_SHORT} with position…`);
+    } else {
+      setText("gps-meta", `Waiting for Meshtastic position from node ${MESHTASTIC_GPS_SOURCE_SHORT}…`);
+    }
+    return;
   }
 
-  if (fix.lat !== null && fix.lon !== null) {
+  const ageMs = meshtasticAgeMs(session, node.last_ms);
+  const label = node.name || node.short || MESHTASTIC_GPS_SOURCE_SHORT;
+  setText("gps-meta", `${label} (${node.short || MESHTASTIC_GPS_SOURCE_SHORT}) · ${formatAgo(ageMs)}`);
+
+  if (node.lat !== null && node.lon !== null) {
     setText(
       "gps-position",
-      `${formatCoordDeg(fix.lat, true)}\n${formatCoordDeg(fix.lon, false)}`,
+      `${formatCoordDeg(node.lat, true)}\n${formatCoordDeg(node.lon, false)}`,
     );
+    updateGpsMap(node.lat, node.lon);
   } else {
     setText("gps-position", "—");
+    updateGpsMap(null, null);
   }
 
-  const fixParts = [fixQualityLabel(fix.fixQuality)];
-  if (fix.fixType !== null) {
-    fixParts.push(fixTypeLabel(fix.fixType));
-  }
-  if (fix.fixMode) {
-    fixParts.push(fix.fixMode === "A" ? "auto" : fix.fixMode === "M" ? "manual" : fix.fixMode);
-  }
-  setText("gps-fix", fix.fixValid ? fixParts.join(" · ") : `No fix · ${fixParts.join(" · ")}`);
-  setText("gps-accuracy", formatAccuracyM(acc));
-  setText("gps-sog", formatSpeedKnots(fix.sogKnots));
-  setText("gps-cog", formatCourseDeg(fix.cogDeg));
-  setText("gps-altitude", formatAltitudeM(fix.altitudeM, fix.geoidSepM));
+  setText("gps-source", `${label} · node ${node.num}`);
+  setText("gps-last-heard", formatAgo(ageMs));
+  setText("gps-sog", formatMeshtasticSpeed(node));
+  setText("gps-cog", formatMeshtasticHeading(node));
   setText(
-    "gps-sats",
-    fix.satsUsed !== null || fix.satsInView !== null
-      ? `${fix.satsUsed ?? "—"} used · ${fix.satsInView ?? "—"} in view`
-      : "—",
+    "gps-altitude",
+    node.alt_m !== null ? `${node.alt_m} m MSL` : "—",
   );
-  setText(
-    "gps-dop",
-    `${formatDop(fix.hdop)} / ${formatDop(fix.vdop)} / ${formatDop(fix.pdop)}`,
-  );
-  setText("gps-utc", formatUtc(fix.utcTime, fix.utcDate));
-  setText(
-    "gps-magvar",
-    fix.magneticVariationDeg !== null ? `${fix.magneticVariationDeg.toFixed(1)}°` : "—",
-  );
-  if (fix.ppsCount !== null) {
-    const age =
-      fix.ppsUpdatedAtMs > 0 ? `${Math.max(0, Math.round(performance.now() - fix.ppsUpdatedAtMs))} ms ago` : "—";
-    setText("gps-pps", `${fix.ppsCount} pulses · last edge ${age}`);
-  } else {
-    setText("gps-pps", "—");
-  }
-
-  updateGpsMap(session, fix);
 }
 
-function updateGpsMap(_session: BleBoatSession, fix: GpsFix): void {
+function updateGpsMap(lat: number | null, lon: number | null): void {
   const hint = document.querySelector<HTMLElement>("#gps-map-hint");
   const link = document.querySelector<HTMLAnchorElement>("#gps-map-link");
   if (!hint || !link) {
     return;
   }
 
-  if (!fix.fixValid || fix.lat === null || fix.lon === null) {
+  if (lat === null || lon === null) {
     clearGpsLeafletMap();
     hint.hidden = false;
     link.hidden = true;
     return;
   }
 
-  updateGpsLeafletMap(fix.lat, fix.lon);
-  link.href = openStreetMapUrl(fix.lat, fix.lon);
+  updateGpsLeafletMap(lat, lon);
+  link.href = openStreetMapUrl(lat, lon);
   link.hidden = false;
   hint.hidden = true;
 }
 
-function clearGpsDisplay(session: BleBoatSession | null): void {
-  if (session) {
-    session.gpsFix = defaultGpsFix();
-  }
+function clearGpsDisplay(_session: BleBoatSession | null): void {
   clearGpsLeafletMap();
   const hint = document.querySelector<HTMLElement>("#gps-map-hint");
   const link = document.querySelector<HTMLAnchorElement>("#gps-map-link");
@@ -854,19 +799,14 @@ function clearGpsDisplay(session: BleBoatSession | null): void {
     link.hidden = true;
     link.href = "#";
   }
-  setText("gps-meta", "Waiting for NMEA fix…");
+  setText("gps-meta", `Waiting for Meshtastic position from node ${MESHTASTIC_GPS_SOURCE_SHORT}…`);
   for (const id of [
+    "gps-source",
     "gps-position",
-    "gps-fix",
-    "gps-accuracy",
+    "gps-last-heard",
     "gps-sog",
     "gps-cog",
     "gps-altitude",
-    "gps-sats",
-    "gps-dop",
-    "gps-utc",
-    "gps-magvar",
-    "gps-pps",
   ]) {
     setText(id, "—");
   }
@@ -987,7 +927,6 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charMeshtasticRx = null;
   session.charMeshtasticTx = null;
   session.charMeshtasticStats = null;
-  session.charGpsLine = null;
   session.charUwbLine = null;
   session.charUwbAt = null;
   session.charBoatId = null;
@@ -1082,7 +1021,6 @@ async function setCommsNotifications(session: BleBoatSession, enabled: boolean):
     session.charLoraStats,
     session.charMeshtasticRx,
     session.charMeshtasticStats,
-    session.charGpsLine,
   ].filter((c): c is BleGattCharacteristicLike => c !== null);
   const results: PromiseSettledResult<unknown>[] = [];
   for (const chr of chars) {
@@ -1621,6 +1559,39 @@ function meshtasticAgeMs(session: BleBoatSession, ageAtReceiptMs: number): numbe
   return ageAtReceiptMs + (Date.now() - session.meshtasticStatsReceivedWallMs);
 }
 
+function parseMeshtasticOptionalNumber(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatMeshtasticPosition(n: MeshtasticNode): string {
+  if (n.lat === null || n.lon === null) {
+    return "—";
+  }
+  const parts = [`${n.lat.toFixed(5)}°, ${n.lon.toFixed(5)}°`];
+  if (n.alt_m !== null) {
+    parts.push(`${n.alt_m} m`);
+  }
+  return parts.join(" · ");
+}
+
+function formatMeshtasticSpeed(n: MeshtasticNode): string {
+  if (n.speed_mps === null) {
+    return "—";
+  }
+  return formatSpeedKnots(n.speed_mps / 0.514444);
+}
+
+function formatMeshtasticHeading(n: MeshtasticNode): string {
+  if (n.heading_deg === null) {
+    return "—";
+  }
+  return formatCourseDeg(n.heading_deg);
+}
+
 function parseMeshtasticStatsJson(raw: string): MeshtasticStatsSnapshot | null {
   try {
     const data = JSON.parse(raw) as {
@@ -1630,7 +1601,17 @@ function parseMeshtasticStatsJson(raw: string): MeshtasticStatsSnapshot | null {
       tx_ok?: number;
       tx_fail?: number;
       rx?: number;
-      nodes?: Array<{ num?: number; name?: string; short?: string; last_ms?: number }>;
+      nodes?: Array<{
+        num?: number;
+        name?: string;
+        short?: string;
+        last_ms?: number;
+        lat?: number;
+        lon?: number;
+        alt_m?: number;
+        speed_mps?: number;
+        heading_deg?: number;
+      }>;
       rx_msgs?: Array<{ from?: number; from_name?: string; text?: string; last_ms?: number }>;
     };
     const nodes: MeshtasticNode[] = [];
@@ -1644,6 +1625,11 @@ function parseMeshtasticStatsJson(raw: string): MeshtasticStatsSnapshot | null {
           name: String(n.name ?? ""),
           short: String(n.short ?? ""),
           last_ms: Number(n.last_ms ?? 0),
+          lat: parseMeshtasticOptionalNumber(n.lat),
+          lon: parseMeshtasticOptionalNumber(n.lon),
+          alt_m: parseMeshtasticOptionalNumber(n.alt_m),
+          speed_mps: parseMeshtasticOptionalNumber(n.speed_mps),
+          heading_deg: parseMeshtasticOptionalNumber(n.heading_deg),
         });
       }
       nodes.sort((a, b) => a.num - b.num);
@@ -1737,6 +1723,11 @@ function mergeMeshtasticPeersFromLog(session: BleBoatSession): void {
           name: peer.name,
           short: prev?.short ?? "",
           last_ms: prev?.last_ms ?? 0,
+          lat: prev?.lat ?? null,
+          lon: prev?.lon ?? null,
+          alt_m: prev?.alt_m ?? null,
+          speed_mps: prev?.speed_mps ?? null,
+          heading_deg: prev?.heading_deg ?? null,
         });
       }
     } else if (line.startsWith(">> ")) {
@@ -1932,15 +1923,36 @@ function renderMeshtastic(session: BleBoatSession): void {
     tr.classList.add("lora-mesh-peer-clickable");
     tr.dataset["mtPeerNum"] = String(n.num);
     tr.title = "Click to send a message";
-    const label = n.name || (n.short ? n.short : `0x${n.num.toString(16)}`);
-    for (const cell of [String(n.num), label, formatAgo(meshtasticAgeMs(session, n.last_ms))]) {
+    const shortLabel = n.short || "—";
+    const nameLabel = n.name || `0x${n.num.toString(16).toUpperCase()}`;
+    const cells: (string | HTMLElement)[] = [
+      shortLabel,
+      nameLabel,
+      String(n.num),
+      formatMeshtasticPosition(n),
+      formatMeshtasticSpeed(n),
+      formatMeshtasticHeading(n),
+      formatAgo(meshtasticAgeMs(session, n.last_ms)),
+    ];
+    for (let i = 0; i < cells.length; i++) {
       const td = document.createElement("td");
-      td.textContent = cell;
+      const cell = cells[i];
+      if (i === 3 && n.lat !== null && n.lon !== null) {
+        const link = document.createElement("a");
+        link.href = openStreetMapUrl(n.lat, n.lon);
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = String(cell);
+        td.appendChild(link);
+      } else {
+        td.textContent = String(cell);
+      }
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
   }
   renderMeshtasticLog(session);
+  renderGpsDisplay(session);
 }
 
 function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
@@ -1957,6 +1969,7 @@ function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
       return;
     }
     renderMeshtastic(active);
+    renderGpsDisplay(active);
   }, 1000);
 }
 
@@ -2433,16 +2446,6 @@ function createNotifyHandlers(session: BleBoatSession): void {
     ingestMeshtasticStatsChunk(session, new TextDecoder().decode(v));
   };
 
-  session.onGpsLineNotify = (ev: Event) => {
-    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
-    const v = ch.value;
-    if (!v || v.byteLength === 0) {
-      return;
-    }
-    const chunk = new TextDecoder().decode(v);
-    ingestGpsNmea(session, chunk);
-  };
-
   session.onUwbLineNotify = (ev: Event) => {
     const ch = ev.target as BluetoothRemoteGATTCharacteristic;
     const v = ch.value;
@@ -2804,7 +2807,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     charMeshtasticRx: null,
     charMeshtasticTx: null,
     charMeshtasticStats: null,
-    charGpsLine: null,
     charUwbLine: null,
     charUwbAt: null,
     charBoatId: null,
@@ -2818,7 +2820,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     loraStats: defaultLoraStats(),
     loraStatsReceivedWallMs: 0,
     loraStatsNotifyBuf: "",
-    gpsFix: defaultGpsFix(),
     uwbLineLogText: "",
     loraTxDraft: "",
     uwbAtDraft: "",
@@ -2848,7 +2849,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     onLoraStatsNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
-    onGpsLineNotify: () => {},
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
@@ -2882,7 +2882,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     charMeshtasticRx: null,
     charMeshtasticTx: null,
     charMeshtasticStats: null,
-    charGpsLine: null,
     charUwbLine: null,
     charUwbAt: null,
     charBoatId: null,
@@ -2896,7 +2895,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     loraStats: defaultLoraStats(),
     loraStatsReceivedWallMs: 0,
     loraStatsNotifyBuf: "",
-    gpsFix: defaultGpsFix(),
     uwbLineLogText: "",
     loraTxDraft: "",
     uwbAtDraft: "",
@@ -2926,7 +2924,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     onLoraStatsNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
-    onGpsLineNotify: () => {},
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };

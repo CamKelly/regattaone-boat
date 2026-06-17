@@ -7,7 +7,6 @@
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
 
 #include "ble_sen0140.h"
-#include "tdma.h"
 
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -225,20 +224,12 @@ esp_err_t ryuw122_uart_write(const uint8_t *data, size_t len)
 
 bool ryuw122_tdma_can_use_now(void)
 {
-#if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_UWB
-    return tdma_can_transmit_now();
-#else
     return true;
-#endif
 }
 
 int64_t ryuw122_tdma_us_until_window(void)
 {
-#if CONFIG_REGATTAONE_TDMA_ENABLE
-    return tdma_us_until_tx_window();
-#else
     return 0;
-#endif
 }
 
 #else

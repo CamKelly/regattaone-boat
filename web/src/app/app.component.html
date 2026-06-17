@@ -290,8 +290,12 @@
               <table class="lora-stats-table" aria-label="Meshtastic node roster">
                 <thead>
                   <tr>
-                    <th>Node #</th>
+                    <th>Short</th>
                     <th>Name</th>
+                    <th>Node #</th>
+                    <th>Position</th>
+                    <th>Speed</th>
+                    <th>Heading</th>
                     <th>Last heard</th>
                   </tr>
                 </thead>
@@ -324,8 +328,8 @@
             <pre id="meshtastic-line-log" class="ble-log lora-line-log" aria-live="polite"></pre>
           </nz-tab>
 
-          <nz-tab nzTitle="GPS · 0xFEFD">
-            <p id="gps-meta" class="tab-hint">Waiting for NMEA fix…</p>
+          <nz-tab nzTitle="GPS · 1HX">
+            <p id="gps-meta" class="tab-hint">Waiting for Meshtastic position from node 1HX…</p>
             <div class="gps-layout">
               <div class="gps-map-wrap">
                 <div
@@ -362,16 +366,16 @@
               </div>
               <div class="gps-grid" aria-live="polite">
                 <div class="gps-cell gps-cell--wide">
+                  <span class="gps-cell-label">Source</span>
+                  <span id="gps-source" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell gps-cell--wide">
                   <span class="gps-cell-label">Position</span>
                   <span id="gps-position" class="gps-cell-value">—</span>
                 </div>
                 <div class="gps-cell">
-                  <span class="gps-cell-label">Fix</span>
-                  <span id="gps-fix" class="gps-cell-value">—</span>
-                </div>
-                <div class="gps-cell">
-                  <span class="gps-cell-label">Accuracy (est.)</span>
-                  <span id="gps-accuracy" class="gps-cell-value">—</span>
+                  <span class="gps-cell-label">Last heard</span>
+                  <span id="gps-last-heard" class="gps-cell-value">—</span>
                 </div>
                 <div class="gps-cell">
                   <span class="gps-cell-label">Speed (SOG)</span>
@@ -384,26 +388,6 @@
                 <div class="gps-cell">
                   <span class="gps-cell-label">Altitude</span>
                   <span id="gps-altitude" class="gps-cell-value">—</span>
-                </div>
-                <div class="gps-cell">
-                  <span class="gps-cell-label">Satellites</span>
-                  <span id="gps-sats" class="gps-cell-value">—</span>
-                </div>
-                <div class="gps-cell">
-                  <span class="gps-cell-label">DOP (HDOP / VDOP / PDOP)</span>
-                  <span id="gps-dop" class="gps-cell-value">—</span>
-                </div>
-                <div class="gps-cell">
-                  <span class="gps-cell-label">UTC time</span>
-                  <span id="gps-utc" class="gps-cell-value">—</span>
-                </div>
-                <div class="gps-cell">
-                  <span class="gps-cell-label">Magnetic variation</span>
-                  <span id="gps-magvar" class="gps-cell-value">—</span>
-                </div>
-                <div class="gps-cell">
-                  <span class="gps-cell-label">PPS (1 Hz)</span>
-                  <span id="gps-pps" class="gps-cell-value">—</span>
                 </div>
               </div>
             </div>

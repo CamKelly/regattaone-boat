@@ -17,8 +17,6 @@ export const BLE_LORA_LINE_CHAR_UUID = "0000fef8-0000-1000-8000-00805f9b34fb";
  * Write `stream=1`/`0`, `mesh=1`/`0`, `stats=1` (refresh notify), or `mesh_tx=<id>\\n<text>`.
  */
 export const BLE_LORA_STATS_CHAR_UUID = "0000fefe-0000-1000-8000-00805f9b34fb";
-/** Notify: UTF-8 NMEA 0183 lines from GPS UART. */
-export const BLE_GPS_LINE_CHAR_UUID = "0000fefd-0000-1000-8000-00805f9b34fb";
 /** Notify: UTF-8 lines from RYUW122 UART. */
 export const BLE_UWB_LINE_CHAR_UUID = "0000fef9-0000-1000-8000-00805f9b34fb";
 /** Write UTF-8 AT command to RYUW122 (firmware appends CRLF if missing). */
@@ -35,6 +33,7 @@ export const BLE_MESHTASTIC_RX_CHAR_UUID = "0000fee5-0000-1000-8000-00805f9b34fb
 export const BLE_MESHTASTIC_TX_CHAR_UUID = "0000fee6-0000-1000-8000-00805f9b34fb";
 /**
  * Read/notify: Meshtastic node roster + message stats JSON.
+ * Node objects may include lat, lon, alt_m, speed_mps, heading_deg when position is shared.
  * Write `stats=1` to refresh notify.
  */
 export const BLE_MESHTASTIC_STATS_CHAR_UUID = "0000fee7-0000-1000-8000-00805f9b34fb";

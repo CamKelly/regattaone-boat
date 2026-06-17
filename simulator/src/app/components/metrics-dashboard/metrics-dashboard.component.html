@@ -1,0 +1,64 @@
+<nz-card nzTitle="Live metrics" nzSize="small" class="metrics-card">
+  @if (fusion && truth && summary) {
+    <div nz-row [nzGutter]="8" class="stat-row">
+      <div nz-col [nzSpan]="12">
+        <div class="metric-block">
+          <div class="metric-title">Distance to line</div>
+          <div class="metric-value">
+            {{ fusion.distanceToLineM | number: "1.1-1" }} m
+          </div>
+          <div class="sub">
+            Truth: {{ truth.distanceToLineM | number: "1.1-1" }} m · Error:
+            {{ fusion.distanceToLineM - truth.distanceToLineM | number: "1.1-1" }} m
+          </div>
+        </div>
+      </div>
+      <div nz-col [nzSpan]="12">
+        <div class="metric-block">
+          <div class="metric-title">Time to line</div>
+          <div class="metric-value">
+            {{ fusion.timeToLineSec !== null ? (fusion.timeToLineSec | number: "1.1-1") : "—" }} s
+          </div>
+          <div class="sub">
+            Truth:
+            {{ truth.timeToLineSec !== null ? (truth.timeToLineSec | number: "1.1-1") : "—" }} s
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <nz-descriptions nzSize="small" [nzColumn]="1" class="desc">
+      <nz-descriptions-item nzTitle="OCS risk">
+        <nz-tag [nzColor]="ocsColor(fusion.ocsRisk)">{{ fusion.ocsRisk }}</nz-tag>
+      </nz-descriptions-item>
+      <nz-descriptions-item nzTitle="Confidence">
+        {{ fusion.confidence | percent: "1.0-0" }}
+      </nz-descriptions-item>
+      <nz-descriptions-item nzTitle="Algorithm">
+        {{ fusion.algorithmId }}
+      </nz-descriptions-item>
+      <nz-descriptions-item nzTitle="Cross-track">
+        {{ fusion.crossTrackM | number: "1.1-1" }} m
+      </nz-descriptions-item>
+    </nz-descriptions>
+
+    <h4 class="section-title">Run summary</h4>
+    <nz-descriptions nzSize="small" [nzColumn]="1">
+      <nz-descriptions-item nzTitle="Mean distance error">
+        {{ summary.meanDistanceErrorM | number: "1.2-2" }} m
+      </nz-descriptions-item>
+      <nz-descriptions-item nzTitle="P95 distance error">
+        {{ summary.p95DistanceErrorM | number: "1.2-2" }} m
+      </nz-descriptions-item>
+      <nz-descriptions-item nzTitle="Max distance error">
+        {{ summary.maxDistanceErrorM | number: "1.2-2" }} m
+      </nz-descriptions-item>
+      <nz-descriptions-item nzTitle="UWB availability">
+        {{ summary.uwbAvailability | percent: "1.0-0" }}
+      </nz-descriptions-item>
+      <nz-descriptions-item nzTitle="LoRa delivery">
+        {{ summary.loraDelivery | percent: "1.0-0" }}
+      </nz-descriptions-item>
+    </nz-descriptions>
+  }
+</nz-card>

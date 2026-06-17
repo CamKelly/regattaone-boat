@@ -1,0 +1,27 @@
+<nz-layout class="sim-shell">
+  <nz-header class="sim-header">
+    <h2 nz-typography class="sim-title">Start Line Fusion Simulator</h2>
+    <app-scenario-toolbar />
+  </nz-header>
+
+  <nz-content class="sim-content">
+    <div class="sim-grid">
+      <section class="sim-map" aria-label="Race geometry map">
+        @if (snapshot$ | async; as snap) {
+          <app-map-view [snapshot]="snap" />
+        }
+      </section>
+
+      <aside class="sim-controls" aria-label="Parameter controls">
+        <app-control-panel />
+        @if (snapshot$ | async; as snap) {
+          <app-metrics-dashboard [snapshot]="snap" />
+        }
+      </aside>
+
+      <section class="sim-charts" aria-label="Time series charts">
+        <app-chart-panel />
+      </section>
+    </div>
+  </nz-content>
+</nz-layout>

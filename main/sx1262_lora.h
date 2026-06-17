@@ -16,8 +16,6 @@ extern "C" {
 
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 
-#include "tdma.h"
-
 #define SX1262_SPI_HOST_NUM     CONFIG_SX1262_SPI_HOST_NUM
 #define SX1262_SPI_MOSI_GPIO    CONFIG_SX1262_SPI_MOSI_GPIO
 #define SX1262_SPI_MISO_GPIO    CONFIG_SX1262_SPI_MISO_GPIO
@@ -57,9 +55,9 @@ esp_err_t sx1262_lora_start(void);
  */
 esp_err_t sx1262_lora_enqueue(const uint8_t *data, size_t len, uint32_t ttl_ms);
 
-/** Enqueue; TX worker honors TDMA slot when enabled. */
+/** Enqueue for CAD/CSMA transmit. */
 esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len);
-/** Enqueue with TDMA gate skipped in the TX worker (testing). */
+/** Alias for sx1262_lora_transmit. */
 esp_err_t sx1262_lora_transmit_unscheduled(const uint8_t *data, size_t len);
 
 /** Discard pending stream/manual TX (e.g. when entering mesh mode). */

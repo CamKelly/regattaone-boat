@@ -1,0 +1,38 @@
+.metrics-card {
+  flex-shrink: 0;
+}
+
+.stat-row {
+  margin-bottom: 8px;
+}
+
+.metric-block {
+  margin-bottom: 8px;
+}
+
+.metric-title {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.metric-value {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sub {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+  margin-top: 4px;
+}
+
+.section-title {
+  margin: 12px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.desc {
+  margin-top: 8px;
+}

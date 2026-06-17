@@ -1,0 +1,201 @@
+<nz-card nzTitle="Parameters" nzSize="small" class="control-card">
+  @if (config$ | async; as cfg) {
+    <nz-collapse nzBordered="false" nzExpandIconPosition="end">
+      <nz-collapse-panel nzHeader="Fusion algorithm" [nzActive]="true">
+        <label class="field-label">Primary (map &amp; summary)</label>
+        <nz-select
+          class="full-width"
+          [ngModel]="cfg.algorithm.algorithmId"
+          (ngModelChange)="patchNested('algorithm', 'algorithmId', $event)"
+        >
+          @for (a of algorithms; track a.id) {
+            <nz-option [nzValue]="a.id" [nzLabel]="a.label" />
+          }
+        </nz-select>
+
+        <p class="hint">All four algorithms run in parallel. Use chart toggles to compare overlays.</p>
+
+        <label class="field-label">EKF process noise</label>
+        <nz-slider
+          [nzMin]="0.01"
+          [nzMax]="2"
+          [nzStep]="0.05"
+          [ngModel]="cfg.algorithm.smoothing"
+          (ngModelChange)="patchNested('algorithm', 'smoothing', $event)"
+        />
+
+        <label class="field-label">GPS weight (weighted fusion)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="1"
+          [nzStep]="0.05"
+          [ngModel]="cfg.algorithm.gpsWeight"
+          (ngModelChange)="patchNested('algorithm', 'gpsWeight', $event)"
+        />
+
+        <label class="field-label">UWB weight (weighted fusion)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="1"
+          [nzStep]="0.05"
+          [ngModel]="cfg.algorithm.uwbWeight"
+          (ngModelChange)="patchNested('algorithm', 'uwbWeight', $event)"
+        />
+
+        <label class="field-label">Confidence threshold</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="1"
+          [nzStep]="0.05"
+          [ngModel]="cfg.algorithm.confidenceThreshold"
+          (ngModelChange)="patchNested('algorithm', 'confidenceThreshold', $event)"
+        />
+
+        <label class="field-label">UWB scheduling</label>
+        <nz-select
+          class="full-width"
+          [ngModel]="cfg.algorithm.uwbScheduling"
+          (ngModelChange)="patchNested('algorithm', 'uwbScheduling', $event)"
+        >
+          @for (m of schedulingModes; track m.id) {
+            <nz-option [nzValue]="m.id" [nzLabel]="m.label" />
+          }
+        </nz-select>
+      </nz-collapse-panel>
+
+      <nz-collapse-panel nzHeader="GPS errors">
+        <label class="field-label">Position noise (m)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="15"
+          [nzStep]="0.5"
+          [ngModel]="cfg.gps.positionNoiseM"
+          (ngModelChange)="patchNested('gps', 'positionNoiseM', $event)"
+        />
+        <label class="field-label">Drift (m/min)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="5"
+          [nzStep]="0.1"
+          [ngModel]="cfg.gps.driftMPerMin"
+          (ngModelChange)="patchNested('gps', 'driftMPerMin', $event)"
+        />
+        <label class="field-label">Update rate (Hz)</label>
+        <nz-input-number
+          class="full-width"
+          [nzMin]="0.1"
+          [nzMax]="10"
+          [nzStep]="0.1"
+          [ngModel]="cfg.gps.updateHz"
+          (ngModelChange)="patchNested('gps', 'updateHz', $event)"
+        />
+      </nz-collapse-panel>
+
+      <nz-collapse-panel nzHeader="UWB errors">
+        <label class="field-label">Range noise (m)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="2"
+          [nzStep]="0.05"
+          [ngModel]="cfg.uwb.noiseM"
+          (ngModelChange)="patchNested('uwb', 'noiseM', $event)"
+        />
+        <label class="field-label">Dropout rate</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="1"
+          [nzStep]="0.01"
+          [ngModel]="cfg.uwb.dropoutRate"
+          (ngModelChange)="patchNested('uwb', 'dropoutRate', $event)"
+        />
+        <label class="field-label">Base update rate (Hz)</label>
+        <nz-input-number
+          class="full-width"
+          [nzMin]="0.1"
+          [nzMax]="20"
+          [nzStep]="0.5"
+          [ngModel]="cfg.uwb.updateHz"
+          (ngModelChange)="patchNested('uwb', 'updateHz', $event)"
+        />
+      </nz-collapse-panel>
+
+      <nz-collapse-panel nzHeader="LoRa / marks">
+        <label class="field-label">Packet loss</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="1"
+          [nzStep]="0.01"
+          [ngModel]="cfg.lora.packetLoss"
+          (ngModelChange)="patchNested('lora', 'packetLoss', $event)"
+        />
+        <label class="field-label">Latency (s)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="15"
+          [nzStep]="0.5"
+          [ngModel]="cfg.lora.latencySec"
+          (ngModelChange)="patchNested('lora', 'latencySec', $event)"
+        />
+        <label class="field-label">Mark GPS noise (m)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="10"
+          [nzStep]="0.5"
+          [ngModel]="cfg.startLine.gpsMarkNoiseM"
+          (ngModelChange)="patchNested('startLine', 'gpsMarkNoiseM', $event)"
+        />
+        <label class="field-label">Mark drift (m/min)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="3"
+          [nzStep]="0.1"
+          [ngModel]="cfg.startLine.markDriftMPerMin"
+          (ngModelChange)="patchNested('startLine', 'markDriftMPerMin', $event)"
+        />
+      </nz-collapse-panel>
+
+      <nz-collapse-panel nzHeader="Start line & boat">
+        <label class="field-label">Line length (m)</label>
+        <nz-input-number
+          class="full-width"
+          [nzMin]="20"
+          [nzMax]="300"
+          [ngModel]="cfg.startLine.lineLengthM"
+          (ngModelChange)="patchNested('startLine', 'lineLengthM', $event)"
+        />
+        <label class="field-label">Line bearing (°)</label>
+        <nz-input-number
+          class="full-width"
+          [nzMin]="0"
+          [nzMax]="359"
+          [ngModel]="cfg.startLine.bearingDeg"
+          (ngModelChange)="patchNested('startLine', 'bearingDeg', $event)"
+        />
+        <label class="field-label">Boat SOG (kn)</label>
+        <nz-slider
+          [nzMin]="0"
+          [nzMax]="12"
+          [nzStep]="0.5"
+          [ngModel]="cfg.boat.speedKnots"
+          (ngModelChange)="patchNested('boat', 'speedKnots', $event)"
+        />
+        <label class="field-label">Boat COG (°)</label>
+        <nz-input-number
+          class="full-width"
+          [nzMin]="0"
+          [nzMax]="359"
+          [ngModel]="cfg.boat.courseDeg"
+          (ngModelChange)="patchNested('boat', 'courseDeg', $event)"
+        />
+        <label class="field-label">Time scale</label>
+        <nz-slider
+          [nzMin]="0.25"
+          [nzMax]="20"
+          [nzStep]="0.25"
+          [ngModel]="cfg.timeScale"
+          (ngModelChange)="patch('timeScale', $event)"
+        />
+      </nz-collapse-panel>
+    </nz-collapse>
+  }
+</nz-card>

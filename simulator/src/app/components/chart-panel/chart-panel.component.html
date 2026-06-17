@@ -1,0 +1,23 @@
+<div class="charts-wrap">
+  <div class="overlay-toggles">
+    <span class="toggle-label">Chart overlays:</span>
+    <label nz-checkbox [(ngModel)]="visibility.truth" (ngModelChange)="onVisibilityChange()">
+      <span class="swatch" [style.background]="'#722ed1'"></span> Truth
+    </label>
+    @for (algo of algorithms; track algo) {
+      <label nz-checkbox [(ngModel)]="visibility[algo]" (ngModelChange)="onVisibilityChange()">
+        <span class="swatch" [style.background]="meta[algo].color"></span>
+        {{ meta[algo].label }}
+      </label>
+    }
+  </div>
+
+  <div class="charts-grid">
+    <nz-card nzTitle="Distance to line" nzSize="small" class="chart-card">
+      <canvas #distanceCanvas class="chart-canvas"></canvas>
+    </nz-card>
+    <nz-card nzTitle="Time to line" nzSize="small" class="chart-card">
+      <canvas #ttlCanvas class="chart-canvas"></canvas>
+    </nz-card>
+  </div>
+</div>

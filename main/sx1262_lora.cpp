@@ -9,7 +9,6 @@
 #include "ble_sen0140.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include "gps_timebase.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "modules/SX126x/SX126x_commands.h"
@@ -18,7 +17,6 @@
 #include "freertos/task.h"
 #include "lora_mesh.h"
 #include "lora_stats.h"
-#include "tdma.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -46,7 +44,6 @@ struct sx1262_tx_item_t {
     uint8_t data[256];
     uint16_t len;
     int64_t deadline_us;
-    bool skip_tdma;
     bool stream_stat;
 };
 
@@ -193,155 +190,6 @@ static bool sx1262_after_radio_failure_locked(int code, const char *op)
     return sx1262_restart_receive_locked();
 }
 
-#if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
-
-static constexpr size_t SX1262_TX_STAMP_BYTES = 4U;
-
-/** Build over-the-air buffer; may prepend 4-byte UTC ms (LE) when GPS UTC is valid. */
-static size_t sx1262_build_on_air(const sx1262_tx_item_t &item, uint8_t *out, size_t out_cap)
-{
-    if (gps_timebase_utc_valid()) {
-        const size_t on_air_len = SX1262_TX_STAMP_BYTES + item.len;
-        if (on_air_len <= out_cap && on_air_len <= 255U) {
-            const uint32_t tx_ms = (uint32_t)(gps_timebase_now_us() / 1000LL);
-            memcpy(out, &tx_ms, SX1262_TX_STAMP_BYTES);
-            memcpy(out + SX1262_TX_STAMP_BYTES, item.data, item.len);
-            return on_air_len;
-        }
-    }
-    if (item.len > out_cap || item.len > 255U) {
-        return 0;
-    }
-    memcpy(out, item.data, item.len);
-    return item.len;
-}
-
-static bool sx1262_parse_legacy_ts_prefix(const uint8_t *data, size_t len, int64_t *tx_utc_us, const uint8_t **payload,
-                                          size_t *payload_len)
-{
-    if (data == nullptr || len < 5U || tx_utc_us == nullptr || payload == nullptr || payload_len == nullptr) {
-        return false;
-    }
-    if (memcmp(data, "TS=", 3) != 0) {
-        return false;
-    }
-
-    size_t i = 3U;
-    int64_t ts = 0;
-    bool any = false;
-    while (i < len && data[i] >= '0' && data[i] <= '9') {
-        any = true;
-        ts = ts * 10LL + (int64_t)(data[i] - '0');
-        i++;
-    }
-    if (!any || i >= len || data[i] != '\n') {
-        return false;
-    }
-    i++;
-
-    *tx_utc_us = ts;
-    *payload = data + i;
-    *payload_len = len - i;
-    return true;
-}
-
-static bool sx1262_one_way_latency_ms_u32(uint32_t tx_ms, uint32_t rx_ms, int64_t *latency_ms)
-{
-    if (latency_ms == nullptr || !gps_timebase_utc_valid()) {
-        return false;
-    }
-    const uint32_t delta_ms = rx_ms - tx_ms;
-    if (delta_ms > 120U * 1000U) {
-        return false;
-    }
-    *latency_ms = (int64_t)delta_ms;
-    return true;
-}
-
-static bool sx1262_one_way_latency_ms_us(int64_t tx_utc_us, int64_t rx_utc_us, int64_t *latency_ms)
-{
-    if (latency_ms == nullptr || tx_utc_us <= 0 || rx_utc_us <= 0 || !gps_timebase_utc_valid()) {
-        return false;
-    }
-    const int64_t delta_us = rx_utc_us - tx_utc_us;
-    if (delta_us < 0 || delta_us > 120LL * 1000000LL) {
-        return false;
-    }
-    *latency_ms = (delta_us + 999) / 1000;
-    return true;
-}
-
-static bool sx1262_likely_binary_stamp(const uint8_t *data, size_t len)
-{
-    if (data == nullptr || len <= SX1262_TX_STAMP_BYTES) {
-        return false;
-    }
-    if (len >= 3U && memcmp(data, "TS=", 3) == 0) {
-        return false;
-    }
-    for (size_t i = 0; i < SX1262_TX_STAMP_BYTES; i++) {
-        const uint8_t b = data[i];
-        if (b < 0x20U || b > 0x7EU) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void sx1262_log_rx_packet(const uint8_t *buf, size_t len, float rssi, float snr)
-{
-    const uint8_t *payload = buf;
-    size_t payload_len = len;
-    int64_t latency_ms = -1;
-    bool stripped_stamp = false;
-
-    int64_t legacy_tx_utc_us = 0;
-    if (sx1262_parse_legacy_ts_prefix(buf, len, &legacy_tx_utc_us, &payload, &payload_len)) {
-        stripped_stamp = true;
-        int64_t ms = 0;
-        if (sx1262_one_way_latency_ms_us(legacy_tx_utc_us, gps_timebase_now_us(), &ms)) {
-            latency_ms = ms;
-        }
-    } else if (len >= SX1262_TX_STAMP_BYTES) {
-        uint32_t tx_ms = 0;
-        memcpy(&tx_ms, buf, SX1262_TX_STAMP_BYTES);
-        const uint32_t rx_ms = (uint32_t)(gps_timebase_now_us() / 1000LL);
-        int64_t ms = 0;
-        if (sx1262_one_way_latency_ms_u32(tx_ms, rx_ms, &ms)) {
-            latency_ms = ms;
-            payload = buf + SX1262_TX_STAMP_BYTES;
-            payload_len = len - SX1262_TX_STAMP_BYTES;
-            stripped_stamp = true;
-        } else if (sx1262_likely_binary_stamp(buf, len)) {
-            payload = buf + SX1262_TX_STAMP_BYTES;
-            payload_len = len - SX1262_TX_STAMP_BYTES;
-            stripped_stamp = true;
-        }
-    }
-
-    if (latency_ms >= 0) {
-        ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB, latency %lld ms: %.*s", (unsigned)payload_len,
-                 (double)rssi, (double)snr, (long long)latency_ms, (int)payload_len, (const char *)payload);
-        lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f latency %lld ms: %.*s\n", (unsigned)payload_len,
-                          (double)rssi, (double)snr, (long long)latency_ms, (int)payload_len,
-                          (const char *)payload);
-    } else if (stripped_stamp) {
-        ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB (latency n/a, GPS/PPS not synced): %.*s",
-                 (unsigned)payload_len, (double)rssi, (double)snr, (int)payload_len, (const char *)payload);
-        lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f (latency n/a, GPS/PPS not synced): %.*s\n",
-                          (unsigned)payload_len, (double)rssi, (double)snr, (int)payload_len,
-                          (const char *)payload);
-    } else {
-        ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB: %.*s", (unsigned)payload_len, (double)rssi,
-                 (double)snr, (int)payload_len, (const char *)payload);
-        lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f: %.*s\n", (unsigned)payload_len, (double)rssi,
-                          (double)snr, (int)payload_len, (const char *)payload);
-    }
-    lora_stats_rx_packet((const char *)payload, payload_len);
-}
-
-#endif /* CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY */
-
 const char *sx1262_lora_status_text(void)
 {
     switch (s_status) {
@@ -418,7 +266,7 @@ static bool parse_tx_write(const uint8_t *in, size_t in_len, uint8_t *payload, s
     return true;
 }
 
-static esp_err_t tx_q_push(const uint8_t *data, size_t len, uint32_t ttl_ms, bool skip_tdma)
+static esp_err_t tx_q_push(const uint8_t *data, size_t len, uint32_t ttl_ms)
 {
     if (lora_mesh_active()) {
         return ESP_ERR_INVALID_STATE;
@@ -444,7 +292,6 @@ static esp_err_t tx_q_push(const uint8_t *data, size_t len, uint32_t ttl_ms, boo
     memcpy(item.data, data, len);
     item.len = (uint16_t)len;
     item.deadline_us = now_us + ttl_us;
-    item.skip_tdma = skip_tdma;
     item.stream_stat = lora_stats_stream_active();
     if (item.stream_stat) {
         lora_stats_tx_stream_queued();
@@ -605,15 +452,11 @@ static void sx1262_rx_task(void *arg)
                 } else {
                     buf[len] = '\0';
                 }
-#if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
-                sx1262_log_rx_packet(buf, len, s_radio->getRSSI(), s_radio->getSNR());
-#else
                 ESP_LOGI(TAG, "RX %u bytes, RSSI %.1f dBm, SNR %.1f dB: %.*s", (unsigned)len, s_radio->getRSSI(),
                          s_radio->getSNR(), (int)len, (const char *)buf);
                 lora_line_notifyf("RX %u bytes RSSI %.1f SNR %.1f: %.*s\n", (unsigned)len, (double)s_radio->getRSSI(),
                                   (double)s_radio->getSNR(), (int)len, (const char *)buf);
                 lora_stats_rx_packet((const char *)buf, len);
-#endif
             }
         } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
             lora_stats_rx_bad();
@@ -652,41 +495,9 @@ static void sx1262_tx_task(void *arg)
             }
             tx_q_pop();
             ESP_LOGW(TAG, "TX expired (%u bytes)", (unsigned)item.len);
-#if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_LORA_TX
-            if (!item.skip_tdma && gps_timebase_utc_valid()) {
-                lora_line_notifyf("! TX expired (%u bytes): no TDMA slot before TTL (try again)\n",
-                                  (unsigned)item.len);
-            } else {
-                lora_line_notifyf("! TX expired (%u bytes): radio busy or CAD (see serial log)\n",
-                                  (unsigned)item.len);
-            }
-#else
             lora_line_notifyf("! TX expired (%u bytes), discarded\n", (unsigned)item.len);
-#endif
             continue;
         }
-
-#if CONFIG_REGATTAONE_TDMA_ENABLE && CONFIG_TDMA_ENFORCE_LORA_TX
-        if (!item.skip_tdma && !tdma_can_transmit_now()) {
-            static int64_t s_last_slot_wait_log_us;
-            const int64_t tnow = (int64_t)esp_timer_get_time();
-            if (tnow - s_last_slot_wait_log_us >= 5000000) {
-                s_last_slot_wait_log_us = tnow;
-                const int64_t wait_us = tdma_us_until_tx_window();
-                ESP_LOGI(TAG, "TX waiting for TDMA slot (~%lld ms)", (long long)((wait_us + 999) / 1000));
-                lora_line_notifyf("! TX waiting for TDMA slot (~%lld ms)\n",
-                                  (long long)((wait_us + 999) / 1000));
-            }
-            const int64_t wait_us = tdma_us_until_tx_window();
-            if (wait_us > 0) {
-                const uint32_t wait_ms = (uint32_t)((wait_us + 999) / 1000);
-                vTaskDelay(pdMS_TO_TICKS(wait_ms > 500U ? 500U : wait_ms));
-            } else {
-                vTaskDelay(pdMS_TO_TICKS(20));
-            }
-            continue;
-        }
-#endif
 
         if (xSemaphoreTake(s_radio_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) {
             ESP_LOGW(TAG, "TX waiting for radio mutex");
@@ -713,18 +524,8 @@ static void sx1262_tx_task(void *arg)
         }
 
         uint8_t on_air[256];
-        size_t on_air_len = item.len;
-#if CONFIG_REGATTAONE_GPS_ENABLE && CONFIG_SX1262_GPS_LATENCY
-        on_air_len = sx1262_build_on_air(item, on_air, sizeof(on_air));
-        if (on_air_len == 0U) {
-            xSemaphoreGive(s_radio_mtx);
-            ESP_LOGW(TAG, "TX framing failed (%u bytes)", (unsigned)item.len);
-            vTaskDelay(pdMS_TO_TICKS(80));
-            continue;
-        }
-#else
         memcpy(on_air, item.data, item.len);
-#endif
+        const size_t on_air_len = item.len;
 
         const int tx_state = s_radio->transmit(on_air, on_air_len);
         if (tx_state != RADIOLIB_ERR_NONE) {
@@ -877,7 +678,7 @@ extern "C" esp_err_t sx1262_lora_mesh_transmit(const uint8_t *data, size_t len)
 
 extern "C" esp_err_t sx1262_lora_enqueue(const uint8_t *data, size_t len, uint32_t ttl_ms)
 {
-    return tx_q_push(data, len, ttl_ms, false);
+    return tx_q_push(data, len, ttl_ms);
 }
 
 extern "C" esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len)
@@ -888,18 +689,12 @@ extern "C" esp_err_t sx1262_lora_transmit(const uint8_t *data, size_t len)
     if (!parse_tx_write(data, len, payload, &payload_len, &ttl_ms)) {
         return ESP_ERR_INVALID_ARG;
     }
-    return tx_q_push(payload, payload_len, ttl_ms, false);
+    return tx_q_push(payload, payload_len, ttl_ms);
 }
 
 extern "C" esp_err_t sx1262_lora_transmit_unscheduled(const uint8_t *data, size_t len)
 {
-    uint8_t payload[256];
-    size_t payload_len = 0;
-    uint32_t ttl_ms = 0;
-    if (!parse_tx_write(data, len, payload, &payload_len, &ttl_ms)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return tx_q_push(payload, payload_len, ttl_ms, true);
+    return sx1262_lora_transmit(data, len);
 }
 
 #else /* !CONFIG_REGATTAONE_SX1262_ENABLE */
