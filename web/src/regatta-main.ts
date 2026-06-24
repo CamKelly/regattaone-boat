@@ -8,7 +8,11 @@ import {
 } from "./lib/gps-leaflet-map";
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
+  fixQualityLabel,
+  fixTypeLabel,
   formatCoordDeg,
+  formatCourseDeg,
+  formatSpeedKnots,
   openStreetMapUrl,
 } from "./lib/nmea-parse";
 import {
@@ -116,6 +120,13 @@ interface MeshtasticNode {
   alt_m: number | null;
   speed_mps: number | null;
   heading_deg: number | null;
+  has_gps_update: boolean;
+  fix_quality: number | null;
+  fix_type: number | null;
+  sats_in_view: number | null;
+  seq_number: number | null;
+  time_sec: number | null;
+  timestamp_sec: number | null;
 }
 
 interface MeshtasticRxMsg {
@@ -724,7 +735,21 @@ function findMeshtasticGpsNode(session: BleBoatSession): MeshtasticNode | null {
       return node;
     }
   }
+  const myNum = session.meshtasticStats.my_num;
+  if (myNum !== null) {
+    const self = session.meshtasticStats.nodes.find((n) => n.num === myNum && n.has_gps_update);
+    if (self) {
+      return self;
+    }
+  }
   return null;
+}
+
+function formatMeshtasticUtc(sec: number | null): string {
+  if (sec === null || sec <= 0) {
+    return "—";
+  }
+  return new Date(sec * 1000).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
 }
 
 function renderGpsDisplay(session: BleBoatSession): void {
@@ -743,9 +768,23 @@ function renderGpsDisplay(session: BleBoatSession): void {
     return;
   }
 
+  if (!node.has_gps_update) {
+    const label = node.name || node.short || MESHTASTIC_GPS_SOURCE_SHORT;
+    setText("gps-meta", `${label} in roster · waiting for GPS stream (~1 Hz)…`);
+    setText("gps-source", `${label} · node ${node.num}`);
+    for (const id of ["gps-position", "gps-last-heard", "gps-fix", "gps-fix-type", "gps-sats", "gps-seq", "gps-utc", "gps-sog", "gps-cog", "gps-altitude"]) {
+      setText(id, "—");
+    }
+    updateGpsMap(null, null);
+    return;
+  }
+
   const ageMs = meshtasticAgeMs(session, node.last_ms);
   const label = node.name || node.short || MESHTASTIC_GPS_SOURCE_SHORT;
-  setText("gps-meta", `${label} (${node.short || MESHTASTIC_GPS_SOURCE_SHORT}) · ${formatAgo(ageMs)}`);
+  const fixLabel = fixQualityLabel(node.fix_quality);
+  const fixNote = node.lat !== null && node.lon !== null ? "Fix OK" : `No fix · ${fixLabel}`;
+  const seqNote = node.seq_number !== null ? ` · seq ${node.seq_number}` : "";
+  setText("gps-meta", `${label} (${node.short || MESHTASTIC_GPS_SOURCE_SHORT}) · ${fixNote} · ${formatAgo(ageMs)}${seqNote}`);
 
   if (node.lat !== null && node.lon !== null) {
     setText(
@@ -760,6 +799,16 @@ function renderGpsDisplay(session: BleBoatSession): void {
 
   setText("gps-source", `${label} · node ${node.num}`);
   setText("gps-last-heard", formatAgo(ageMs));
+  setText("gps-fix", fixLabel);
+  setText("gps-fix-type", fixTypeLabel(node.fix_type));
+  setText("gps-sats", node.sats_in_view !== null ? String(node.sats_in_view) : "—");
+  setText("gps-seq", node.seq_number !== null ? String(node.seq_number) : "—");
+  setText(
+    "gps-utc",
+    node.timestamp_sec !== null && node.timestamp_sec > 0
+      ? formatMeshtasticUtc(node.timestamp_sec)
+      : formatMeshtasticUtc(node.time_sec),
+  );
   setText("gps-sog", formatMeshtasticSpeed(node));
   setText("gps-cog", formatMeshtasticHeading(node));
   setText(
@@ -804,6 +853,11 @@ function clearGpsDisplay(_session: BleBoatSession | null): void {
     "gps-source",
     "gps-position",
     "gps-last-heard",
+    "gps-fix",
+    "gps-fix-type",
+    "gps-sats",
+    "gps-seq",
+    "gps-utc",
     "gps-sog",
     "gps-cog",
     "gps-altitude",
@@ -1085,6 +1139,16 @@ async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data:
     throw new Error("Characteristic unavailable");
   }
   await runGattOp(session, () => char.writeValue(data));
+}
+
+/** BLE 0xFEE6: `send=<dest>\n<message>` — firmware parses; mesh payload is message only. */
+function encodeMeshtasticSendCmd(dest: string, message: string): Uint8Array {
+  const prefix = new TextEncoder().encode(`send=${dest}\n`);
+  const body = new TextEncoder().encode(message);
+  const out = new Uint8Array(prefix.length + body.length);
+  out.set(prefix);
+  out.set(body, prefix.length);
+  return out;
 }
 
 function clearLoraLog(session: BleBoatSession | null): void {
@@ -1611,6 +1675,13 @@ function parseMeshtasticStatsJson(raw: string): MeshtasticStatsSnapshot | null {
         alt_m?: number;
         speed_mps?: number;
         heading_deg?: number;
+        has_gps_update?: boolean;
+        fix_quality?: number;
+        fix_type?: number;
+        sats_in_view?: number;
+        seq_number?: number;
+        time_sec?: number;
+        timestamp_sec?: number;
       }>;
       rx_msgs?: Array<{ from?: number; from_name?: string; text?: string; last_ms?: number }>;
     };
@@ -1630,6 +1701,13 @@ function parseMeshtasticStatsJson(raw: string): MeshtasticStatsSnapshot | null {
           alt_m: parseMeshtasticOptionalNumber(n.alt_m),
           speed_mps: parseMeshtasticOptionalNumber(n.speed_mps),
           heading_deg: parseMeshtasticOptionalNumber(n.heading_deg),
+          has_gps_update: n.has_gps_update === true,
+          fix_quality: parseMeshtasticOptionalNumber(n.fix_quality),
+          fix_type: parseMeshtasticOptionalNumber(n.fix_type),
+          sats_in_view: parseMeshtasticOptionalNumber(n.sats_in_view),
+          seq_number: parseMeshtasticOptionalNumber(n.seq_number),
+          time_sec: parseMeshtasticOptionalNumber(n.time_sec),
+          timestamp_sec: parseMeshtasticOptionalNumber(n.timestamp_sec),
         });
       }
       nodes.sort((a, b) => a.num - b.num);
@@ -1728,6 +1806,13 @@ function mergeMeshtasticPeersFromLog(session: BleBoatSession): void {
           alt_m: prev?.alt_m ?? null,
           speed_mps: prev?.speed_mps ?? null,
           heading_deg: prev?.heading_deg ?? null,
+          has_gps_update: prev?.has_gps_update ?? false,
+          fix_quality: prev?.fix_quality ?? null,
+          fix_type: prev?.fix_type ?? null,
+          sats_in_view: prev?.sats_in_view ?? null,
+          seq_number: prev?.seq_number ?? null,
+          time_sec: prev?.time_sec ?? null,
+          timestamp_sec: prev?.timestamp_sec ?? null,
         });
       }
     } else if (line.startsWith(">> ")) {
@@ -1763,6 +1848,7 @@ function applyMeshtasticStats(session: BleBoatSession, parsed: MeshtasticStatsSn
   session.meshtasticStatsReceivedWallMs = Date.now();
   mergeMeshtasticPeersFromLog(session);
   renderMeshtastic(session);
+  renderGpsDisplay(session);
   syncMeshtasticUiRefresh(session);
 }
 
@@ -1994,11 +2080,7 @@ async function promptAndSendMeshtasticMessage(session: BleBoatSession, destNum: 
     return;
   }
   try {
-    await gattWrite(
-      session,
-      "meshtastic",
-      new TextEncoder().encode(`send=${destNum}\n${trimmed}`),
-    );
+    await gattWrite(session, "meshtastic", encodeMeshtasticSendCmd(String(destNum), trimmed));
     console.info("meshtastic message queued", { destNum, text: trimmed, device: session.name });
     await requestMeshtasticStatsNotify(session);
     renderMeshtastic(session);
@@ -2012,6 +2094,10 @@ async function sendMeshtasticBroadcast(session: BleBoatSession): Promise<void> {
   if (!session.charMeshtasticTx) {
     return;
   }
+  if (!session.meshtasticStats.config_ok) {
+    window.alert("Meshtastic config is not ready yet. Wait for the roster to load.");
+    return;
+  }
   const input = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
   const text = (input?.value ?? session.meshtasticTxDraft).trim();
   if (!text) {
@@ -2022,7 +2108,7 @@ async function sendMeshtasticBroadcast(session: BleBoatSession): Promise<void> {
     return;
   }
   try {
-    await gattWrite(session, "meshtastic", new TextEncoder().encode(`send=broadcast\n${text}`));
+    await gattWrite(session, "meshtastic", encodeMeshtasticSendCmd("broadcast", text));
     if (input) {
       input.value = "";
     }

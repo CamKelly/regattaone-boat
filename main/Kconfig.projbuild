@@ -268,9 +268,9 @@ menu "RegattaOne — Meshtastic UART (LoRa via companion ESP32)"
             Line log notify 0xFEE5; command write 0xFEE6; roster JSON 0xFEE7.
 
     config MESHTASTIC_UART_PORT_NUM
-        int "UART controller (0 = UART_NUM_0 on ESP32-S3 when console is USB-JTAG)"
+        int "UART controller (2 on Freenove: UART0=console, UART1=UWB)"
         range 0 2
-        default 0
+        default 2
         depends on REGATTAONE_MESHTASTIC_ENABLE
 
     config MESHTASTIC_UART_BAUD

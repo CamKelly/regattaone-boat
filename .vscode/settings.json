@@ -5,7 +5,7 @@
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.port": "/dev/tty.usbmodem5AE70726351",
+  "idf.port": "/dev/tty.usbmodem5AE70718461",
   "idf.enableSerialPortChipIdRequest": false,
   "idf.currentSetup": "/Users/cameronkelly/.espressif/v6.0/esp-idf",
   "idf.pythonBinPath": "/Users/cameronkelly/.espressif/python_env/idf6.0_py3.12_env/bin/python",
@@ -15,7 +15,7 @@
     "ESP_ROM_ELF_DIR": "/Users/cameronkelly/.espressif/tools/esp-rom-elfs/20220823/",
     "IDF_COMPONENT_MANAGER": "0",
     "IDF_TARGET": "esp32s3",
-    "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.defaults.esp32s3;sdkconfig.defaults.esp32s3.board-devkit-mini",
+    "SDKCONFIG_DEFAULTS": "sdkconfig.defaults;sdkconfig.defaults.esp32s3;sdkconfig.defaults.esp32s3.board-freenove-wroom-lite",
     "OPENOCD_USB_ADAPTER_LOCATION": "1-1"
   },
   "clangd.path": "/Users/cameronkelly/.espressif/tools/esp-clang/esp-20.1.1_20250829/esp-clang/bin/clangd",

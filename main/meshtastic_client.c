@@ -21,6 +21,7 @@ static const char *TAG = "mt_client";
 
 #define MT_BROADCAST 0xFFFFFFFFU
 #define MT_TEXT_APP 1U
+#define MT_POSITION_APP 3U
 #define MT_NODE_MAX 48U
 #define MT_RX_MSG_MAX 16U
 #define MT_NAME_MAX 32U
@@ -30,7 +31,7 @@ static const char *TAG = "mt_client";
 #define MT_FRAME_MAX 512U
 #define MT_PROTO_MAX (MT_FRAME_MAX - MT_FRAME_HDR)
 #define MT_RX_ASM_MAX 4096U
-#define MT_HEARTBEAT_MS 15000
+#define MT_WANT_CONFIG_RETRY_MS 10000
 
 typedef struct {
     uint32_t num;
@@ -38,11 +39,18 @@ typedef struct {
     char short_name[8];
     int64_t last_heard_us;
     bool has_pos;
+    bool has_gps_update;
     double lat_deg;
     double lon_deg;
     int32_t alt_m;
     float speed_mps;
     float heading_deg;
+    uint32_t fix_quality;
+    uint32_t fix_type;
+    uint32_t sats_in_view;
+    uint32_t seq_number;
+    uint32_t time_sec;
+    uint32_t timestamp_sec;
     bool used;
 } mt_node_t;
 
@@ -66,7 +74,8 @@ static size_t s_rx_asm_len;
 
 static uint32_t s_want_config_id;
 static bool s_config_complete;
-static bool s_rebooted;
+static bool s_data_flowing;
+static int64_t s_last_want_config_us;
 static uint32_t s_my_num;
 static bool s_have_my_num;
 
@@ -77,7 +86,6 @@ static size_t s_rx_msg_count;
 static uint32_t s_tx_ok;
 static uint32_t s_tx_fail;
 static uint32_t s_rx_count;
-static int64_t s_last_heartbeat_us;
 static int64_t s_last_stats_notify_us;
 static bool s_stats_dirty;
 
@@ -438,8 +446,12 @@ static esp_err_t uart_send_frame(const uint8_t *proto, size_t proto_len)
     return meshtastic_uart_write(frame, MT_FRAME_HDR + proto_len);
 }
 
-static esp_err_t send_want_config(void)
+/** Send ToRadio.want_config_id until FromRadio data is flowing (or force=true for BLE reconnect). */
+static esp_err_t send_want_config(bool force)
 {
+    if (s_data_flowing && !force) {
+        return ESP_OK;
+    }
     s_want_config_id++;
     if (s_want_config_id == 0U) {
         s_want_config_id = 1U;
@@ -449,14 +461,10 @@ static esp_err_t send_want_config(void)
     size_t n = 0;
     proto[n++] = 0x18U;
     n += pb_encode_varint(proto + n, sizeof(proto) - n, s_want_config_id);
-    ESP_LOGI(TAG, "want_config_id=%lu", (unsigned long)s_want_config_id);
+    ESP_LOGI(TAG, "want_config_id=%lu%s", (unsigned long)s_want_config_id,
+             force ? " (reconnect)" : (s_last_want_config_us ? " (retry)" : " (boot)"));
+    s_last_want_config_us = mt_now_us();
     return uart_send_frame(proto, n);
-}
-
-static esp_err_t send_heartbeat(void)
-{
-    const uint8_t proto[] = {0x3AU, 0x00U};
-    return uart_send_frame(proto, sizeof(proto));
 }
 
 static size_t encode_data_text(const char *text, uint8_t *out, size_t cap)
@@ -480,6 +488,22 @@ static size_t encode_data_text(const char *text, uint8_t *out, size_t cap)
 
 static esp_err_t send_text_packet(uint32_t dest, const char *text)
 {
+    if (text == NULL || text[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strncmp(text, "send=", 5) == 0) {
+        ESP_LOGE(TAG, "refusing command string as mesh payload");
+        mt_notify_line("! send rejected: use send=<dest>\\n<text> on BLE, not raw command on UART\n");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_config_complete) {
+        ESP_LOGW(TAG, "send blocked: config not ready");
+        mt_notify_line("! send blocked: wait for config ready\n");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "TX text to 0x%08lx: %s", (unsigned long)dest, text);
+
     uint8_t data[MT_TEXT_MAX + 16U];
     const size_t data_len = encode_data_text(text, data, sizeof(data));
     if (data_len == 0U) {
@@ -528,6 +552,8 @@ static esp_err_t send_text_packet(uint32_t dest, const char *text)
     return err;
 }
 
+static void mt_apply_position(mt_node_t *node, const uint8_t *data, size_t len);
+
 static void handle_mesh_packet(const uint8_t *data, size_t len)
 {
     uint32_t from = 0;
@@ -546,15 +572,32 @@ static void handle_mesh_packet(const uint8_t *data, size_t len)
     if (!pb_extract_uint32(decoded, decoded_len, 1U, &portnum)) {
         return;
     }
-    if (portnum != MT_TEXT_APP) {
-        return;
-    }
     if (!pb_extract_bytes(decoded, decoded_len, 2U, &payload, &payload_len) || payload_len == 0U) {
         return;
     }
 
     (void)pb_extract_fixed32(data, len, 2U, &to);
     s_rx_count++;
+
+    if (portnum == MT_POSITION_APP) {
+        if (from == 0U && s_have_my_num) {
+            from = s_my_num;
+        }
+        mt_node_t *node = node_alloc(from);
+        if (node != NULL) {
+            node->last_heard_us = mt_now_us();
+            if (node->long_name[0] == '\0') {
+                snprintf(node->long_name, sizeof(node->long_name), "0x%08lX", (unsigned long)from);
+            }
+            mt_apply_position(node, payload, payload_len);
+            s_stats_dirty = true;
+        }
+        return;
+    }
+
+    if (portnum != MT_TEXT_APP) {
+        return;
+    }
 
     mt_node_t *node = node_alloc(from);
     if (node != NULL) {
@@ -599,12 +642,17 @@ static void mt_apply_position(mt_node_t *node, const uint8_t *data, size_t len)
 
     const bool have_lat = pb_extract_sfixed32(data, len, 1U, &lat_i);
     const bool have_lon = pb_extract_sfixed32(data, len, 2U, &lon_i);
-    if (!have_lat || !have_lon) {
-        return;
+
+    if (have_lat) {
+        node->lat_deg = (double)lat_i / 10000000.0;
+    }
+    if (have_lon) {
+        node->lon_deg = (double)lon_i / 10000000.0;
+    }
+    if (have_lat && have_lon) {
+        node->has_pos = true;
     }
 
-    node->lat_deg = (double)lat_i / 10000000.0;
-    node->lon_deg = (double)lon_i / 10000000.0;
     if (pb_extract_int32(data, len, 3U, &alt_m)) {
         node->alt_m = alt_m;
     }
@@ -614,7 +662,33 @@ static void mt_apply_position(mt_node_t *node, const uint8_t *data, size_t len)
     if (pb_extract_uint32(data, len, 16U, &ground_track)) {
         node->heading_deg = (float)ground_track / 100.0f;
     }
-    node->has_pos = true;
+
+    uint32_t fix_quality = 0;
+    if (pb_extract_uint32(data, len, 17U, &fix_quality)) {
+        node->fix_quality = fix_quality;
+    }
+    uint32_t fix_type = 0;
+    if (pb_extract_uint32(data, len, 18U, &fix_type)) {
+        node->fix_type = fix_type;
+    }
+    uint32_t sats_in_view = 0;
+    if (pb_extract_uint32(data, len, 19U, &sats_in_view)) {
+        node->sats_in_view = sats_in_view;
+    }
+    uint32_t seq_number = 0;
+    if (pb_extract_uint32(data, len, 22U, &seq_number)) {
+        node->seq_number = seq_number;
+    }
+    uint32_t time_sec = 0;
+    if (pb_extract_fixed32(data, len, 4U, &time_sec)) {
+        node->time_sec = time_sec;
+    }
+    uint32_t timestamp_sec = 0;
+    if (pb_extract_fixed32(data, len, 7U, &timestamp_sec)) {
+        node->timestamp_sec = timestamp_sec;
+    }
+
+    node->has_gps_update = true;
 }
 
 static void handle_node_info(const uint8_t *data, size_t len)
@@ -710,10 +784,7 @@ static void handle_from_radio(const uint8_t *data, size_t len)
         if (field == 8U && wire == 0U) {
             uint64_t rb = 0;
             if (pb_read_varint(&b, &rb) && rb != 0U) {
-                s_rebooted = true;
-                s_config_complete = false;
-                mt_notify_line("! companion rebooted\n");
-                (void)send_want_config();
+                mt_notify_line("! companion rebooted (not re-sending want_config)\n");
             }
             continue;
         }
@@ -741,6 +812,11 @@ static void consume_frames(void)
         if (s_rx_asm_len < total) {
             return;
         }
+        if (!s_data_flowing) {
+            s_data_flowing = true;
+            ESP_LOGI(TAG, "Meshtastic serial data flowing");
+            mt_notify_line("! meshtastic data flowing\n");
+        }
         mt_lock();
         handle_from_radio(s_rx_asm + MT_FRAME_HDR, plen);
         mt_unlock();
@@ -766,16 +842,10 @@ void meshtastic_client_uart_rx(const uint8_t *data, size_t len)
 
 static void client_tick(int64_t now_us)
 {
-    if (!s_config_complete || s_rebooted) {
-        static int64_t s_last_cfg_req_us;
-        if (now_us - s_last_cfg_req_us > 3000000LL) {
-            s_last_cfg_req_us = now_us;
-            (void)send_want_config();
-        }
-    }
-    if (now_us - s_last_heartbeat_us >= (int64_t)MT_HEARTBEAT_MS * 1000LL) {
-        s_last_heartbeat_us = now_us;
-        (void)send_heartbeat();
+    if (!s_data_flowing &&
+        s_last_want_config_us > 0LL &&
+        now_us - s_last_want_config_us >= (int64_t)MT_WANT_CONFIG_RETRY_MS * 1000LL) {
+        (void)send_want_config(false);
     }
     if (s_stats_dirty || now_us - s_last_stats_notify_us >= 1000000LL) {
         s_stats_dirty = false;
@@ -787,11 +857,9 @@ static void client_tick(int64_t now_us)
 static void client_task(void *arg)
 {
     (void)arg;
-    vTaskDelay(pdMS_TO_TICKS(1000));
     mt_notify_line("! meshtastic client started\n");
-    (void)send_want_config();
-    s_last_heartbeat_us = mt_now_us();
-    s_last_stats_notify_us = s_last_heartbeat_us;
+    (void)send_want_config(false);
+    s_last_stats_notify_us = mt_now_us();
 
     for (;;) {
         client_tick(mt_now_us());
@@ -821,6 +889,9 @@ static uint32_t parse_dest(const char *s)
     if (s == NULL) {
         return MT_BROADCAST;
     }
+    while (*s == ' ' || *s == '\t') {
+        s++;
+    }
     if (strcmp(s, "broadcast") == 0 || strcmp(s, "all") == 0 || strcmp(s, "0") == 0) {
         return MT_BROADCAST;
     }
@@ -830,6 +901,78 @@ static uint32_t parse_dest(const char *s)
         return MT_BROADCAST;
     }
     return (uint32_t)v;
+}
+
+static void trim_inplace(char *s)
+{
+    if (s == NULL) {
+        return;
+    }
+    char *start = s;
+    while (*start == ' ' || *start == '\t') {
+        start++;
+    }
+    if (start != s) {
+        memmove(s, start, strlen(start) + 1U);
+    }
+    size_t n = strlen(s);
+    while (n > 0U && (s[n - 1U] == ' ' || s[n - 1U] == '\t' || s[n - 1U] == '\r' || s[n - 1U] == '\n')) {
+        s[--n] = '\0';
+    }
+}
+
+/** Parse BLE `send=<dest>\n<text>`; never pass the command string to send_text_packet(). */
+static bool parse_send_ble_cmd(char *buf, size_t len, uint32_t *dest_out, const char **text_out)
+{
+    if (buf == NULL || dest_out == NULL || text_out == NULL || len == 0U) {
+        return false;
+    }
+    if (len >= 512U) {
+        len = 511U;
+    }
+    buf[len] = '\0';
+    trim_inplace(buf);
+
+    if (strncmp(buf, "send=", 5) != 0) {
+        return false;
+    }
+
+    char *rest = buf + 5;
+    trim_inplace(rest);
+    char *sep = strchr(rest, '\n');
+    if (sep == NULL) {
+        sep = strchr(rest, '\r');
+    }
+    if (sep == NULL) {
+        char *lit = strstr(rest, "\\n");
+        if (lit == NULL) {
+            return false;
+        }
+        *lit = '\0';
+        trim_inplace(rest);
+        *text_out = lit + 2;
+    } else {
+        *sep = '\0';
+        trim_inplace(rest);
+        const char *text = sep + 1;
+        if (*text == '\r') {
+            text++;
+        }
+        if (*text == '\n') {
+            text++;
+        }
+        *text_out = text;
+    }
+
+    trim_inplace((char *)*text_out);
+    if ((*text_out)[0] == '\0') {
+        return false;
+    }
+    if (strncmp(*text_out, "send=", 5) == 0) {
+        return false;
+    }
+    *dest_out = parse_dest(rest);
+    return true;
 }
 
 esp_err_t meshtastic_client_ble_write(const uint8_t *data, size_t len)
@@ -842,28 +985,21 @@ esp_err_t meshtastic_client_ble_write(const uint8_t *data, size_t len)
         return ESP_ERR_INVALID_SIZE;
     }
     memcpy(buf, data, len);
-    buf[len] = '\0';
 
-    if (strncmp(buf, "config=1", 8) == 0) {
+    if (len >= 8U && strncmp(buf, "config=1", 8) == 0) {
         mt_lock();
-        const esp_err_t err = send_want_config();
+        s_data_flowing = false;
+        const esp_err_t err = send_want_config(true);
         mt_unlock();
         return err;
     }
-    if (strncmp(buf, "send=", 5) != 0) {
+
+    uint32_t dest = MT_BROADCAST;
+    const char *text = NULL;
+    if (!parse_send_ble_cmd(buf, len, &dest, &text)) {
         return ESP_ERR_NOT_FOUND;
     }
-    const char *rest = buf + 5;
-    char *nl = strchr(rest, '\n');
-    if (nl == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *nl = '\0';
-    const char *text = nl + 1;
-    if (text[0] == '\0') {
-        return ESP_ERR_INVALID_ARG;
-    }
-    const uint32_t dest = parse_dest(rest);
+
     mt_lock();
     const esp_err_t err = send_text_packet(dest, text);
     mt_unlock();
@@ -878,7 +1014,8 @@ esp_err_t meshtastic_client_stats_write(const char *cmd, size_t len)
     if (cmd == NULL || len == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (len >= 16 && strncmp(cmd, "stats=1", 7) == 0) {
+    if (len >= 7U && strncmp(cmd, "stats=1", 7) == 0 &&
+        (len == 7U || cmd[7] == '\0' || cmd[7] == '\n' || cmd[7] == '\r')) {
         meshtastic_client_request_stats_notify();
         return ESP_OK;
     }
@@ -917,9 +1054,6 @@ static size_t format_json_locked(char *out, size_t out_cap)
         if (!node->used) {
             continue;
         }
-        if (s_have_my_num && node->num == s_my_num) {
-            continue;
-        }
         const int64_t age_ms = (now_us - node->last_heard_us) / 1000LL;
         const char *name = node->long_name[0] != '\0' ? node->long_name : "";
         const char *short_n = node->short_name[0] != '\0' ? node->short_name : "";
@@ -942,16 +1076,32 @@ static size_t format_json_locked(char *out, size_t out_cap)
         }
         if (node->has_pos) {
             n = snprintf(out + pos, out_cap - pos,
-                         "\",\"last_ms\":%lld,\"lat\":%.6f,\"lon\":%.6f,\"alt_m\":%d,\"speed_mps\":%.2f,\"heading_deg\":%.1f}",
+                         "\",\"last_ms\":%lld,\"lat\":%.6f,\"lon\":%.6f,\"alt_m\":%d,\"speed_mps\":%.2f,\"heading_deg\":%.1f",
                          (long long)age_ms, node->lat_deg, node->lon_deg, (int)node->alt_m,
                          (double)node->speed_mps, (double)node->heading_deg);
         } else {
-            n = snprintf(out + pos, out_cap - pos, "\",\"last_ms\":%lld}", (long long)age_ms);
+            n = snprintf(out + pos, out_cap - pos, "\",\"last_ms\":%lld", (long long)age_ms);
         }
         if (n < 0 || (size_t)n >= out_cap - pos) {
             return 0;
         }
         pos += (size_t)n;
+        if (node->has_gps_update) {
+            n = snprintf(out + pos, out_cap - pos,
+                         ",\"has_gps_update\":true,\"fix_quality\":%lu,\"fix_type\":%lu,\"sats_in_view\":%lu,"
+                         "\"seq_number\":%lu,\"time_sec\":%lu,\"timestamp_sec\":%lu",
+                         (unsigned long)node->fix_quality, (unsigned long)node->fix_type,
+                         (unsigned long)node->sats_in_view, (unsigned long)node->seq_number,
+                         (unsigned long)node->time_sec, (unsigned long)node->timestamp_sec);
+            if (n < 0 || (size_t)n >= out_cap - pos) {
+                return 0;
+            }
+            pos += (size_t)n;
+        }
+        if (pos + 2U >= out_cap) {
+            return 0;
+        }
+        out[pos++] = '}';
         first = false;
     }
 
