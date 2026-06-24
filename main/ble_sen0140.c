@@ -60,7 +60,9 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_MESHTASTIC_STATS_UUID 0xfee7
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
-#define SEN0140_BLE_UART_CHUNK_MAX 200U
+#define SEN0140_BLE_UART_CHUNK_MAX 244U
+/** Delay between multi-chunk stats notifies so Web Bluetooth delivers every chunk. */
+#define SEN0140_BLE_STATS_CHUNK_DELAY_MS 30U
 #define SEN0140_BLE_FLAG_ADXL       0x01U
 #define SEN0140_BLE_FLAG_ITG        0x02U
 #define SEN0140_BLE_FLAG_MAG        0x04U
@@ -729,7 +731,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_meshtastic_stats_notify_enabled = event->subscribe.cur_notify;
             ESP_LOGI(TAG, "meshtastic stats notify=%d", (int)s_meshtastic_stats_notify_enabled);
             if (s_meshtastic_stats_notify_enabled) {
-                meshtastic_client_request_stats_notify();
+                meshtastic_client_request_stats_notify_now();
             }
         }
 #endif
@@ -938,6 +940,34 @@ static void ble_line_notify(uint16_t chr_val_handle, bool notify_enabled, const 
     ble_notify_give();
 }
 
+/** Stats JSON may span several notifies; pace chunks for reliable Web Bluetooth delivery. */
+static void ble_line_notify_paced(uint16_t chr_val_handle, bool notify_enabled, const uint8_t *data, size_t len)
+{
+    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !notify_enabled) {
+        return;
+    }
+    const uint8_t *p = data;
+    while (len > 0U) {
+        ble_notify_take();
+        size_t chunk = len > SEN0140_BLE_UART_CHUNK_MAX ? SEN0140_BLE_UART_CHUNK_MAX : len;
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(p, (uint16_t)chunk);
+        if (!om) {
+            ble_notify_give();
+            break;
+        }
+        int nrc = ble_gatts_notify_custom(s_conn_handle, chr_val_handle, om);
+        if (nrc != 0) {
+            ESP_LOGW(TAG, "paced notify rc=%d", nrc);
+        }
+        p += chunk;
+        len -= chunk;
+        ble_notify_give();
+        if (len > 0U) {
+            vTaskDelay(pdMS_TO_TICKS(SEN0140_BLE_STATS_CHUNK_DELAY_MS));
+        }
+    }
+}
+
 void ble_sen0140_lora_line_notify(const uint8_t *data, size_t len)
 {
     if (!data || len == 0U) {
@@ -954,7 +984,7 @@ void ble_sen0140_lora_stats_notify(const uint8_t *data, size_t len)
     if (!data || len == 0U) {
         return;
     }
-    ble_line_notify(s_lora_stats_chr_val_handle, s_lora_stats_notify_enabled, data, len);
+    ble_line_notify_paced(s_lora_stats_chr_val_handle, s_lora_stats_notify_enabled, data, len);
 }
 
 void ble_sen0140_uwb_line_notify(const uint8_t *data, size_t len)
@@ -1006,7 +1036,7 @@ void ble_sen0140_meshtastic_stats_notify(const uint8_t *data, size_t len)
         return;
     }
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
-    ble_line_notify(s_meshtastic_stats_chr_val_handle, s_meshtastic_stats_notify_enabled, data, len);
+    ble_line_notify_paced(s_meshtastic_stats_chr_val_handle, s_meshtastic_stats_notify_enabled, data, len);
 #else
     (void)data;
     (void)len;

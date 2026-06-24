@@ -15,6 +15,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 static const char *TAG = "mt_client";
@@ -22,11 +23,18 @@ static const char *TAG = "mt_client";
 #define MT_BROADCAST 0xFFFFFFFFU
 #define MT_TEXT_APP 1U
 #define MT_POSITION_APP 3U
+#define MT_TRANSPORT_LORA 1U
+#define MT_TRANSPORT_API 7U
+#define MT_MESHPACKET_TRANSPORT_FIELD 21U
 #define MT_NODE_MAX 48U
 #define MT_RX_MSG_MAX 16U
 #define MT_NAME_MAX 32U
 #define MT_TEXT_MAX 240U
 #define MT_JSON_TEXT_MAX 120U
+/** Truncate RX text in BLE stats JSON — keeps payload under one notify when possible. */
+#define MT_BLE_JSON_TEXT_MAX 48U
+/** Cap roster nodes in BLE stats JSON so paced notifies finish before the next 1 Hz push. */
+#define MT_BLE_JSON_NODE_MAX 8U
 #define MT_FRAME_HDR 4U
 #define MT_FRAME_MAX 512U
 #define MT_PROTO_MAX (MT_FRAME_MAX - MT_FRAME_HDR)
@@ -51,6 +59,7 @@ typedef struct {
     uint32_t seq_number;
     uint32_t time_sec;
     uint32_t timestamp_sec;
+    bool gps_has_lock;
     bool used;
 } mt_node_t;
 
@@ -86,8 +95,21 @@ static size_t s_rx_msg_count;
 static uint32_t s_tx_ok;
 static uint32_t s_tx_fail;
 static uint32_t s_rx_count;
+static uint32_t s_gps_rx;
+static uint32_t s_gps_api_rx;
 static int64_t s_last_stats_notify_us;
+static bool s_stats_notify_busy;
+static bool s_stats_notify_pending;
+static bool s_stats_notify_force;
 static bool s_stats_dirty;
+
+/** Min gap between chunked BLE stats notifies (GPS can mark dirty every packet). */
+#define MT_STATS_BLE_MIN_INTERVAL_US 2000000LL
+
+static mt_node_t *node_find(uint32_t num);
+static mt_node_t *node_alloc(uint32_t num);
+static void stats_notify_send(bool force);
+void meshtastic_client_request_stats_notify_now(void);
 
 static int64_t mt_now_us(void)
 {
@@ -114,6 +136,22 @@ static void mt_notify_line(const char *line)
         return;
     }
     ble_sen0140_meshtastic_rx_notify((const uint8_t *)line, strlen(line));
+}
+
+static void mt_touch_self_node(void)
+{
+    if (!s_have_my_num) {
+        return;
+    }
+    mt_node_t *node = node_alloc(s_my_num);
+    if (node == NULL) {
+        return;
+    }
+    node->last_heard_us = mt_now_us();
+    if (node->long_name[0] == '\0') {
+        snprintf(node->long_name, sizeof(node->long_name), "0x%08lX", (unsigned long)s_my_num);
+    }
+    s_stats_dirty = true;
 }
 
 static bool pb_read_varint(pb_buf_t *b, uint64_t *out)
@@ -432,6 +470,24 @@ static bool json_escape_append(char *out, size_t cap, size_t *pos, const char *t
     return true;
 }
 
+static bool json_escape_append_trunc(char *out, size_t cap, size_t *pos, const char *text, size_t max_len)
+{
+    if (text == NULL) {
+        return true;
+    }
+    size_t n = strlen(text);
+    if (n > max_len) {
+        n = max_len;
+    }
+    char tmp[64];
+    if (n >= sizeof(tmp)) {
+        n = sizeof(tmp) - 1U;
+    }
+    memcpy(tmp, text, n);
+    tmp[n] = '\0';
+    return json_escape_append(out, cap, pos, tmp, n);
+}
+
 static esp_err_t uart_send_frame(const uint8_t *proto, size_t proto_len)
 {
     if (proto_len == 0U || proto_len > MT_PROTO_MAX) {
@@ -449,7 +505,7 @@ static esp_err_t uart_send_frame(const uint8_t *proto, size_t proto_len)
 /** Send ToRadio.want_config_id until FromRadio data is flowing (or force=true for BLE reconnect). */
 static esp_err_t send_want_config(bool force)
 {
-    if (s_data_flowing && !force) {
+    if (s_config_complete && !force) {
         return ESP_OK;
     }
     s_want_config_id++;
@@ -566,23 +622,39 @@ static void handle_mesh_packet(const uint8_t *data, size_t len)
         return;
     }
 
+    uint32_t transport = 0;
+    (void)pb_extract_uint32(data, len, MT_MESHPACKET_TRANSPORT_FIELD, &transport);
+
     uint32_t portnum = 0;
     const uint8_t *payload = NULL;
     size_t payload_len = 0;
     if (!pb_extract_uint32(decoded, decoded_len, 1U, &portnum)) {
         return;
     }
-    if (!pb_extract_bytes(decoded, decoded_len, 2U, &payload, &payload_len) || payload_len == 0U) {
-        return;
+    const bool have_payload = pb_extract_bytes(decoded, decoded_len, 2U, &payload, &payload_len);
+    if (!have_payload) {
+        payload = NULL;
+        payload_len = 0;
     }
 
     (void)pb_extract_fixed32(data, len, 2U, &to);
     s_rx_count++;
 
     if (portnum == MT_POSITION_APP) {
-        if (from == 0U && s_have_my_num) {
+        if (transport == MT_TRANSPORT_API) {
+            s_gps_api_rx++;
+            if (s_have_my_num) {
+                if (from != 0U && from != s_my_num) {
+                    return;
+                }
+                from = s_my_num;
+            } else if (from == 0U) {
+                return;
+            }
+        } else if (from == 0U && s_have_my_num) {
             from = s_my_num;
         }
+        s_gps_rx++;
         mt_node_t *node = node_alloc(from);
         if (node != NULL) {
             node->last_heard_us = mt_now_us();
@@ -591,11 +663,20 @@ static void handle_mesh_packet(const uint8_t *data, size_t len)
             }
             mt_apply_position(node, payload, payload_len);
             s_stats_dirty = true;
+            if (s_gps_rx <= 3U || (s_gps_rx % 30U) == 0U) {
+                ESP_LOGI(TAG, "GPS rx #%lu from=0x%08lx transport=%lu fixq=%lu sats=%lu%s",
+                         (unsigned long)s_gps_rx, (unsigned long)from, (unsigned long)transport,
+                         (unsigned long)node->fix_quality, (unsigned long)node->sats_in_view,
+                         node->has_pos ? " (fix)" : "");
+            }
         }
         return;
     }
 
     if (portnum != MT_TEXT_APP) {
+        return;
+    }
+    if (payload_len == 0U) {
         return;
     }
 
@@ -630,7 +711,11 @@ static void handle_mesh_packet(const uint8_t *data, size_t len)
 
 static void mt_apply_position(mt_node_t *node, const uint8_t *data, size_t len)
 {
-    if (node == NULL || data == NULL || len == 0U) {
+    if (node == NULL) {
+        return;
+    }
+    if (data == NULL || len == 0U) {
+        node->has_gps_update = true;
         return;
     }
 
@@ -649,18 +734,18 @@ static void mt_apply_position(mt_node_t *node, const uint8_t *data, size_t len)
     if (have_lon) {
         node->lon_deg = (double)lon_i / 10000000.0;
     }
-    if (have_lat && have_lon) {
+    if (have_lat && have_lon && (lat_i != 0 || lon_i != 0)) {
         node->has_pos = true;
     }
 
     if (pb_extract_int32(data, len, 3U, &alt_m)) {
         node->alt_m = alt_m;
     }
-    if (pb_extract_uint32(data, len, 15U, &ground_speed) && ground_speed > 0U) {
-        node->speed_mps = (float)ground_speed / 1000.0f;
+    if (pb_extract_uint32(data, len, 15U, &ground_speed)) {
+        node->speed_mps = (float)ground_speed / 100.0f;
     }
     if (pb_extract_uint32(data, len, 16U, &ground_track)) {
-        node->heading_deg = (float)ground_track / 100.0f;
+        node->heading_deg = (float)ground_track / 100000.0f;
     }
 
     uint32_t fix_quality = 0;
@@ -674,6 +759,10 @@ static void mt_apply_position(mt_node_t *node, const uint8_t *data, size_t len)
     uint32_t sats_in_view = 0;
     if (pb_extract_uint32(data, len, 19U, &sats_in_view)) {
         node->sats_in_view = sats_in_view;
+    }
+    uint32_t sensor_id = 0;
+    if (pb_extract_uint32(data, len, 20U, &sensor_id)) {
+        node->gps_has_lock = (sensor_id & 2U) != 0U;
     }
     uint32_t seq_number = 0;
     if (pb_extract_uint32(data, len, 22U, &seq_number)) {
@@ -761,6 +850,8 @@ static void handle_from_radio(const uint8_t *data, size_t len)
                 if (pb_extract_uint32(info.data, info.len, 1U, &my)) {
                     s_my_num = my;
                     s_have_my_num = true;
+                    ESP_LOGI(TAG, "my_node_num=0x%08lx", (unsigned long)s_my_num);
+                    mt_touch_self_node();
                 }
             }
             continue;
@@ -776,7 +867,9 @@ static void handle_from_radio(const uint8_t *data, size_t len)
             uint64_t cid = 0;
             if (pb_read_varint(&b, &cid) && (uint32_t)cid == s_want_config_id) {
                 s_config_complete = true;
+                ESP_LOGI(TAG, "config complete (want_config_id=%lu)", (unsigned long)s_want_config_id);
                 mt_notify_line("! config ready\n");
+                mt_touch_self_node();
                 s_stats_dirty = true;
             }
             continue;
@@ -842,15 +935,26 @@ void meshtastic_client_uart_rx(const uint8_t *data, size_t len)
 
 static void client_tick(int64_t now_us)
 {
-    if (!s_data_flowing &&
+    if (!s_config_complete &&
         s_last_want_config_us > 0LL &&
         now_us - s_last_want_config_us >= (int64_t)MT_WANT_CONFIG_RETRY_MS * 1000LL) {
         (void)send_want_config(false);
     }
-    if (s_stats_dirty || now_us - s_last_stats_notify_us >= 1000000LL) {
+    if (s_stats_dirty) {
         s_stats_dirty = false;
-        s_last_stats_notify_us = now_us;
         meshtastic_client_request_stats_notify();
+    }
+    if (s_stats_notify_pending && !s_stats_notify_busy) {
+        const bool force = s_stats_notify_force;
+        if (force || now_us - s_last_stats_notify_us >= MT_STATS_BLE_MIN_INTERVAL_US) {
+            s_stats_notify_pending = false;
+            s_stats_notify_force = false;
+            if (force) {
+                meshtastic_client_request_stats_notify_now();
+            } else {
+                meshtastic_client_request_stats_notify();
+            }
+        }
     }
 }
 
@@ -1016,10 +1120,61 @@ esp_err_t meshtastic_client_stats_write(const char *cmd, size_t len)
     }
     if (len >= 7U && strncmp(cmd, "stats=1", 7) == 0 &&
         (len == 7U || cmd[7] == '\0' || cmd[7] == '\n' || cmd[7] == '\r')) {
-        meshtastic_client_request_stats_notify();
+        meshtastic_client_request_stats_notify_now();
         return ESP_OK;
     }
     return ESP_ERR_NOT_FOUND;
+}
+
+static size_t ble_json_pick_nodes(size_t *out_idx, size_t out_cap)
+{
+    size_t n = 0;
+    bool my_included = false;
+
+    for (size_t pick = 0; pick < MT_NODE_MAX && n < out_cap; pick++) {
+        size_t best_i = MT_NODE_MAX;
+        int64_t best_us = INT64_MIN;
+        for (size_t i = 0; i < MT_NODE_MAX; i++) {
+            if (!s_nodes[i].used) {
+                continue;
+            }
+            bool already = false;
+            for (size_t j = 0; j < n; j++) {
+                if (out_idx[j] == i) {
+                    already = true;
+                    break;
+                }
+            }
+            if (already) {
+                continue;
+            }
+            if (s_nodes[i].last_heard_us > best_us) {
+                best_us = s_nodes[i].last_heard_us;
+                best_i = i;
+            }
+        }
+        if (best_i >= MT_NODE_MAX) {
+            break;
+        }
+        out_idx[n++] = best_i;
+        if (s_have_my_num && s_nodes[best_i].num == s_my_num) {
+            my_included = true;
+        }
+    }
+
+    if (s_have_my_num && !my_included) {
+        for (size_t i = 0; i < MT_NODE_MAX; i++) {
+            if (s_nodes[i].used && s_nodes[i].num == s_my_num) {
+                if (n < out_cap) {
+                    out_idx[n++] = i;
+                } else if (n > 0U) {
+                    out_idx[n - 1U] = i;
+                }
+                break;
+            }
+        }
+    }
+    return n;
 }
 
 static size_t format_json_locked(char *out, size_t out_cap)
@@ -1028,20 +1183,24 @@ static size_t format_json_locked(char *out, size_t out_cap)
         return 0;
     }
     const int64_t now_us = mt_now_us();
+    size_t node_idx[MT_BLE_JSON_NODE_MAX];
+    const size_t node_count = ble_json_pick_nodes(node_idx, MT_BLE_JSON_NODE_MAX);
     size_t pos = 0;
     int n;
     if (s_have_my_num) {
         n = snprintf(out, out_cap,
                      "{\"connected\":true,\"config_ok\":%s,\"my_num\":%lu,"
-                     "\"tx_ok\":%lu,\"tx_fail\":%lu,\"rx\":%lu,\"nodes\":[",
+                     "\"tx_ok\":%lu,\"tx_fail\":%lu,\"rx\":%lu,\"gps_rx\":%lu,\"gps_api_rx\":%lu,\"nodes\":[",
                      s_config_complete ? "true" : "false", (unsigned long)s_my_num,
-                     (unsigned long)s_tx_ok, (unsigned long)s_tx_fail, (unsigned long)s_rx_count);
+                     (unsigned long)s_tx_ok, (unsigned long)s_tx_fail, (unsigned long)s_rx_count,
+                     (unsigned long)s_gps_rx, (unsigned long)s_gps_api_rx);
     } else {
         n = snprintf(out, out_cap,
                      "{\"connected\":true,\"config_ok\":%s,\"my_num\":null,"
-                     "\"tx_ok\":%lu,\"tx_fail\":%lu,\"rx\":%lu,\"nodes\":[",
+                     "\"tx_ok\":%lu,\"tx_fail\":%lu,\"rx\":%lu,\"gps_rx\":%lu,\"gps_api_rx\":%lu,\"nodes\":[",
                      s_config_complete ? "true" : "false", (unsigned long)s_tx_ok,
-                     (unsigned long)s_tx_fail, (unsigned long)s_rx_count);
+                     (unsigned long)s_tx_fail, (unsigned long)s_rx_count, (unsigned long)s_gps_rx,
+                     (unsigned long)s_gps_api_rx);
     }
     if (n < 0 || (size_t)n >= out_cap) {
         return 0;
@@ -1049,38 +1208,25 @@ static size_t format_json_locked(char *out, size_t out_cap)
     pos = (size_t)n;
 
     bool first = true;
-    for (size_t i = 0; i < MT_NODE_MAX; i++) {
-        const mt_node_t *node = &s_nodes[i];
+    for (size_t ni = 0; ni < node_count; ni++) {
+        const mt_node_t *node = &s_nodes[node_idx[ni]];
         if (!node->used) {
             continue;
         }
         const int64_t age_ms = (now_us - node->last_heard_us) / 1000LL;
-        const char *name = node->long_name[0] != '\0' ? node->long_name : "";
-        const char *short_n = node->short_name[0] != '\0' ? node->short_name : "";
-        n = snprintf(out + pos, out_cap - pos, "%s{\"num\":%lu,\"name\":\"", first ? "" : ",",
+        n = snprintf(out + pos, out_cap - pos, "%s{\"num\":%lu", first ? "" : ",",
                      (unsigned long)node->num);
         if (n < 0 || (size_t)n >= out_cap - pos) {
             return 0;
         }
         pos += (size_t)n;
-        if (!json_escape_append(out, out_cap, &pos, name, MT_NAME_MAX)) {
-            return 0;
-        }
-        n = snprintf(out + pos, out_cap - pos, "\",\"short\":\"");
-        if (n < 0 || (size_t)n >= out_cap - pos) {
-            return 0;
-        }
-        pos += (size_t)n;
-        if (!json_escape_append(out, out_cap, &pos, short_n, 8)) {
-            return 0;
-        }
         if (node->has_pos) {
             n = snprintf(out + pos, out_cap - pos,
-                         "\",\"last_ms\":%lld,\"lat\":%.6f,\"lon\":%.6f,\"alt_m\":%d,\"speed_mps\":%.2f,\"heading_deg\":%.1f",
+                         ",\"last_ms\":%lld,\"lat\":%.6f,\"lon\":%.6f,\"alt_m\":%d,\"speed_mps\":%.2f,\"heading_deg\":%.1f",
                          (long long)age_ms, node->lat_deg, node->lon_deg, (int)node->alt_m,
                          (double)node->speed_mps, (double)node->heading_deg);
         } else {
-            n = snprintf(out + pos, out_cap - pos, "\",\"last_ms\":%lld", (long long)age_ms);
+            n = snprintf(out + pos, out_cap - pos, ",\"last_ms\":%lld", (long long)age_ms);
         }
         if (n < 0 || (size_t)n >= out_cap - pos) {
             return 0;
@@ -1088,11 +1234,12 @@ static size_t format_json_locked(char *out, size_t out_cap)
         pos += (size_t)n;
         if (node->has_gps_update) {
             n = snprintf(out + pos, out_cap - pos,
-                         ",\"has_gps_update\":true,\"fix_quality\":%lu,\"fix_type\":%lu,\"sats_in_view\":%lu,"
-                         "\"seq_number\":%lu,\"time_sec\":%lu,\"timestamp_sec\":%lu",
-                         (unsigned long)node->fix_quality, (unsigned long)node->fix_type,
-                         (unsigned long)node->sats_in_view, (unsigned long)node->seq_number,
-                         (unsigned long)node->time_sec, (unsigned long)node->timestamp_sec);
+                         ",\"has_gps_update\":true,\"gps_has_lock\":%s,\"fix_quality\":%lu,\"fix_type\":%lu,"
+                         "\"sats_in_view\":%lu,\"seq_number\":%lu,\"time_sec\":%lu,\"timestamp_sec\":%lu",
+                         node->gps_has_lock ? "true" : "false", (unsigned long)node->fix_quality,
+                         (unsigned long)node->fix_type, (unsigned long)node->sats_in_view,
+                         (unsigned long)node->seq_number, (unsigned long)node->time_sec,
+                         (unsigned long)node->timestamp_sec);
             if (n < 0 || (size_t)n >= out_cap - pos) {
                 return 0;
             }
@@ -1111,34 +1258,40 @@ static size_t format_json_locked(char *out, size_t out_cap)
     memcpy(out + pos, "],\"rx_msgs\":[", 14);
     pos += 14;
 
-    first = true;
-    for (size_t i = 0; i < s_rx_msg_count; i++) {
-        const mt_rx_msg_t *m = &s_rx_msgs[i];
-        const int64_t age_ms = (now_us - m->received_us) / 1000LL;
-        n = snprintf(out + pos, out_cap - pos, "%s{\"from\":%lu,\"from_name\":\"", first ? "" : ",",
-                     (unsigned long)m->from);
-        if (n < 0 || (size_t)n >= out_cap - pos) {
+    if (s_rx_msg_count == 0U) {
+        if (pos + 2U >= out_cap) {
             return 0;
         }
-        pos += (size_t)n;
-        if (!json_escape_append(out, out_cap, &pos, m->from_name, MT_NAME_MAX)) {
-            return 0;
-        }
-        n = snprintf(out + pos, out_cap - pos, "\",\"text\":\"");
-        if (n < 0 || (size_t)n >= out_cap - pos) {
-            return 0;
-        }
-        pos += (size_t)n;
-        if (!json_escape_append(out, out_cap, &pos, m->text, MT_JSON_TEXT_MAX)) {
-            return 0;
-        }
-        n = snprintf(out + pos, out_cap - pos, "\",\"last_ms\":%lld}", (long long)age_ms);
-        if (n < 0 || (size_t)n >= out_cap - pos) {
-            return 0;
-        }
-        pos += (size_t)n;
-        first = false;
+        out[pos++] = ']';
+        out[pos++] = '}';
+        out[pos] = '\0';
+        return pos;
     }
+
+    /* One truncated RX msg max — keeps BLE JSON under MTU. */
+    const mt_rx_msg_t *m = &s_rx_msgs[s_rx_msg_count - 1U];
+    const int64_t age_ms = (now_us - m->received_us) / 1000LL;
+    n = snprintf(out + pos, out_cap - pos, "{\"from\":%lu,\"from_name\":\"", (unsigned long)m->from);
+    if (n < 0 || (size_t)n >= out_cap - pos) {
+        return 0;
+    }
+    pos += (size_t)n;
+    if (!json_escape_append_trunc(out, out_cap, &pos, m->from_name, MT_NAME_MAX)) {
+        return 0;
+    }
+    n = snprintf(out + pos, out_cap - pos, "\",\"text\":\"");
+    if (n < 0 || (size_t)n >= out_cap - pos) {
+        return 0;
+    }
+    pos += (size_t)n;
+    if (!json_escape_append_trunc(out, out_cap, &pos, m->text, MT_BLE_JSON_TEXT_MAX)) {
+        return 0;
+    }
+    n = snprintf(out + pos, out_cap - pos, "\",\"last_ms\":%lld}", (long long)age_ms);
+    if (n < 0 || (size_t)n >= out_cap - pos) {
+        return 0;
+    }
+    pos += (size_t)n;
 
     if (pos + 2U >= out_cap) {
         return 0;
@@ -1157,13 +1310,48 @@ size_t meshtastic_client_format_json(char *out, size_t out_cap)
     return n;
 }
 
-void meshtastic_client_request_stats_notify(void)
+static void stats_notify_send(bool force)
 {
     char json[4096];
-    const size_t n = meshtastic_client_format_json(json, sizeof(json));
+    size_t n = 0;
+    const int64_t now_us = mt_now_us();
+
+    mt_lock();
+    if (s_stats_notify_busy) {
+        s_stats_notify_pending = true;
+        if (force) {
+            s_stats_notify_force = true;
+        }
+        mt_unlock();
+        return;
+    }
+    if (!force && (now_us - s_last_stats_notify_us) < MT_STATS_BLE_MIN_INTERVAL_US) {
+        s_stats_notify_pending = true;
+        mt_unlock();
+        return;
+    }
+    s_stats_notify_busy = true;
+    n = format_json_locked(json, sizeof(json));
+    mt_unlock();
+
     if (n > 0U) {
         ble_sen0140_meshtastic_stats_notify((const uint8_t *)json, n);
     }
+
+    mt_lock();
+    s_stats_notify_busy = false;
+    s_last_stats_notify_us = now_us;
+    mt_unlock();
+}
+
+void meshtastic_client_request_stats_notify(void)
+{
+    stats_notify_send(false);
+}
+
+void meshtastic_client_request_stats_notify_now(void)
+{
+    stats_notify_send(true);
 }
 
 #else
@@ -1201,6 +1389,10 @@ size_t meshtastic_client_format_json(char *out, size_t out_cap)
 }
 
 void meshtastic_client_request_stats_notify(void)
+{
+}
+
+void meshtastic_client_request_stats_notify_now(void)
 {
 }
 

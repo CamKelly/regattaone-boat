@@ -20,5 +20,8 @@ esp_err_t meshtastic_client_stats_write(const char *cmd, size_t len);
 /** Format node roster + message stats JSON for 0xFEE7 read/notify. */
 size_t meshtastic_client_format_json(char *out, size_t out_cap);
 
-/** Push a stats JSON notify when subscribers are active. */
+/** Push a stats JSON notify when subscribers are active (debounced). */
 void meshtastic_client_request_stats_notify(void);
+
+/** Push stats JSON immediately (BLE `stats=1` / subscribe). */
+void meshtastic_client_request_stats_notify_now(void);
