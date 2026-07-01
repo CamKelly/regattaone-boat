@@ -52,6 +52,8 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_BOAT_ID_UUID       0xfefb
 /** Read/write: device type — port | starboard | fixed_dgps_mark | waypoint | boat. */
 #define SEN0140_GATT_DEVICE_TYPE_UUID     0xfefc
+/** Notify: GPS NMEA 0183 lines from UART. */
+#define SEN0140_GATT_GPS_LINE_UUID        0xfefd
 /** Read: LoRa stats JSON. Write: `stream=1` / `stream=0`. Notify: JSON on change. */
 #define SEN0140_GATT_LORA_STATS_UUID      0xfefe
 /** Meshtastic companion UART: notify RX bytes, write TX bytes. */
@@ -90,6 +92,10 @@ static uint16_t s_lora_line_chr_val_handle;
 static uint16_t s_lora_stats_chr_val_handle;
 static bool s_lora_stats_notify_enabled;
 static uint16_t s_uwb_line_chr_val_handle;
+#if CONFIG_REGATTAONE_GPS_ENABLE
+static uint16_t s_gps_line_chr_val_handle;
+static bool s_gps_line_notify_enabled;
+#endif
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 static uint16_t s_meshtastic_rx_chr_val_handle;
 static uint16_t s_meshtastic_stats_chr_val_handle;
@@ -426,6 +432,20 @@ static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, 
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+#if CONFIG_REGATTAONE_GPS_ENABLE
+static int gatt_svr_access_gps_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                    void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+#endif
+
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 static int gatt_svr_access_meshtastic_rx(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                          void *arg)
@@ -612,6 +632,14 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .access_cb = gatt_svr_access_device_type,
                     .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
                 },
+#if CONFIG_REGATTAONE_GPS_ENABLE
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_GPS_LINE_UUID),
+                    .access_cb = gatt_svr_access_gps_line,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                    .val_handle = &s_gps_line_chr_val_handle,
+                },
+#endif
                 {
                     0,
                 },
@@ -678,6 +706,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_lora_line_notify_enabled = false;
         s_lora_stats_notify_enabled = false;
         s_uwb_line_notify_enabled = false;
+#if CONFIG_REGATTAONE_GPS_ENABLE
+        s_gps_line_notify_enabled = false;
+#endif
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
         s_meshtastic_rx_notify_enabled = false;
         s_meshtastic_stats_notify_enabled = false;
@@ -722,6 +753,12 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             s_uwb_line_notify_enabled = event->subscribe.cur_notify;
             ESP_LOGI(TAG, "uwb line notify=%d", (int)s_uwb_line_notify_enabled);
         }
+#if CONFIG_REGATTAONE_GPS_ENABLE
+        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_gps_line_chr_val_handle)) {
+            s_gps_line_notify_enabled = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "gps line notify=%d", (int)s_gps_line_notify_enabled);
+        }
+#endif
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
         if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_meshtastic_rx_chr_val_handle)) {
             s_meshtastic_rx_notify_enabled = event->subscribe.cur_notify;
@@ -857,7 +894,11 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
 
     /* Comms responses share the NimBLE mbuf pool — throttle IMU while line notifies are on. */
     static TickType_t s_last_imu_notify;
-    if (s_uwb_line_notify_enabled || s_lora_line_notify_enabled) {
+    if (s_uwb_line_notify_enabled || s_lora_line_notify_enabled
+#if CONFIG_REGATTAONE_GPS_ENABLE
+        || s_gps_line_notify_enabled
+#endif
+        ) {
         const TickType_t now = xTaskGetTickCount();
         if (now - s_last_imu_notify < pdMS_TO_TICKS(200)) {
             return;
@@ -1015,6 +1056,19 @@ void ble_sen0140_uwb_line_notify(const uint8_t *data, size_t len)
         len -= chunk;
     }
     ble_notify_give();
+}
+
+void ble_sen0140_gps_line_notify(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+#if CONFIG_REGATTAONE_GPS_ENABLE
+    ble_line_notify(s_gps_line_chr_val_handle, s_gps_line_notify_enabled, data, len);
+#else
+    (void)data;
+    (void)len;
+#endif
 }
 
 void ble_sen0140_meshtastic_rx_notify(const uint8_t *data, size_t len)

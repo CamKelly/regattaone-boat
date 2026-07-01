@@ -64,28 +64,22 @@ If boot fails with `Detected size(4096k) smaller than … (8192k)`, you built fo
 
 ---
 
-## Pin summary — Freenove ESP32-S3 WROOM Lite
+# Freenove ESP32-S3 WROOM Lite — native serial: GPS (UART1) + Meshtastic (UART2)
 
-Same GPIO assignment as **DevKit Mini** — all four peripherals enabled by default. Full header pinout: **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)**.
+| Function | ESP32-S3 | GPIO | UART |
+| -------- | -------- | ---- | ---- |
+| **Console / idf monitor** | USB | 43/44 | UART0 |
+| **GPS TX → GPS RX** | header **4** | **4** | UART1 |
+| **GPS RX ← GPS TX** | header **5** | **5** | UART1 |
+| **GPS PPS** *(optional)* | header **21** | **21** | — |
+| **Meshtastic TX → module RX** | header **16** | **16** | UART2 |
+| **Meshtastic RX ← module TX** | header **15** | **15** | UART2 |
+| **IMU I2C SDA** *(optional)* | header **10** | **10** | I2C |
+| **IMU I2C SCL** *(optional)* | header **11** | **11** | I2C |
 
-| Function | Signal | SoC GPIO | PCB label | Notes |
-| -------- | ------ | -------- | --------- | ----- |
-| **IMU I2C** | SDA | **10** | **10** (left) | SEN0140 |
-| | SCL | **11** | **11** (left) | |
-| **LoRa SPI** | MOSI | **13** | **13** (left) | SX1262 |
-| | MISO | **14** | **14** (left) | |
-| | SCLK | **12** | **12** (left) | SPI2 / FSPI |
-| | CS | **9** | **9** (left) | |
-| | RESET | **8** | **8** (left) | |
-| | DIO1 | **7** | **7** (left) | |
-| | BUSY | **6** | **6** (left) | |
-| **GPS UART** | ESP TX → GPS RX | **4** | **4** (left) | UART2 |
-| | ESP RX ← GPS TX | **5** | **5** (left) | |
-| **GPS PPS** | 1 Hz pulse in | **21** | **21** (right) | WS2812 LED is silkscreen **48** on this board |
-| **UWB UART** | ESP TX → module RX | **17** | **17** (left) | UART1, RYUW122 |
-| | ESP RX ← module TX | **18** | **18** (left) | |
+**RYUW122 / UWB:** not on native UART — add **SC16IS752** on I2C ([WIRING-SC16IS752-I2C.md](WIRING-SC16IS752-I2C.md), e.g. SDA/SCL on GPIO **8**/**9**).
 
-Avoid silkscreen **35–37** (PSRAM), **48** (WS2812), **TX/RX** (console), **19/20** (USB).
+Do **not** set `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG` as the only console on this board unless you know idf monitor is attached correctly; the prior “blank monitor” symptom was from moving console off UART0 while Meshtastic took UART0.
 
 ---
 

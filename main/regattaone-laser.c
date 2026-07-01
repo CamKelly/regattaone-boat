@@ -21,8 +21,14 @@
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
 #include "ryuw122_uart.h"
+#if CONFIG_REGATTAONE_SC16IS752_ENABLE
+#include "sc16is752.h"
+#endif
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 #include "meshtastic_uart.h"
+#endif
+#if CONFIG_REGATTAONE_GPS_ENABLE
+#include "gps_nmea.h"
 #endif
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
 #include "sen0140_10dof.h"
@@ -72,7 +78,7 @@ void app_main(void)
 
     ESP_LOGI(
         TAG,
-        "Bring-up: IMU %s | LoRa %s | UWB %s | Meshtastic %s",
+        "Bring-up: IMU %s | LoRa %s | UWB %s | GPS %s | Meshtastic %s",
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
         "on",
 #else
@@ -84,6 +90,13 @@ void app_main(void)
         "off",
 #endif
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
+        "on",
+#elif CONFIG_REGATTAONE_SC16IS752_ENABLE
+        "bridge",
+#else
+        "off",
+#endif
+#if CONFIG_REGATTAONE_GPS_ENABLE
         "on",
 #else
         "off",
@@ -116,10 +129,24 @@ void app_main(void)
         return;
     }
 
+#if CONFIG_REGATTAONE_SC16IS752_ENABLE && !CONFIG_REGATTAONE_RYUW122_ENABLE
+    err = sc16is752_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "SC16IS752: %s", esp_err_to_name(err));
+    }
+#endif
+
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
     err = ryuw122_uart_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "RYUW122 UART: %s", esp_err_to_name(err));
+    }
+#endif
+
+#if CONFIG_REGATTAONE_GPS_ENABLE
+    err = gps_nmea_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "GPS NMEA UART: %s", esp_err_to_name(err));
     }
 #endif
 

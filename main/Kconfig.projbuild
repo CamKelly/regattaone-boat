@@ -183,8 +183,10 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         range 0 1
         default 1 if IDF_TARGET_ESP32C3
         default 1
+        depends on REGATTAONE_RYUW122_ENABLE && !REGATTAONE_SC16IS752_ENABLE
         help
             XIAO ESP32-C3: use UART1 on D2/D3. UART0 (D6/D7) shares the USB-serial chip.
+            Not used when UWB goes through SC16IS752 I2C bridge.
 
     config RYUW122_UART_BAUD
         int "UART baud (REYAX RYUW122 fixed at 115200)"
@@ -220,6 +222,7 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         range 0 48
         default 5 if IDF_TARGET_ESP32C3
         default 17
+        depends on REGATTAONE_RYUW122_ENABLE && !REGATTAONE_SC16IS752_ENABLE
         help
             XIAO ESP32-C3: pad D3 = GPIO5 (ESP TX → module RX). Not D6 (GPIO21 = USB).
             ESP32-S3 Mini: GPIO17 (header IO17) on UART1. Cross-connect: ESP TX → module RX.
@@ -231,6 +234,7 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         range 0 48
         default 4 if IDF_TARGET_ESP32C3
         default 18
+        depends on REGATTAONE_RYUW122_ENABLE && !REGATTAONE_SC16IS752_ENABLE
         help
             XIAO ESP32-C3: pad D2 = GPIO4 (ESP RX ← module TX). Not D7 (GPIO20 = USB).
             ESP32-S3 Mini: GPIO18 (header IO18) on UART1. Cross-connect: ESP RX ← module TX.
@@ -256,6 +260,154 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
 
 endmenu
 
+menu "RegattaOne — SC16IS752 (I2C dual-UART bridge)"
+
+    config REGATTAONE_SC16IS752_ENABLE
+        bool "Enable SC16IS752 I2C → dual UART (CJMCU-752)"
+        default n
+        help
+            NXP SC16IS752 on I2C provides two UART channels (TXA/RXA, TXB/RXB).
+            Use for RYUW122 UWB when native ESP32 UARTs are used for GPS/Meshtastic.
+            See boards/WIRING-SC16IS752-I2C.md.
+
+    config SC16IS752_USE_SEN0140_I2C_PINS
+        bool "Share I2C bus with SEN0140 (same SDA/SCL GPIOs)"
+        default y if REGATTAONE_SEN0140_ENABLE
+        default n
+        depends on REGATTAONE_SC16IS752_ENABLE
+        help
+            Freenove Option A: wire SC16IS752 SDA/SCL to IMU GPIO10/GPIO11.
+            When SEN0140 is enabled, reuse its I2C master bus handle.
+
+    config SC16IS752_I2C_SDA_GPIO
+        int "SDA GPIO (standalone bus only)"
+        range 0 48
+        default 10
+        depends on REGATTAONE_SC16IS752_ENABLE && !SC16IS752_USE_SEN0140_I2C_PINS
+
+    config SC16IS752_I2C_SCL_GPIO
+        int "SCL GPIO (standalone bus only)"
+        range 0 48
+        default 11
+        depends on REGATTAONE_SC16IS752_ENABLE && !SC16IS752_USE_SEN0140_I2C_PINS
+
+    config SC16IS752_I2C_ADDR
+        hex "7-bit I2C address (A1=A0=0 → 0x48)"
+        default 0x48
+        depends on REGATTAONE_SC16IS752_ENABLE
+
+    config SC16IS752_CRYSTAL_HZ
+        int "External crystal frequency (Hz)"
+        default 1843200
+        depends on REGATTAONE_SC16IS752_ENABLE
+        help
+            CJMCU-752 boards vary: this project board uses 1.8432 MHz (1843200).
+            Wrong value causes garbage UART even when I2C works.
+
+    config SC16IS752_IRQ_GPIO
+        int "IRQ GPIO (-1 = poll only)"
+        range -1 48
+        default 7 if REGATTAONE_S3_BOARD_FREENOVE_WROOM_LITE
+        default -1
+        depends on REGATTAONE_SC16IS752_ENABLE
+
+    config SC16IS752_RESET_GPIO
+        int "RESET GPIO (-1 = tied to 3V3)"
+        range -1 48
+        default 12 if REGATTAONE_S3_BOARD_FREENOVE_WROOM_LITE
+        default -1
+        depends on REGATTAONE_SC16IS752_ENABLE
+
+    config SC16IS752_RESET_PULSE_MS
+        int "RESET low pulse width (ms)"
+        range 1 500
+        default 10
+        depends on REGATTAONE_SC16IS752_ENABLE && SC16IS752_RESET_GPIO >= 0
+
+    config SC16IS752_CH_A_BAUD
+        int "Channel A baud (TXA/RXA — RYUW122 anchor)"
+        default 115200
+        depends on REGATTAONE_SC16IS752_ENABLE
+
+    config SC16IS752_CH_B_ENABLE
+        bool "Enable channel B (TXB/RXB)"
+        default n
+        depends on REGATTAONE_SC16IS752_ENABLE
+
+    config SC16IS752_CH_B_BAUD
+        int "Channel B baud"
+        default 115200
+        depends on REGATTAONE_SC16IS752_ENABLE && SC16IS752_CH_B_ENABLE
+
+    config SC16IS752_UWB_CHANNEL
+        int "RYUW122 / BLE UWB uses UART channel (0=A, 1=B)"
+        range 0 1
+        default 0
+        depends on REGATTAONE_SC16IS752_ENABLE
+
+    config SC16IS752_CH_B_LISTEN
+        bool "Also forward the other channel to BLE 0xFEF9"
+        default n
+        depends on REGATTAONE_SC16IS752_ENABLE && SC16IS752_CH_B_ENABLE
+
+endmenu
+
+menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
+
+    config REGATTAONE_GPS_ENABLE
+        bool "Enable GPS NMEA UART listener → BLE 0xFEFD"
+        default n
+        help
+            Read NMEA 0183 from a GPS module UART and notify lines on BLE 0xFEFD.
+            Freenove / DevKit: GPIO4 TX → GPS RX, GPIO5 RX ← GPS TX, UART2.
+            On Freenove with Meshtastic, use UART2 for GPS and UART0 for Meshtastic
+            (console on USB Serial/JTAG).
+
+    config GPS_UART_PORT_NUM
+        int "UART controller"
+        range 0 2
+        default 1 if REGATTAONE_S3_BOARD_FREENOVE_WROOM_LITE
+        default 2
+        depends on REGATTAONE_GPS_ENABLE
+        help
+            Freenove with Meshtastic on UART2: use UART1 for GPS (GPIO 4/5).
+            DevKit / Zero without Meshtastic UART2 conflict: UART2 is fine.
+
+    config GPS_UART_BAUD
+        int "UART baud (match GPS module)"
+        default 9600
+        depends on REGATTAONE_GPS_ENABLE
+        help
+            Most modules default to 9600. Some ship at 115200 — match your module.
+
+    config GPS_UART_TX_GPIO
+        int "GPS module RX ← ESP TX (GPIO)"
+        range 0 48
+        default 4
+        depends on REGATTAONE_GPS_ENABLE
+
+    config GPS_UART_RX_GPIO
+        int "GPS module TX → ESP RX (GPIO)"
+        range 0 48
+        default 5
+        depends on REGATTAONE_GPS_ENABLE
+
+    config GPS_PPS_GPIO
+        int "GPS PPS input GPIO (-1 = unwired)"
+        range -1 48
+        default 21
+        depends on REGATTAONE_GPS_ENABLE
+        help
+            Optional 1 Hz pulse-per-second. Reserved for future PPS/timebase support.
+
+    config GPS_BOOT_DELAY_MS
+        int "Delay after UART init before first read (ms)"
+        range 0 10000
+        default 200
+        depends on REGATTAONE_GPS_ENABLE
+
+endmenu
+
 menu "RegattaOne — Meshtastic UART (LoRa via companion ESP32)"
 
     config REGATTAONE_MESHTASTIC_ENABLE
@@ -268,9 +420,10 @@ menu "RegattaOne — Meshtastic UART (LoRa via companion ESP32)"
             Line log notify 0xFEE5; command write 0xFEE6; roster JSON 0xFEE7.
 
     config MESHTASTIC_UART_PORT_NUM
-        int "UART controller (2 on Freenove: UART0=console, UART1=UWB)"
+        int "UART controller (2 on Freenove; 0 only if console is USB-JTAG)"
         range 0 2
-        default 2
+        default 2 if REGATTAONE_S3_BOARD_FREENOVE_WROOM_LITE
+        default 0
         depends on REGATTAONE_MESHTASTIC_ENABLE
 
     config MESHTASTIC_UART_BAUD

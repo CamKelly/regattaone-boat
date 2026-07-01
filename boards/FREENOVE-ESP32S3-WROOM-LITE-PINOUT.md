@@ -120,19 +120,14 @@ LoRa is via a **companion ESP32 running Meshtastic** (UART), not a direct SX1262
 | **GPS UART TX → GPS RX** | 4 | **4** (left) |
 | **GPS UART RX ← GPS TX** | 5 | **5** (left) |
 | **GPS PPS** | 21 | **21** (right) |
-| **UWB UART TX → module RX** | 17 | **17** (left) |
-| **UWB UART RX ← module TX** | 18 | **18** (left) |
-| **UWB NRST** (optional) | 12 | **12** (left) → REYAX pin 2 |
-
-**REYAX wiring (must cross TX/RX):** ESP **17** → REYAX **RX** pin; ESP **18** ← REYAX **TX** pin; **GND** common. Optional **12** → **NRST** (active-low reset). Do **not** wire 17↔17 and 18↔18.
 | **Meshtastic UART TX → module RX** | 16 | **16** (left) |
 | **Meshtastic UART RX ← module TX** | 15 | **15** (left) |
 
-UART: **GPS = UART2**, **UWB = UART1**, **Meshtastic = UART0** (console stays on USB Serial/JTAG).
+UART: **GPS = UART1**, **Meshtastic = UART2**, **console = UART0** (USB, GPIO 43/44). **UWB:** use SC16IS752 on I2C — see [WIRING-SC16IS752-I2C.md](WIRING-SC16IS752-I2C.md).
 
 **Meshtastic companion:** enable the serial module in **PROTO** mode and match baud (default **921600** in firmware).
 
-**Wire checklist (PCB labels):** left **4–5**, **10–11**, **15–18**, right **21**, plus **3V3** and **GND** on each module.
+**Wire checklist (PCB labels):** left **4–5**, **10–11**, **15–16**, right **21**, plus **3V3** and **GND** on each module.
 
 ### Waveshare ESP32-S3-Zero companion (**GP8** / **GP9** serial)
 
@@ -150,7 +145,7 @@ Meshtastic serial module: **PROTO**, **921600**, **TX = 8**, **RX = 9**.
 
 Alternative without that clash: **GP14** (TX) / **GP15** (RX) on the Zero → Freenove **15/16**.
 
-REYAX UWB remains on Freenove **17/18** only — not shared with the Waveshare link.
+REYAX UWB via SC16IS752 I2C (not native UART on Freenove 17/18 in current firmware defaults).
 
 ---
 

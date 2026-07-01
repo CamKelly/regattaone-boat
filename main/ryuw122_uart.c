@@ -8,8 +8,6 @@
 
 #include "ble_sen0140.h"
 
-#include "driver/gpio.h"
-#include "driver/uart.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -17,14 +15,25 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#if CONFIG_REGATTAONE_SC16IS752_ENABLE
+#include "i2c_bus_mux.h"
+#include "sc16is752.h"
+#else
+#include "driver/gpio.h"
+#include "driver/uart.h"
+#endif
+
 static const char *TAG = "ryuw122";
 
-#define RYUW_RX_BUF 2048
-#define RYUW_TX_BUF 512
 #define RYUW_READ_CHUNK 64
 #define RYUW_LINE_MAX 256
 
 static SemaphoreHandle_t s_uart_mtx;
+
+#if !CONFIG_REGATTAONE_SC16IS752_ENABLE
+
+#define RYUW_RX_BUF 2048
+#define RYUW_TX_BUF 512
 
 static void ryuw122_apply_pins(void)
 {
@@ -57,6 +66,8 @@ static void ryuw122_nrst_pulse(void)
     gpio_set_level(nrst, 1);
 #endif
 }
+
+#endif /* !CONFIG_REGATTAONE_SC16IS752_ENABLE */
 
 static bool ryuw122_byte_is_printable(uint8_t b)
 {
@@ -92,12 +103,148 @@ static void ryuw122_emit_line(char *line, size_t len)
     ble_sen0140_uwb_line_notify((const uint8_t *)line, len);
 }
 
+typedef struct {
+    char line[RYUW_LINE_MAX];
+    size_t len;
+} ryuw122_line_buf_t;
+
+static void ryuw122_feed_bytes(ryuw122_line_buf_t *lb, const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        const char c = (char)data[i];
+        if (c == '\r' || c == '\n') {
+            if (lb->len > 0U) {
+                ryuw122_emit_line(lb->line, lb->len);
+                lb->len = 0;
+            }
+            continue;
+        }
+        if (lb->len < sizeof(lb->line) - 1U) {
+            lb->line[lb->len++] = c;
+        } else {
+            ESP_LOGW(TAG, "line overflow at %u bytes, discarding", (unsigned)lb->len);
+            lb->len = 0;
+        }
+    }
+}
+
+#if CONFIG_REGATTAONE_SC16IS752_ENABLE
+
+static sc16is752_channel_t ryuw122_uwb_channel(void)
+{
+#if CONFIG_SC16IS752_UWB_CHANNEL == 1
+    return SC16IS752_CH_B;
+#else
+    return SC16IS752_CH_A;
+#endif
+}
+
+static void ryuw122_drain_channel(sc16is752_channel_t ch, ryuw122_line_buf_t *lb, const char *label)
+{
+    uint8_t buf[RYUW_READ_CHUNK];
+    for (;;) {
+        const size_t n = sc16is752_read(ch, buf, sizeof(buf));
+        if (n == 0U) {
+            break;
+        }
+        if (label != NULL) {
+            ESP_LOGI(TAG, "%s: %u bytes", label, (unsigned)n);
+        }
+        ryuw122_log_bytes("RX chunk", buf, n);
+        ryuw122_feed_bytes(lb, buf, n);
+    }
+}
+
+static void ryuw122_task(void *arg)
+{
+    (void)arg;
+    ryuw122_line_buf_t lb_a = { 0 };
+    ryuw122_line_buf_t lb_b = { 0 };
+
+    ESP_LOGI(TAG, "read task started (SC16IS752 ch %c @ %d baud)",
+             (ryuw122_uwb_channel() == SC16IS752_CH_B) ? 'B' : 'A', CONFIG_RYUW122_UART_BAUD);
+
+    for (;;) {
+        sc16is752_wait_rx(pdMS_TO_TICKS(50));
+        i2c_bus_mux_lock();
+        ryuw122_drain_channel(ryuw122_uwb_channel(), &lb_a, "UWB");
+#if defined(CONFIG_SC16IS752_CH_B_LISTEN) && CONFIG_SC16IS752_CH_B_LISTEN
+        {
+            sc16is752_channel_t other =
+                (ryuw122_uwb_channel() == SC16IS752_CH_A) ? SC16IS752_CH_B : SC16IS752_CH_A;
+            ryuw122_drain_channel(other, &lb_b, "UWB-B");
+        }
+#endif
+        i2c_bus_mux_unlock();
+    }
+}
+
+esp_err_t ryuw122_uart_start(void)
+{
+    esp_err_t err = sc16is752_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "SC16IS752 init: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    s_uart_mtx = xSemaphoreCreateMutex();
+    if (s_uart_mtx == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    if (CONFIG_RYUW122_BOOT_DELAY_MS > 0) {
+        vTaskDelay(pdMS_TO_TICKS(CONFIG_RYUW122_BOOT_DELAY_MS));
+    }
+
+    ESP_LOGI(TAG, "creating ryuw122 task (stack=4096 pri=5, free heap=%lu)",
+             (unsigned long)esp_get_free_heap_size());
+    if (xTaskCreate(ryuw122_task, "ryuw122", 4096, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "ryuw122 task create failed (free heap=%lu)",
+                 (unsigned long)esp_get_free_heap_size());
+        vSemaphoreDelete(s_uart_mtx);
+        s_uart_mtx = NULL;
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "SC16IS752 listener running (AT write → ch %c, BLE 0xFEF9)",
+             (ryuw122_uwb_channel() == SC16IS752_CH_B) ? 'B' : 'A');
+    return ESP_OK;
+}
+
+esp_err_t ryuw122_uart_write(const uint8_t *data, size_t len)
+{
+    if (data == NULL || len == 0U) {
+        ESP_LOGW(TAG, "write rejected: invalid args (data=%p len=%u)", (void *)data, (unsigned)len);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!sc16is752_ready()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (s_uart_mtx == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_uart_mtx, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    i2c_bus_mux_lock();
+    const esp_err_t err = sc16is752_write(ryuw122_uwb_channel(), data, len);
+    i2c_bus_mux_unlock();
+
+    if (err == ESP_OK) {
+        ryuw122_log_bytes("TX", data, len);
+    }
+    xSemaphoreGive(s_uart_mtx);
+    return err;
+}
+
+#else /* native ESP UART */
+
 static void ryuw122_task(void *arg)
 {
     (void)arg;
     uint8_t buf[RYUW_READ_CHUNK];
-    char line[RYUW_LINE_MAX];
-    size_t li = 0;
+    ryuw122_line_buf_t lb = { 0 };
 
     ESP_LOGI(TAG, "read task started (uart%d RX=GPIO%d @ %d baud)", CONFIG_RYUW122_UART_PORT_NUM,
              CONFIG_RYUW122_UART_RX_GPIO, CONFIG_RYUW122_UART_BAUD);
@@ -110,26 +257,7 @@ static void ryuw122_task(void *arg)
 
         ESP_LOGI(TAG, "read %d bytes from uart%d", n, CONFIG_RYUW122_UART_PORT_NUM);
         ryuw122_log_bytes("RX chunk", buf, (size_t)n);
-
-        for (int i = 0; i < n; i++) {
-            const char c = (char)buf[i];
-            if (c == '\r' || c == '\n') {
-                if (li > 0U) {
-                    ESP_LOGI(TAG, "line complete (%u bytes)", (unsigned)li);
-                    ryuw122_emit_line(line, li);
-                    li = 0;
-                } else {
-                    ESP_LOGI(TAG, "delimiter \\x%02x (empty line)", (unsigned char)c);
-                }
-                continue;
-            }
-            if (li < sizeof(line) - 1U) {
-                line[li++] = c;
-            } else {
-                ESP_LOGW(TAG, "line overflow at %u bytes, discarding", (unsigned)li);
-                li = 0;
-            }
-        }
+        ryuw122_feed_bytes(&lb, buf, (size_t)n);
     }
 }
 
@@ -192,8 +320,8 @@ esp_err_t ryuw122_uart_write(const uint8_t *data, size_t len)
     }
 
     const char *task = pcTaskGetName(NULL);
-    ESP_LOGI(TAG, "write %u bytes from task '%s' (uart%d TX=GPIO%d)",
-             (unsigned)len, task ? task : "?", CONFIG_RYUW122_UART_PORT_NUM, CONFIG_RYUW122_UART_TX_GPIO);
+    ESP_LOGI(TAG, "write %u bytes from task '%s' (uart%d TX=GPIO%d)", (unsigned)len, task ? task : "?",
+             CONFIG_RYUW122_UART_PORT_NUM, CONFIG_RYUW122_UART_TX_GPIO);
 
     if (s_uart_mtx == NULL) {
         ESP_LOGE(TAG, "write failed: UART not started (mutex NULL)");
@@ -221,6 +349,8 @@ esp_err_t ryuw122_uart_write(const uint8_t *data, size_t len)
     xSemaphoreGive(s_uart_mtx);
     return ESP_OK;
 }
+
+#endif /* CONFIG_REGATTAONE_SC16IS752_ENABLE */
 
 bool ryuw122_tdma_can_use_now(void)
 {

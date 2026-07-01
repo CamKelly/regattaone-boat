@@ -8,16 +8,22 @@ import {
 } from "./lib/gps-leaflet-map";
 import { formatImuFields, parseImuPacket, PKT_MIN_SIZE } from "./lib/imu-protocol";
 import {
+  applyNmeaLine,
+  defaultGpsFix,
   fixQualityLabel,
   fixTypeLabel,
+  formatAltitudeM,
   formatCoordDeg,
   formatCourseDeg,
   formatSpeedKnots,
+  formatUtc,
   openStreetMapUrl,
+  type GpsFix,
 } from "./lib/nmea-parse";
 import {
   BLE_BOAT_ID_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
+  BLE_GPS_LINE_CHAR_UUID,
   BLE_IMU_CHAR_UUID,
   BLE_LORA_LINE_CHAR_UUID,
   BLE_LORA_STATS_CHAR_UUID,
@@ -47,7 +53,7 @@ import {
 } from "./lib/ble-transport";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-06-24f";
+const WEB_BLE_REV = "2026-06-25a";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -232,6 +238,7 @@ const BLE_OPTIONAL_SERVICES = [
   BLE_UWB_AT_CHAR_UUID,
   BLE_BOAT_ID_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
+  BLE_GPS_LINE_CHAR_UUID,
   BLE_MESHTASTIC_RX_CHAR_UUID,
   BLE_MESHTASTIC_TX_CHAR_UUID,
   BLE_MESHTASTIC_STATS_CHAR_UUID,
@@ -254,6 +261,7 @@ interface BleBoatSession {
   charUwbAt: BleGattCharacteristicLike | null;
   charBoatId: BleGattCharacteristicLike | null;
   charDeviceType: BleGattCharacteristicLike | null;
+  charGpsLine: BleGattCharacteristicLike | null;
   boatId: string;
   boatIdDraft: string;
   deviceType: DeviceType;
@@ -288,6 +296,7 @@ interface BleBoatSession {
   meshtasticStatsNotifyBuf: string;
   meshtasticLineLogText: string;
   meshtasticTxDraft: string;
+  gpsFix: GpsFix;
   uwbBusy: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -297,6 +306,7 @@ interface BleBoatSession {
   onLoraStatsNotify: (ev: Event) => void;
   onMeshtasticLineNotify: (ev: Event) => void;
   onMeshtasticStatsNotify: (ev: Event) => void;
+  onGpsLineNotify: (ev: Event) => void;
   onUwbLineNotify: (ev: Event) => void;
   onDisconnected: () => void;
 }
@@ -614,6 +624,7 @@ function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charLoraStats?.removeEventListener("characteristicvaluechanged", session.onLoraStatsNotify);
   session.charMeshtasticRx?.removeEventListener("characteristicvaluechanged", session.onMeshtasticLineNotify);
   session.charMeshtasticStats?.removeEventListener("characteristicvaluechanged", session.onMeshtasticStatsNotify);
+  session.charGpsLine?.removeEventListener("characteristicvaluechanged", session.onGpsLineNotify);
   session.charUwbLine?.removeEventListener("characteristicvaluechanged", session.onUwbLineNotify);
 }
 
@@ -631,6 +642,7 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   session.charUwbAt = null;
   session.charBoatId = null;
   session.charDeviceType = null;
+  session.charGpsLine = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
 
@@ -698,6 +710,12 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   } catch (e) {
     session.charDeviceType = null;
     console.warn("BLE device type unavailable", session.name, e);
+  }
+  try {
+    session.charGpsLine = await svc.getCharacteristic(BLE_GPS_LINE_CHAR_UUID);
+    session.charGpsLine.addEventListener("characteristicvaluechanged", session.onGpsLineNotify);
+  } catch {
+    session.charGpsLine = null;
   }
 
   markMeshtasticBleReady(session);
@@ -792,6 +810,69 @@ function renderGpsDisplay(session: BleBoatSession): void {
     return;
   }
 
+  if (session.charGpsLine) {
+    renderGpsDisplayFromNmea(session);
+    return;
+  }
+
+  renderGpsDisplayFromMeshtastic(session);
+}
+
+function renderGpsDisplayFromNmea(session: BleBoatSession): void {
+  const fix = session.gpsFix;
+  const ageMs =
+    fix.updatedAtMs > 0 ? Math.max(0, performance.now() - fix.updatedAtMs) : Number.POSITIVE_INFINITY;
+
+  if (fix.updatedAtMs === 0) {
+    clearGpsDisplay(null);
+    setText("gps-meta", "Waiting for NMEA from GPS UART (0xFEFD)…");
+    setText("gps-source", "GPS UART");
+    return;
+  }
+
+  const hasCoords = fix.lat !== null && fix.lon !== null;
+  const fixLabel = fixQualityLabel(fix.fixQuality);
+  const fixNote = hasCoords
+    ? fix.fixValid
+      ? "Fix OK"
+      : "Coordinates received · fix not valid"
+    : fix.fixQuality !== null && fix.fixQuality > 0
+      ? "Searching · no coordinates yet"
+      : `No fix · ${fixLabel}`;
+
+  setText("gps-meta", `GPS UART · ${fixNote} · ${formatAgo(ageMs)}${fix.lastSentence ? ` · ${fix.lastSentence}` : ""}`);
+  setText("gps-source", "GPS UART · NMEA");
+
+  if (hasCoords) {
+    setText(
+      "gps-position",
+      `${formatCoordDeg(fix.lat, true)}\n${formatCoordDeg(fix.lon, false)}`,
+    );
+    updateGpsMap(fix.lat, fix.lon);
+  } else {
+    setText("gps-position", "—");
+    updateGpsMap(null, null);
+  }
+
+  setText("gps-last-heard", formatAgo(ageMs));
+  setText("gps-fix", fixLabel);
+  setText("gps-fix-type", fixTypeLabel(fix.fixType));
+  setText(
+    "gps-sats",
+    fix.satsInView !== null
+      ? String(fix.satsInView)
+      : fix.satsUsed !== null
+        ? String(fix.satsUsed)
+        : "—",
+  );
+  setText("gps-seq", "—");
+  setText("gps-utc", formatUtc(fix.utcTime, fix.utcDate));
+  setText("gps-sog", formatSpeedKnots(fix.sogKnots));
+  setText("gps-cog", formatCourseDeg(fix.cogDeg));
+  setText("gps-altitude", formatAltitudeM(fix.altitudeM, fix.geoidSepM));
+}
+
+function renderGpsDisplayFromMeshtastic(session: BleBoatSession): void {
   const node = findMeshtasticGpsNode(session);
   const stats = session.meshtasticStats;
   if (!node) {
@@ -873,6 +954,21 @@ function renderGpsDisplay(session: BleBoatSession): void {
   );
 }
 
+function ingestGpsLine(session: BleBoatSession, chunk: string): void {
+  if (!chunk) {
+    return;
+  }
+  const parts = chunk.split("\n");
+  for (const part of parts) {
+    const line = part.trim();
+    if (!line) {
+      continue;
+    }
+    session.gpsFix = applyNmeaLine(session.gpsFix, line);
+  }
+  renderGpsDisplay(session);
+}
+
 function updateGpsMap(lat: number | null, lon: number | null): void {
   const hint = document.querySelector<HTMLElement>("#gps-map-hint");
   const link = document.querySelector<HTMLAnchorElement>("#gps-map-link");
@@ -904,7 +1000,7 @@ function clearGpsDisplay(_session: BleBoatSession | null): void {
     link.hidden = true;
     link.href = "#";
   }
-  setText("gps-meta", `Waiting for Meshtastic position from node ${MESHTASTIC_GPS_SOURCE_SHORT}…`);
+  setText("gps-meta", "Waiting for NMEA from GPS UART…");
   for (const id of [
     "gps-source",
     "gps-position",
@@ -1048,6 +1144,7 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charUwbAt = null;
   session.charBoatId = null;
   session.charDeviceType = null;
+  session.charGpsLine = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
   syncMeshtasticUiRefresh(null);
@@ -1138,6 +1235,7 @@ async function setCommsNotifications(session: BleBoatSession, enabled: boolean):
     session.charLoraStats,
     session.charMeshtasticRx,
     session.charMeshtasticStats,
+    session.charGpsLine,
   ].filter((c): c is BleGattCharacteristicLike => c !== null);
   const results: PromiseSettledResult<unknown>[] = [];
   for (const chr of chars) {
@@ -2688,6 +2786,15 @@ function createNotifyHandlers(session: BleBoatSession): void {
     ingestMeshtasticStatsChunk(session, new TextDecoder().decode(v));
   };
 
+  session.onGpsLineNotify = (ev: Event) => {
+    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
+    const v = ch.value;
+    if (!v || v.byteLength === 0) {
+      return;
+    }
+    ingestGpsLine(session, new TextDecoder().decode(v));
+  };
+
   session.onUwbLineNotify = (ev: Event) => {
     const ch = ev.target as BluetoothRemoteGATTCharacteristic;
     const v = ch.value;
@@ -3053,6 +3160,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     charUwbAt: null,
     charBoatId: null,
     charDeviceType: null,
+    charGpsLine: null,
     boatId: "",
     boatIdDraft: "",
     deviceType: "boat",
@@ -3083,6 +3191,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     meshtasticStatsNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
+    gpsFix: defaultGpsFix(),
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
@@ -3091,6 +3200,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     onLoraStatsNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
+    onGpsLineNotify: () => {},
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
@@ -3128,6 +3238,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     charUwbAt: null,
     charBoatId: null,
     charDeviceType: null,
+    charGpsLine: null,
     boatId: "",
     boatIdDraft: "",
     deviceType: "boat",
@@ -3158,6 +3269,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     meshtasticStatsNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
+    gpsFix: defaultGpsFix(),
     uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
@@ -3166,6 +3278,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     onLoraStatsNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
+    onGpsLineNotify: () => {},
     onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
@@ -3479,7 +3592,9 @@ export function startRegattaApp(): void {
     if (label.includes("GPS")) {
       requestAnimationFrame(() => invalidateGpsLeafletMapSize());
       const session = getActiveSession();
-      if (session?.gatt.connected && session.charMeshtasticStats) {
+      if (session?.gatt.connected && session.charGpsLine) {
+        renderGpsDisplay(session);
+      } else if (session?.gatt.connected && session.charMeshtasticStats) {
         void syncMeshtasticStatsFromDevice(session, session.meshtasticStatsReceivedWallMs, 8000).then(() =>
           renderGpsDisplay(session),
         );
