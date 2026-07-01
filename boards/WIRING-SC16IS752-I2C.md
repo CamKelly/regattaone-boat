@@ -90,12 +90,14 @@ In I²C mode:
 
 For a **single** board on the bus with **A0/A1 tied only to 3V3 or GND** (typical CJMCU wiring):
 
-| A1 | A0 | 7-bit address |
+| A1 (pin **A1/SI**) | A0 (pin **A0/CS**) | 7-bit address |
 | -- | -- | ------------- |
 | 3V3 | 3V3 | **0x48** |
 | 3V3 | GND | **0x49** |
 | GND | 3V3 | **0x4C** |
 | GND | GND | **0x4D** |
+
+**Reading your straps:** if **A0/CS → 3V3** and **A1/SI → GND**, that is row **GND | 3V3 → 0x4C** (not 0x49). Some web tables list the **A0 column first** and accidentally swap the addresses — use the **A1, A0** order above (matches NXP / Mbed driver comments).
 
 **Common mistake:** both **A0** and **A1** to **GND** is **0x4D**, not 0x48. Our Freenove Option A doc uses both GND → set firmware to **0x4D**.
 

@@ -210,7 +210,7 @@ static void sc16is752_log_addr_scan(void)
     if (!any) {
         ESP_LOGW(TAG,
                  "No ACK at 0x48/49/4C/4D — check VCC/GND, SDA/SCL, I2C/SPI→3V3, RESET; "
-                 "CJMCU straps: 0x48=A0V A1V | 0x49=A0G A1V | 0x4C=A0V A1G | 0x4D=A0G A1G");
+                 "CJMCU straps (A1/A0): 0x48=VV 0x49=VG 0x4C=GV 0x4D=GG (V=3V3 G=GND; A1 pin first)");
     }
 }
 
