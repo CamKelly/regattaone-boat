@@ -15,6 +15,8 @@ import {
   formatAltitudeM,
   formatCoordDeg,
   formatCourseDeg,
+  formatPpsCount,
+  formatPpsIntervalUs,
   formatSpeedKnots,
   formatUtc,
   openStreetMapUrl,
@@ -25,9 +27,6 @@ import {
   BLE_DEVICE_TYPE_CHAR_UUID,
   BLE_GPS_LINE_CHAR_UUID,
   BLE_IMU_CHAR_UUID,
-  BLE_LORA_LINE_CHAR_UUID,
-  BLE_LORA_STATS_CHAR_UUID,
-  BLE_LORA_TX_CHAR_UUID,
   BLE_MESHTASTIC_RX_CHAR_UUID,
   BLE_MESHTASTIC_STATS_CHAR_UUID,
   BLE_MESHTASTIC_TX_CHAR_UUID,
@@ -53,7 +52,7 @@ import {
 } from "./lib/ble-transport";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-06-25a";
+const WEB_BLE_REV = "2026-06-25b";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -68,52 +67,6 @@ interface ImuDisplay {
   temp: string;
   baro: string;
   meta: string;
-}
-
-interface LoraStatsSender {
-  sig: string;
-  first: number;
-  last: number;
-  missing: number;
-  rx: number;
-}
-
-type LoraMeshState = "off" | "listening" | "locked";
-
-interface LoraMeshPeer {
-  id: number;
-  type: number;
-  last_ms: number;
-}
-
-interface LoraMeshRxMsg {
-  from: number;
-  seq: number;
-  text: string;
-  last_ms: number;
-}
-
-interface LoraMeshSnapshot {
-  active: boolean;
-  state: LoraMeshState;
-  my_id: number | null;
-  my_type: number;
-  tx_ok: number;
-  tx_fail: number;
-  rx: number;
-  collision_yield: number;
-  msg_tx_ok: number;
-  msg_tx_fail: number;
-  msg_rx: number;
-  peers: LoraMeshPeer[];
-  rx_msgs: LoraMeshRxMsg[];
-}
-
-interface LoraStatsSnapshot {
-  tx: { queued: number; ok: number; timeout: number };
-  rx_bad: number;
-  senders: LoraStatsSender[];
-  mesh: LoraMeshSnapshot;
 }
 
 interface MeshtasticNode {
@@ -156,29 +109,6 @@ interface MeshtasticStatsSnapshot {
   rx_msgs: MeshtasticRxMsg[];
 }
 
-const defaultLoraMesh = (): LoraMeshSnapshot => ({
-  active: false,
-  state: "off",
-  my_id: null,
-  my_type: 4,
-  tx_ok: 0,
-  tx_fail: 0,
-  rx: 0,
-  collision_yield: 0,
-  msg_tx_ok: 0,
-  msg_tx_fail: 0,
-  msg_rx: 0,
-  peers: [],
-  rx_msgs: [],
-});
-
-const defaultLoraStats = (): LoraStatsSnapshot => ({
-  tx: { queued: 0, ok: 0, timeout: 0 },
-  rx_bad: 0,
-  senders: [],
-  mesh: defaultLoraMesh(),
-});
-
 const defaultMeshtasticStats = (): MeshtasticStatsSnapshot => ({
   connected: false,
   config_ok: false,
@@ -192,26 +122,11 @@ const defaultMeshtasticStats = (): MeshtasticStatsSnapshot => ({
   rx_msgs: [],
 });
 
-function hasDirectLoRa(session: BleBoatSession | null): boolean {
-  return session?.charLoraTx != null;
-}
 
 function hasMeshtastic(session: BleBoatSession | null): boolean {
   return session?.charMeshtasticRx != null;
 }
 
-const MESH_TYPE_CODES: DeviceType[] = [
-  "port",
-  "starboard",
-  "fixed_dgps_mark",
-  "waypoint",
-  "boat",
-];
-
-function meshTypeLabel(code: number): string {
-  const t = MESH_TYPE_CODES[code];
-  return t ? deviceTypeLabel(t) : `unknown (${code})`;
-}
 
 function formatAgo(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) {
@@ -231,9 +146,6 @@ function formatAgo(ms: number): string {
 const BLE_OPTIONAL_SERVICES = [
   BLE_SERVICE_UUID,
   BLE_IMU_CHAR_UUID,
-  BLE_LORA_TX_CHAR_UUID,
-  BLE_LORA_LINE_CHAR_UUID,
-  BLE_LORA_STATS_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
   BLE_UWB_AT_CHAR_UUID,
   BLE_BOAT_ID_CHAR_UUID,
@@ -251,9 +163,6 @@ interface BleBoatSession {
   nativeBle: boolean;
   name: string;
   charImu: BleGattCharacteristicLike | null;
-  charLoraTx: BleGattCharacteristicLike | null;
-  charLoraLine: BleGattCharacteristicLike | null;
-  charLoraStats: BleGattCharacteristicLike | null;
   charMeshtasticRx: BleGattCharacteristicLike | null;
   charMeshtasticTx: BleGattCharacteristicLike | null;
   charMeshtasticStats: BleGattCharacteristicLike | null;
@@ -266,15 +175,7 @@ interface BleBoatSession {
   boatIdDraft: string;
   deviceType: DeviceType;
   deviceTypeDraft: DeviceType;
-  loraLineLogText: string;
-  /** Last `! STATUS:` line from firmware (0xFEF8). */
-  loraRadioStatus: string;
-  loraStats: LoraStatsSnapshot;
-  /** Wall clock when loraStats was last applied (for live "ago" display). */
-  loraStatsReceivedWallMs: number;
-  loraStatsNotifyBuf: string;
   uwbLineLogText: string;
-  loraTxDraft: string;
   uwbAtDraft: string;
   lastImuWallMs: number;
   imu: ImuDisplay;
@@ -283,14 +184,6 @@ interface BleBoatSession {
   /** Incremented per UWB request to ignore stale notify/read data. */
   commsGen: number;
   activeUwbGen: number;
-  loraBusy: boolean;
-  loraStreamRunning: boolean;
-  loraStreamSeq: number;
-  loraStreamTimer: ReturnType<typeof setTimeout> | null;
-  loraTabView: "normal" | "mesh";
-  loraMeshRunning: boolean;
-  /** Sent/received mesh lines for the inbox below the peer table. */
-  meshMessageLog: string[];
   meshtasticStats: MeshtasticStatsSnapshot;
   meshtasticStatsReceivedWallMs: number;
   meshtasticStatsNotifyBuf: string;
@@ -302,8 +195,6 @@ interface BleBoatSession {
   parked: boolean;
   gattChain: Promise<void>;
   onImuNotify: (ev: Event) => void;
-  onLoraLineNotify: (ev: Event) => void;
-  onLoraStatsNotify: (ev: Event) => void;
   onMeshtasticLineNotify: (ev: Event) => void;
   onMeshtasticStatsNotify: (ev: Event) => void;
   onGpsLineNotify: (ev: Event) => void;
@@ -315,7 +206,6 @@ const MESHTASTIC_GPS_SOURCE_SHORT = "1HX";
 
 const sessions = new Map<string, BleBoatSession>();
 let activeSessionId: string | null = null;
-let meshUiRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let meshtasticUiRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 let connectBtn!: HTMLButtonElement;
@@ -568,8 +458,8 @@ function updateBleToolbar(note?: string): void {
   if (!active.charUwbAt) {
     missing.push("UWB");
   }
-  if (!active.charLoraTx && !active.charMeshtasticRx) {
-    missing.push("LoRa/Mesh");
+  if (!active.charMeshtasticRx) {
+    missing.push("Meshtastic");
   }
   if (missing.length > 0) {
     setBleToolbar(`BLE: ${name}${multi} — ${missing.join(", ")} unavailable`);
@@ -595,8 +485,6 @@ function syncActionButtons(): void {
   if (uwbInput) {
     uwbInput.disabled = false;
   }
-  syncLoraStreamUi(session);
-  syncLoraMeshUi(session);
   syncBoatIdUi(session);
   syncDeviceTypeUi(session);
 }
@@ -620,8 +508,6 @@ async function runGattOp<T>(session: BleBoatSession, op: () => Promise<T>): Prom
 
 function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charImu?.removeEventListener("characteristicvaluechanged", session.onImuNotify);
-  session.charLoraLine?.removeEventListener("characteristicvaluechanged", session.onLoraLineNotify);
-  session.charLoraStats?.removeEventListener("characteristicvaluechanged", session.onLoraStatsNotify);
   session.charMeshtasticRx?.removeEventListener("characteristicvaluechanged", session.onMeshtasticLineNotify);
   session.charMeshtasticStats?.removeEventListener("characteristicvaluechanged", session.onMeshtasticStatsNotify);
   session.charGpsLine?.removeEventListener("characteristicvaluechanged", session.onGpsLineNotify);
@@ -632,9 +518,6 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   await setSessionNotifications(session, false);
   detachCharacteristicListeners(session);
   session.charImu = null;
-  session.charLoraTx = null;
-  session.charLoraLine = null;
-  session.charLoraStats = null;
   session.charMeshtasticRx = null;
   session.charMeshtasticTx = null;
   session.charMeshtasticStats = null;
@@ -664,23 +547,6 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     session.charUwbLine.addEventListener("characteristicvaluechanged", session.onUwbLineNotify);
   } catch (e) {
     console.warn("BLE UWB RX unavailable", session.name, e);
-  }
-  try {
-    session.charLoraTx = await svc.getCharacteristic(BLE_LORA_TX_CHAR_UUID);
-  } catch {
-    session.charLoraTx = null;
-  }
-  try {
-    session.charLoraLine = await svc.getCharacteristic(BLE_LORA_LINE_CHAR_UUID);
-    session.charLoraLine.addEventListener("characteristicvaluechanged", session.onLoraLineNotify);
-  } catch {
-    session.charLoraLine = null;
-  }
-  try {
-    session.charLoraStats = await svc.getCharacteristic(BLE_LORA_STATS_CHAR_UUID);
-    session.charLoraStats.addEventListener("characteristicvaluechanged", session.onLoraStatsNotify);
-  } catch {
-    session.charLoraStats = null;
   }
   try {
     session.charMeshtasticRx = await svc.getCharacteristic(BLE_MESHTASTIC_RX_CHAR_UUID);
@@ -719,16 +585,9 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   }
 
   markMeshtasticBleReady(session);
-  syncLoraTabVisibility(session);
   syncMeshtasticTabVisibility(session);
 }
 
-async function ensureLoraComms(session: BleBoatSession): Promise<void> {
-  if (!session.charLoraTx || !session.charLoraLine) {
-    await bindSessionCharacteristics(session);
-  }
-  await setCommsNotifications(session, true);
-}
 
 async function ensureUwbComms(session: BleBoatSession): Promise<void> {
   if (!session.charUwbAt || !session.charUwbLine) {
@@ -818,15 +677,48 @@ function renderGpsDisplay(session: BleBoatSession): void {
   renderGpsDisplayFromMeshtastic(session);
 }
 
+function renderGpsPpsFields(fix: GpsFix): void {
+  const ppsAgeMs =
+    fix.ppsUpdatedAtMs > 0 ? Math.max(0, performance.now() - fix.ppsUpdatedAtMs) : Number.POSITIVE_INFINITY;
+  setText("gps-pps-count", formatPpsCount(fix.ppsCount));
+  setText("gps-pps-last", fix.ppsUpdatedAtMs > 0 ? formatAgo(ppsAgeMs) : "—");
+  setText("gps-pps-interval", formatPpsIntervalUs(fix.ppsCapDeltaUs));
+}
+
 function renderGpsDisplayFromNmea(session: BleBoatSession): void {
   const fix = session.gpsFix;
+  const hasNmea = fix.updatedAtMs > 0;
+  const hasPps = fix.ppsUpdatedAtMs > 0;
   const ageMs =
     fix.updatedAtMs > 0 ? Math.max(0, performance.now() - fix.updatedAtMs) : Number.POSITIVE_INFINITY;
 
-  if (fix.updatedAtMs === 0) {
+  if (!hasNmea && !hasPps) {
     clearGpsDisplay(null);
     setText("gps-meta", "Waiting for NMEA from GPS UART (0xFEFD)…");
     setText("gps-source", "GPS UART");
+    return;
+  }
+
+  if (!hasNmea && hasPps) {
+    const ppsAgeMs = Math.max(0, performance.now() - fix.ppsUpdatedAtMs);
+    setText("gps-meta", `GPS UART · PPS active · ${formatAgo(ppsAgeMs)} · waiting for NMEA…`);
+    setText("gps-source", "GPS UART · PPS");
+    for (const id of [
+      "gps-position",
+      "gps-last-heard",
+      "gps-fix",
+      "gps-fix-type",
+      "gps-sats",
+      "gps-seq",
+      "gps-utc",
+      "gps-sog",
+      "gps-cog",
+      "gps-altitude",
+    ]) {
+      setText(id, "—");
+    }
+    updateGpsMap(null, null);
+    renderGpsPpsFields(fix);
     return;
   }
 
@@ -840,7 +732,11 @@ function renderGpsDisplayFromNmea(session: BleBoatSession): void {
       ? "Searching · no coordinates yet"
       : `No fix · ${fixLabel}`;
 
-  setText("gps-meta", `GPS UART · ${fixNote} · ${formatAgo(ageMs)}${fix.lastSentence ? ` · ${fix.lastSentence}` : ""}`);
+  const ppsNote = hasPps ? " · PPS OK" : "";
+  setText(
+    "gps-meta",
+    `GPS UART · ${fixNote} · ${formatAgo(ageMs)}${fix.lastSentence ? ` · ${fix.lastSentence}` : ""}${ppsNote}`,
+  );
   setText("gps-source", "GPS UART · NMEA");
 
   if (hasCoords) {
@@ -870,6 +766,7 @@ function renderGpsDisplayFromNmea(session: BleBoatSession): void {
   setText("gps-sog", formatSpeedKnots(fix.sogKnots));
   setText("gps-cog", formatCourseDeg(fix.cogDeg));
   setText("gps-altitude", formatAltitudeM(fix.altitudeM, fix.geoidSepM));
+  renderGpsPpsFields(fix);
 }
 
 function renderGpsDisplayFromMeshtastic(session: BleBoatSession): void {
@@ -904,7 +801,7 @@ function renderGpsDisplayFromMeshtastic(session: BleBoatSession): void {
           : "";
     setText("gps-meta", `${label} · node ${node.num} · waiting for GPS stream (~1 Hz)${gpsNote}`);
     setText("gps-source", `${label} · node ${node.num}`);
-    for (const id of ["gps-position", "gps-last-heard", "gps-fix", "gps-fix-type", "gps-sats", "gps-seq", "gps-utc", "gps-sog", "gps-cog", "gps-altitude"]) {
+    for (const id of ["gps-position", "gps-last-heard", "gps-fix", "gps-fix-type", "gps-sats", "gps-seq", "gps-utc", "gps-sog", "gps-cog", "gps-altitude", "gps-pps-count", "gps-pps-last", "gps-pps-interval"]) {
       setText(id, "—");
     }
     updateGpsMap(null, null);
@@ -1013,47 +910,28 @@ function clearGpsDisplay(_session: BleBoatSession | null): void {
     "gps-sog",
     "gps-cog",
     "gps-altitude",
+    "gps-pps-count",
+    "gps-pps-last",
+    "gps-pps-interval",
   ]) {
     setText(id, "—");
   }
 }
 
-function appendStreamLine(
-  session: BleBoatSession,
-  field: "loraLineLogText" | "meshtasticLineLogText",
-  chunk: string,
-): void {
+function appendStreamLine(session: BleBoatSession, chunk: string): void {
   if (chunk.length === 0) {
     return;
   }
   const line = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
-  const current = session[field];
+  const current = session.meshtasticLineLogText;
   if (current.endsWith(line)) {
     return;
   }
-  session[field] += line;
-  if (session[field].length > 64000) {
-    session[field] = session[field].slice(-48000);
+  session.meshtasticLineLogText += line;
+  if (session.meshtasticLineLogText.length > 64000) {
+    session.meshtasticLineLogText = session.meshtasticLineLogText.slice(-48000);
   }
-  if (field === "loraLineLogText") {
-    renderLoraLog(session);
-  } else {
-    renderMeshtasticLog(session);
-  }
-}
-
-function defaultLoraRadioStatus(session: BleBoatSession): string {
-  const missing: string[] = [];
-  if (!session.charLoraTx) {
-    missing.push("0xFEF7 TX");
-  }
-  if (!session.charLoraLine) {
-    missing.push("0xFEF8 notify");
-  }
-  if (missing.length > 0) {
-    return `BLE LoRa GATT missing (${missing.join(", ")})`;
-  }
-  return session.gatt.connected ? "waiting for status notify…" : "not connected";
+  renderMeshtasticLog(session);
 }
 
 function appendUwbLineIfNew(session: BleBoatSession, chunk: string, gen: number): void {
@@ -1091,13 +969,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
     if (!session.charImu || !session.charUwbAt || !session.charMeshtasticStats) {
       await bindSessionCharacteristics(session);
     }
-    const statsBaseline = session.loraStatsReceivedWallMs;
     await setCommsNotifications(session, true);
-    await syncLoraStatsFromDevice(session, statsBaseline);
-    if (session.loraStats.mesh.active && hasDirectLoRa(session)) {
-      session.loraMeshRunning = true;
-      session.loraTabView = "mesh";
-    }
     if (hasMeshtastic(session)) {
       void (async () => {
         await ensureMeshtasticConfigReady(session, 20000);
@@ -1115,8 +987,6 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
     await readDeviceTypeFromDevice(session);
     syncBoatIdUi(session);
     syncDeviceTypeUi(session);
-    session.loraRadioStatus = defaultLoraRadioStatus(session);
-    renderLoraStatus(session);
     return session.gatt.connected;
   } catch (e) {
     console.error("BLE activate failed", session.name, e);
@@ -1127,16 +997,10 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
 }
 
 async function deactivateSession(session: BleBoatSession): Promise<void> {
-  stopLoraStream(session);
-  // Park BLE only — leave mesh running on the device unless the user pressed Stop mesh.
-  stopLoraMesh(session, false);
   session.parked = true;
   await setSessionNotifications(session, false);
   detachCharacteristicListeners(session);
   session.charImu = null;
-  session.charLoraTx = null;
-  session.charLoraLine = null;
-  session.charLoraStats = null;
   session.charMeshtasticRx = null;
   session.charMeshtasticTx = null;
   session.charMeshtasticStats = null;
@@ -1231,8 +1095,6 @@ async function setCommsNotifications(session: BleBoatSession, enabled: boolean):
   }
   const chars = [
     session.charUwbLine,
-    session.charLoraLine,
-    session.charLoraStats,
     session.charMeshtasticRx,
     session.charMeshtasticStats,
     session.charGpsLine,
@@ -1267,15 +1129,9 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
   }
 }
 
-type GattWriteTarget = "lora" | "uwb" | "boatid" | "type" | "stats" | "meshtastic" | "mtstats";
+type GattWriteTarget = "uwb" | "boatid" | "type" | "meshtastic" | "mtstats";
 
 function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BleGattCharacteristicLike | null {
-  if (target === "lora") {
-    return session.charLoraTx;
-  }
-  if (target === "stats") {
-    return session.charLoraStats;
-  }
   if (target === "meshtastic") {
     return session.charMeshtasticTx;
   }
@@ -1312,453 +1168,6 @@ function encodeMeshtasticSendCmd(dest: string, message: string): ArrayBuffer {
   return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
 }
 
-function clearLoraLog(session: BleBoatSession | null): void {
-  if (session) {
-    session.loraLineLogText = "";
-  }
-  const el = document.querySelector("#lora-line-log");
-  if (el) {
-    el.textContent = "";
-  }
-}
-
-function renderLoraLog(session: BleBoatSession): void {
-  if (session.deviceId !== activeSessionId) {
-    return;
-  }
-  const el = document.querySelector("#lora-line-log");
-  if (!el) {
-    return;
-  }
-  el.textContent = session.loraLineLogText;
-  el.scrollTop = el.scrollHeight;
-}
-
-function parseLoraStatsJson(raw: string): LoraStatsSnapshot | null {
-  try {
-    const data = JSON.parse(raw) as {
-      tx?: { queued?: number; ok?: number; timeout?: number };
-      rx_bad?: number;
-      senders?: Array<{ sig?: string; first?: number; last?: number; missing?: number; rx?: number }>;
-      mesh?: {
-        active?: boolean;
-        state?: string;
-        my_id?: number | null;
-        my_type?: number;
-        tx_ok?: number;
-        tx_fail?: number;
-        rx?: number;
-        collision_yield?: number;
-        msg_tx_ok?: number;
-        msg_tx_fail?: number;
-        msg_rx?: number;
-        peers?: Array<{ id?: number; type?: number; last_ms?: number }>;
-        rx_msgs?: Array<{ from?: number; seq?: number; text?: string; last_ms?: number }>;
-      };
-    };
-    const senders: LoraStatsSender[] = [];
-    if (Array.isArray(data.senders)) {
-      for (const s of data.senders) {
-        if (!s.sig) {
-          continue;
-        }
-        senders.push({
-          sig: s.sig,
-          first: Number(s.first ?? 0),
-          last: Number(s.last ?? 0),
-          missing: Number(s.missing ?? 0),
-          rx: Number(s.rx ?? 0),
-        });
-      }
-    }
-    const meshRaw = data.mesh;
-    const meshState =
-      meshRaw?.state === "listening" || meshRaw?.state === "locked" ? meshRaw.state : "off";
-    const peers: LoraMeshPeer[] = [];
-    if (Array.isArray(meshRaw?.peers)) {
-      for (const p of meshRaw.peers) {
-        if (p.id === undefined) {
-          continue;
-        }
-        peers.push({
-          id: Number(p.id),
-          type: Number(p.type ?? 0),
-          last_ms: Number(p.last_ms ?? 0),
-        });
-      }
-      peers.sort((a, b) => a.id - b.id);
-    }
-    const rx_msgs: LoraMeshRxMsg[] = [];
-    if (Array.isArray(meshRaw?.rx_msgs)) {
-      for (const msg of meshRaw.rx_msgs) {
-        if (msg.from === undefined || !msg.text) {
-          continue;
-        }
-        rx_msgs.push({
-          from: Number(msg.from),
-          seq: Number(msg.seq ?? 0),
-          text: String(msg.text),
-          last_ms: Number(msg.last_ms ?? 0),
-        });
-      }
-    }
-    const myIdRaw = meshRaw?.my_id;
-    return {
-      tx: {
-        queued: Number(data.tx?.queued ?? 0),
-        ok: Number(data.tx?.ok ?? 0),
-        timeout: Number(data.tx?.timeout ?? 0),
-      },
-      rx_bad: Number(data.rx_bad ?? 0),
-      senders,
-      mesh: {
-        active: meshRaw?.active === true,
-        state: meshState,
-        my_id: myIdRaw === null || myIdRaw === undefined ? null : Number(myIdRaw),
-        my_type: Number(meshRaw?.my_type ?? 4),
-        tx_ok: Number(meshRaw?.tx_ok ?? 0),
-        tx_fail: Number(meshRaw?.tx_fail ?? 0),
-        rx: Number(meshRaw?.rx ?? 0),
-        collision_yield: Number(meshRaw?.collision_yield ?? 0),
-        msg_tx_ok: Number(meshRaw?.msg_tx_ok ?? 0),
-        msg_tx_fail: Number(meshRaw?.msg_tx_fail ?? 0),
-        msg_rx: Number(meshRaw?.msg_rx ?? 0),
-        peers,
-        rx_msgs,
-      },
-    };
-  } catch {
-    return null;
-  }
-}
-
-function appendMeshMessageLog(session: BleBoatSession, line: string): void {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return;
-  }
-  const last = session.meshMessageLog[session.meshMessageLog.length - 1];
-  if (last === trimmed) {
-    return;
-  }
-  session.meshMessageLog.push(trimmed);
-  if (session.meshMessageLog.length > 48) {
-    session.meshMessageLog = session.meshMessageLog.slice(-32);
-  }
-  renderLoraMeshRxLog(session);
-}
-
-function mergeMeshRxFromStats(
-  session: BleBoatSession,
-  prev: LoraMeshSnapshot,
-  next: LoraMeshSnapshot,
-): void {
-  for (const msg of next.rx_msgs) {
-    const dup = prev.rx_msgs.some(
-      (p) =>
-        p.from === msg.from &&
-        p.seq === msg.seq &&
-        p.text === msg.text &&
-        p.last_ms === msg.last_ms,
-    );
-    if (!dup) {
-      appendMeshMessageLog(session, `← from ${msg.from} seq ${msg.seq}: ${msg.text}`);
-    }
-  }
-}
-
-function meshAgeMs(session: BleBoatSession, ageAtReceiptMs: number): number {
-  if (session.loraStatsReceivedWallMs <= 0) {
-    return ageAtReceiptMs;
-  }
-  return ageAtReceiptMs + (Date.now() - session.loraStatsReceivedWallMs);
-}
-
-function applyLoraStats(session: BleBoatSession, parsed: LoraStatsSnapshot): void {
-  mergeMeshRxFromStats(session, session.loraStats.mesh, parsed.mesh);
-  session.loraStats = parsed;
-  session.loraStatsReceivedWallMs = Date.now();
-  session.loraMeshRunning = parsed.mesh.active;
-  renderLoraStats(session);
-  renderLoraMesh(session);
-  syncLoraStreamUi(session);
-  syncLoraMeshUi(session);
-}
-
-function ingestLoraStatsChunk(session: BleBoatSession, chunk: string): void {
-  if (!chunk) {
-    return;
-  }
-
-  // BLE read (and lucky single notify) delivers a full JSON object — parse directly.
-  const solo = parseLoraStatsJson(chunk.trim());
-  if (solo) {
-    session.loraStatsNotifyBuf = "";
-    applyLoraStats(session, solo);
-    return;
-  }
-
-  // Multi-chunk notify: 0xFEFE JSON is split into ~200-byte BLE packets.
-  if (chunk.startsWith('{"tx"')) {
-    session.loraStatsNotifyBuf = chunk;
-  } else {
-    session.loraStatsNotifyBuf += chunk;
-  }
-
-  const parsed = parseLoraStatsJson(session.loraStatsNotifyBuf.trim());
-  if (!parsed) {
-    if (session.loraStatsNotifyBuf.length > 512) {
-      console.warn(
-        "LoRa stats JSON reassembly failed",
-        session.name,
-        session.loraStatsNotifyBuf.slice(0, 120),
-        "…",
-      );
-    }
-    if (session.loraStatsNotifyBuf.length > 16384) {
-      session.loraStatsNotifyBuf = "";
-    }
-    return;
-  }
-  session.loraStatsNotifyBuf = "";
-  applyLoraStats(session, parsed);
-}
-
-async function waitForLoraStatsNotify(
-  session: BleBoatSession,
-  baselineWallMs: number,
-  timeoutMs: number,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (session.loraStatsReceivedWallMs > baselineWallMs) {
-      return true;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-  }
-  return false;
-}
-
-async function requestLoraStatsNotify(session: BleBoatSession): Promise<void> {
-  if (!session.charLoraStats) {
-    return;
-  }
-  try {
-    await gattWrite(session, "stats", new TextEncoder().encode("stats=1"));
-  } catch (e) {
-    console.warn("BLE LoRa stats refresh failed", session.name, e);
-  }
-}
-
-/** Sync mesh/stream state from device via chunked BLE notify (not MTU-limited read). */
-async function syncLoraStatsFromDevice(
-  session: BleBoatSession,
-  baselineWallMs = session.loraStatsReceivedWallMs,
-): Promise<void> {
-  if (!session.charLoraStats) {
-    return;
-  }
-  if (await waitForLoraStatsNotify(session, baselineWallMs, 2000)) {
-    return;
-  }
-  await requestLoraStatsNotify(session);
-  if (!(await waitForLoraStatsNotify(session, baselineWallMs, 3000))) {
-    console.warn("LoRa stats notify sync timed out", session.name);
-  }
-}
-
-async function readLoraStatsFromDevice(session: BleBoatSession): Promise<void> {
-  await syncLoraStatsFromDevice(session);
-}
-
-async function writeLoraStreamGate(session: BleBoatSession, active: boolean): Promise<void> {
-  if (!session.charLoraStats) {
-    return;
-  }
-  try {
-    await gattWrite(session, "stats", new TextEncoder().encode(active ? "stream=1" : "stream=0"));
-  } catch (e) {
-    console.warn("BLE LoRa stream gate write failed", session.name, e);
-  }
-}
-
-async function writeLoraMeshGate(session: BleBoatSession, active: boolean): Promise<void> {
-  if (!session.charLoraStats) {
-    return;
-  }
-  try {
-    await gattWrite(session, "stats", new TextEncoder().encode(active ? "mesh=1" : "mesh=0"));
-  } catch (e) {
-    console.warn("BLE LoRa mesh gate write failed", session.name, e);
-  }
-}
-
-function syncLoraTabView(session: BleBoatSession | null): void {
-  const normalPanel = document.querySelector<HTMLElement>("#lora-panel-normal");
-  const meshPanel = document.querySelector<HTMLElement>("#lora-panel-mesh");
-  const meshRow = document.querySelector<HTMLElement>("#lora-view-mesh-row");
-  const directLoRa = hasDirectLoRa(session);
-  const view = session?.loraTabView ?? "normal";
-  if (normalPanel) {
-    normalPanel.hidden = view !== "normal";
-  }
-  if (meshPanel) {
-    meshPanel.hidden = view !== "mesh" || !directLoRa;
-  }
-  if (meshRow) {
-    meshRow.hidden = view !== "normal" || !directLoRa;
-  }
-  if (!directLoRa && session) {
-    session.loraTabView = "normal";
-  }
-  syncMeshUiRefresh(session);
-  syncMeshtasticTabVisibility(session);
-}
-
-function meshSelfLabel(mesh: LoraMeshSnapshot): string {
-  if (!mesh.active) {
-    return "This device: mesh off";
-  }
-  const type = meshTypeLabel(mesh.my_type);
-  if (mesh.state === "listening") {
-    return `This device: listening for peers (claiming ID…) · type ${type}`;
-  }
-  if (mesh.state === "locked" && mesh.my_id !== null) {
-    return `This device: locked mesh ID ${mesh.my_id} · type ${type}`;
-  }
-  return `This device: mesh active · type ${type}`;
-}
-
-function renderLoraMeshRxLog(session: BleBoatSession): void {
-  const el = document.querySelector<HTMLPreElement>("#lora-mesh-rx-log");
-  if (!el || session.deviceId !== activeSessionId) {
-    return;
-  }
-  el.textContent =
-    session.meshMessageLog.length > 0 ? `${session.meshMessageLog.join("\n")}\n` : "";
-}
-
-function renderLoraMesh(session: BleBoatSession): void {
-  if (session.deviceId !== activeSessionId) {
-    return;
-  }
-  const selfEl = document.querySelector("#lora-mesh-self");
-  const statsEl = document.querySelector("#lora-mesh-stats");
-  const tbody = document.querySelector("#lora-mesh-peers-body");
-  const m = session.loraStats.mesh;
-  const myId = m.my_id;
-  if (selfEl) {
-    selfEl.textContent = meshSelfLabel(m);
-  }
-  if (statsEl) {
-    const peerCount = m.peers.filter((p) => myId === null || p.id !== myId).length;
-    statsEl.textContent =
-      `Mesh TX ok: ${m.tx_ok}, fail: ${m.tx_fail}, RX: ${m.rx} · peers: ${peerCount}` +
-      (m.collision_yield > 0 ? ` · yields: ${m.collision_yield}` : "");
-  }
-  if (!tbody) {
-    return;
-  }
-  tbody.textContent = "";
-  for (const p of m.peers) {
-    const tr = document.createElement("tr");
-    const isSelf = myId !== null && p.id === myId;
-    if (isSelf) {
-      tr.classList.add("lora-mesh-peer-self");
-    } else {
-      tr.classList.add("lora-mesh-peer-clickable");
-      tr.dataset["meshPeerId"] = String(p.id);
-      tr.title = "Click to send a message";
-    }
-    for (const cell of [String(p.id), meshTypeLabel(p.type), formatAgo(meshAgeMs(session, p.last_ms))]) {
-      const td = document.createElement("td");
-      td.textContent = cell;
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-  }
-  renderLoraMeshRxLog(session);
-}
-
-async function promptAndSendMeshMessage(session: BleBoatSession, destId: number): Promise<void> {
-  if (!session.charLoraStats) {
-    return;
-  }
-  if (session.loraStats.mesh.state !== "locked") {
-    window.alert("Mesh must be locked (you need a mesh ID) before sending messages.");
-    return;
-  }
-  const text = window.prompt(`Message to mesh ID ${destId}:`, "");
-  if (text === null) {
-    return;
-  }
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return;
-  }
-  if (trimmed.length > 200) {
-    window.alert("Message must be 200 characters or fewer.");
-    return;
-  }
-  try {
-    await gattWrite(
-      session,
-      "stats",
-      new TextEncoder().encode(`mesh_tx=${destId}\n${trimmed}`),
-    );
-    const sentLine = `→ sent to ${destId}: ${trimmed}`;
-    appendMeshMessageLog(session, sentLine);
-    console.info("mesh message queued", { destId, text: trimmed, device: session.name });
-    renderLoraMesh(session);
-  } catch (e) {
-    console.warn("BLE mesh message write failed", session.name, e);
-    window.alert("Failed to send message. Check BLE connection and that mesh is active.");
-  }
-}
-
-function syncMeshUiRefresh(session: BleBoatSession | null): void {
-  if (meshUiRefreshTimer !== null) {
-    clearInterval(meshUiRefreshTimer);
-    meshUiRefreshTimer = null;
-  }
-  const meshActive = session?.loraStats.mesh.active === true || session?.loraMeshRunning === true;
-  if (!meshActive || !session || session.deviceId !== activeSessionId) {
-    return;
-  }
-  meshUiRefreshTimer = setInterval(() => {
-    const active = getActiveSession();
-    if (!active || active.deviceId !== activeSessionId) {
-      return;
-    }
-    if (!active.loraStats.mesh.active && !active.loraMeshRunning) {
-      return;
-    }
-    renderLoraMesh(active);
-  }, 1000);
-}
-
-function syncLoraMeshUi(session: BleBoatSession | null): void {
-  const directLoRa = hasDirectLoRa(session);
-  const meshActive = session?.loraStats.mesh.active === true || session?.loraMeshRunning === true;
-  const startBtn = document.querySelector<HTMLButtonElement>("#lora-mesh-start");
-  const stopBtn = document.querySelector<HTMLButtonElement>("#lora-mesh-stop");
-  if (startBtn) {
-    startBtn.disabled = !session || !directLoRa || meshActive;
-  }
-  if (stopBtn) {
-    stopBtn.disabled = !session || !directLoRa || !meshActive;
-  }
-  syncLoraTabView(session);
-}
-
-function syncLoraTabVisibility(session: BleBoatSession | null): void {
-  const tab = document.querySelector<HTMLElement>("#lora-tab");
-  if (tab) {
-    tab.hidden = !hasDirectLoRa(session);
-  }
-}
 
 function syncMeshtasticTabVisibility(session: BleBoatSession | null): void {
   const tab = document.querySelector<HTMLElement>("#meshtastic-tab");
@@ -2043,7 +1452,7 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
   if (!chunk) {
     return;
   }
-  appendStreamLine(session, "meshtasticLineLogText", chunk);
+  appendStreamLine(session, chunk);
   mergeMeshtasticPeersFromLog(session);
   renderMeshtastic(session);
   syncMeshtasticUiRefresh(session);
@@ -2385,117 +1794,6 @@ function clearMeshtasticLog(session: BleBoatSession | null): void {
   }
 }
 
-function renderLoraStats(session: BleBoatSession): void {
-  if (session.deviceId !== activeSessionId) {
-    return;
-  }
-  const txEl = document.querySelector("#lora-stats-tx");
-  if (txEl) {
-    const t = session.loraStats.tx;
-    txEl.textContent =
-      `Stream TX — queued: ${t.queued}, ok: ${t.ok}, timeout: ${t.timeout} · RX bad: ${session.loraStats.rx_bad}`;
-  }
-  const tbody = document.querySelector("#lora-stats-senders-body");
-  if (!tbody) {
-    return;
-  }
-  tbody.textContent = "";
-  for (const s of session.loraStats.senders) {
-    const tr = document.createElement("tr");
-    for (const cell of [s.sig, String(s.first), String(s.last), String(s.missing), String(s.rx)]) {
-      const td = document.createElement("td");
-      td.textContent = cell;
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
-  }
-}
-
-function renderLoraStatus(session: BleBoatSession): void {
-  if (session.deviceId !== activeSessionId) {
-    return;
-  }
-  const el = document.querySelector("#lora-status");
-  if (!el) {
-    return;
-  }
-  const status = session.loraRadioStatus.trim();
-  el.textContent = status.length > 0 ? `LoRa radio: ${status}` : "LoRa radio: (no status yet)";
-}
-
-function isLoraRxLogLine(trimmed: string): boolean {
-  return trimmed.startsWith("RX ");
-}
-
-function meshLinePeerId(trimmed: string): number | null {
-  const from = trimmed.match(/<< mesh (?:RX|ACK|NACK).* from (\d+)/);
-  if (from) {
-    return Number(from[1]);
-  }
-  return null;
-}
-
-/** Bump peer "last heard" from mesh line traffic when stats notify is delayed. */
-function touchMeshPeerHeard(session: BleBoatSession, peerId: number): void {
-  if (!Number.isFinite(peerId) || peerId <= 0) {
-    return;
-  }
-  let peer = session.loraStats.mesh.peers.find((p) => p.id === peerId);
-  if (!peer) {
-    peer = { id: peerId, type: 0, last_ms: 0 };
-    session.loraStats.mesh.peers.push(peer);
-    session.loraStats.mesh.peers.sort((a, b) => a.id - b.id);
-  } else {
-    peer.last_ms = 0;
-  }
-  session.loraStatsReceivedWallMs = Date.now();
-  if (session.deviceId === activeSessionId) {
-    renderLoraMesh(session);
-  }
-}
-
-function ingestLoraLine(session: BleBoatSession, chunk: string): void {
-  for (const line of chunk.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed.startsWith("! STATUS:")) {
-      session.loraRadioStatus = trimmed.slice("! STATUS:".length).trim();
-      renderLoraStatus(session);
-      continue;
-    }
-    if (
-      trimmed.startsWith(">> mesh TX") ||
-      trimmed.startsWith("<< mesh RX") ||
-      trimmed.startsWith(">> mesh ACK") ||
-      trimmed.startsWith("<< mesh ACK") ||
-      trimmed.startsWith("<< mesh NACK") ||
-      trimmed.startsWith("! mesh TX") ||
-      trimmed.startsWith("! mesh CRC")
-    ) {
-      appendMeshMessageLog(session, trimmed);
-      const peerId = meshLinePeerId(trimmed);
-      if (peerId !== null) {
-        touchMeshPeerHeard(session, peerId);
-      }
-      continue;
-    }
-    if (isLoraRxLogLine(trimmed)) {
-      appendStreamLine(session, "loraLineLogText", `${trimmed}\n`);
-    }
-  }
-}
-
-/** TX/stream/errors are not shown in the LoRa log (RX packets only). */
-function appendLoraLog(_session: BleBoatSession, _chunk: string): void {}
-
-function clearMeshMessageLog(session: BleBoatSession | null): void {
-  if (session) {
-    session.meshMessageLog = [];
-    renderLoraMeshRxLog(session);
-  }
-}
 
 function clearUwbLog(session: BleBoatSession | null): void {
   if (session) {
@@ -2540,10 +1838,8 @@ function renderImuDisplay(session: BleBoatSession): void {
 }
 
 function saveUiToSession(session: BleBoatSession): void {
-  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
   const mtInput = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
-  session.loraTxDraft = loraInput?.value ?? "";
   session.uwbAtDraft = uwbInput?.value ?? "";
   session.meshtasticTxDraft = mtInput?.value ?? "";
   const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
@@ -2556,12 +1852,8 @@ function saveUiToSession(session: BleBoatSession): void {
 }
 
 function loadSessionToUi(session: BleBoatSession): void {
-  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
   const mtInput = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
-  if (loraInput) {
-    loraInput.value = session.loraTxDraft;
-  }
   if (uwbInput) {
     uwbInput.value = session.uwbAtDraft;
   }
@@ -2569,15 +1861,8 @@ function loadSessionToUi(session: BleBoatSession): void {
     mtInput.value = session.meshtasticTxDraft;
   }
   renderImuDisplay(session);
-  renderLoraLog(session);
-  renderLoraStatus(session);
-  renderLoraStats(session);
-  renderLoraMesh(session);
   mergeMeshtasticPeersFromLog(session);
   renderMeshtastic(session);
-  syncLoraStreamUi(session);
-  syncLoraMeshUi(session);
-  syncLoraTabView(session);
   renderGpsDisplay(session);
   renderUwbLog(session);
   updateBleToolbar();
@@ -2592,49 +1877,13 @@ function clearUiPanels(): void {
   setText("imu-temp", imu.temp);
   setText("imu-baro", imu.baro);
   setText("imu-meta", imu.meta);
-  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
   const uwbInput = document.querySelector<HTMLInputElement>("#uwb-at-input");
-  if (loraInput) {
-    loraInput.value = "";
-  }
   if (uwbInput) {
     uwbInput.value = "";
   }
-  const loraStatus = document.querySelector("#lora-status");
-  const loraLog = document.querySelector("#lora-line-log");
   const uwbLog = document.querySelector("#uwb-line-log");
-  if (loraStatus) {
-    loraStatus.textContent = "LoRa radio: connect BLE for status";
-  }
-  if (loraLog) {
-    loraLog.textContent = "";
-  }
   if (uwbLog) {
     uwbLog.textContent = "";
-  }
-  const loraStatsTx = document.querySelector("#lora-stats-tx");
-  const loraStatsBody = document.querySelector("#lora-stats-senders-body");
-  if (loraStatsTx) {
-    loraStatsTx.textContent = "Stream TX — queued: 0, ok: 0, timeout: 0 · RX bad: 0";
-  }
-  if (loraStatsBody) {
-    loraStatsBody.textContent = "";
-  }
-  const meshSelf = document.querySelector("#lora-mesh-self");
-  const meshStats = document.querySelector("#lora-mesh-stats");
-  const meshPeers = document.querySelector("#lora-mesh-peers-body");
-  if (meshSelf) {
-    meshSelf.textContent = "This device: mesh off";
-  }
-  if (meshStats) {
-    meshStats.textContent = "Mesh TX ok: 0 · fail: 0 · RX: 0";
-  }
-  if (meshPeers) {
-    meshPeers.textContent = "";
-  }
-  const meshRxLog = document.querySelector("#lora-mesh-rx-log");
-  if (meshRxLog) {
-    meshRxLog.textContent = "";
   }
   const mtLog = document.querySelector("#meshtastic-line-log");
   const mtPeers = document.querySelector("#meshtastic-peers-body");
@@ -2647,10 +1896,6 @@ function clearUiPanels(): void {
   setText("meshtastic-status", "Meshtastic: connect BLE for status");
   setText("meshtastic-self", "This device: waiting…");
   setText("meshtastic-stats", "TX ok: 0 · fail: 0 · RX: 0");
-  syncLoraStreamUi(null);
-  syncLoraMeshUi(null);
-  syncLoraTabView(null);
-  syncLoraTabVisibility(null);
   syncMeshtasticTabVisibility(null);
   syncMeshtasticUiRefresh(null);
   clearGpsDisplay(null);
@@ -2749,25 +1994,6 @@ function createNotifyHandlers(session: BleBoatSession): void {
     renderImuDisplay(session);
   };
 
-  session.onLoraLineNotify = (ev: Event) => {
-    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
-    const v = ch.value;
-    if (!v || v.byteLength === 0) {
-      return;
-    }
-    const chunk = new TextDecoder().decode(v);
-    ingestLoraLine(session, chunk);
-  };
-
-  session.onLoraStatsNotify = (ev: Event) => {
-    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
-    const v = ch.value;
-    if (!v || v.byteLength === 0) {
-      return;
-    }
-    ingestLoraStatsChunk(session, new TextDecoder().decode(v));
-  };
-
   session.onMeshtasticLineNotify = (ev: Event) => {
     const ch = ev.target as BluetoothRemoteGATTCharacteristic;
     const v = ch.value;
@@ -2833,8 +2059,6 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
   if (!session) {
     return;
   }
-  stopLoraStream(session);
-  stopLoraMesh(session);
   if (activeSessionId === deviceId) {
     saveUiToSession(session);
   }
@@ -2857,239 +2081,6 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
   updateBleToolbar();
 }
 
-function parseLoraTtlMs(): number {
-  const ttlInput = document.querySelector<HTMLInputElement>("#lora-ttl-input");
-  const raw = Number.parseInt(ttlInput?.value ?? "", 10);
-  if (!Number.isFinite(raw) || raw < 100) {
-    return 30000;
-  }
-  return Math.min(raw, 600000);
-}
-
-function parseLoraIntervalMs(): number {
-  const intervalInput = document.querySelector<HTMLInputElement>("#lora-interval-input");
-  const raw = Number.parseInt(intervalInput?.value ?? "", 10);
-  if (!Number.isFinite(raw) || raw < 500) {
-    return 3000;
-  }
-  return Math.min(raw, 600000);
-}
-
-function loraBasePayload(): string {
-  const input = document.querySelector<HTMLInputElement>("#lora-tx-input");
-  return (input?.value ?? "").trim();
-}
-
-function syncLoraStreamUi(session: BleBoatSession | null): void {
-  const meshActive = session?.loraStats.mesh.active === true || session?.loraMeshRunning === true;
-  const streaming = session?.loraStreamRunning === true;
-  const loraSend = document.querySelector<HTMLButtonElement>("#lora-tx-send");
-  const loraInput = document.querySelector<HTMLInputElement>("#lora-tx-input");
-  const ttlInput = document.querySelector<HTMLInputElement>("#lora-ttl-input");
-  const intervalInput = document.querySelector<HTMLInputElement>("#lora-interval-input");
-  const startBtn = document.querySelector<HTMLButtonElement>("#lora-stream-start");
-  const stopBtn = document.querySelector<HTMLButtonElement>("#lora-stream-stop");
-  const statusEl = document.querySelector("#lora-stream-status");
-
-  if (loraSend) {
-    loraSend.disabled = !session || streaming || meshActive;
-  }
-  if (loraInput) {
-    loraInput.disabled = !session || streaming || meshActive;
-  }
-  if (ttlInput) {
-    ttlInput.disabled = !session || streaming || meshActive;
-  }
-  if (intervalInput) {
-    intervalInput.disabled = !session || streaming || meshActive;
-  }
-  if (startBtn) {
-    startBtn.disabled = !session || streaming || meshActive;
-  }
-  if (stopBtn) {
-    stopBtn.disabled = !session || !streaming;
-  }
-  if (statusEl) {
-    if (!session) {
-      statusEl.textContent = "Stream: connect BLE first";
-    } else if (meshActive) {
-      statusEl.textContent = "Stream: disabled (mesh mode active)";
-    } else if (streaming) {
-      statusEl.textContent = `Stream: sending (next #${session.loraStreamSeq})`;
-    } else {
-      statusEl.textContent = "Stream: stopped";
-    }
-  }
-}
-
-function stopLoraMesh(session: BleBoatSession | null, stopOnDevice = true): void {
-  if (!session) {
-    return;
-  }
-  const wasRunning = session.loraMeshRunning || session.loraStats.mesh.active;
-  session.loraMeshRunning = false;
-  session.meshMessageLog = [];
-  if (stopOnDevice && wasRunning) {
-    void writeLoraMeshGate(session, false);
-  }
-  if (session.deviceId === activeSessionId) {
-    renderLoraMeshRxLog(session);
-    syncLoraMeshUi(session);
-    syncLoraStreamUi(session);
-  }
-}
-
-async function startLoraMesh(): Promise<void> {
-  const session = getActiveSession();
-  if (!session || session.loraMeshRunning || session.loraStats.mesh.active) {
-    return;
-  }
-  stopLoraStream(session);
-  session.loraMeshRunning = true;
-  session.loraTabView = "mesh";
-  await writeLoraMeshGate(session, true);
-  await readLoraStatsFromDevice(session);
-  syncLoraMeshUi(session);
-  syncLoraStreamUi(session);
-  renderLoraMesh(session);
-}
-
-function stopLoraMeshActive(): void {
-  stopLoraMesh(getActiveSession());
-}
-
-function stopLoraStream(session: BleBoatSession | null): void {
-  if (!session) {
-    return;
-  }
-  const wasRunning = session.loraStreamRunning;
-  session.loraStreamRunning = false;
-  if (session.loraStreamTimer !== null) {
-    clearTimeout(session.loraStreamTimer);
-    session.loraStreamTimer = null;
-  }
-  if (wasRunning) {
-    void writeLoraStreamGate(session, false);
-    appendLoraLog(session, ">> stream stopped\n");
-  }
-  if (session.deviceId === activeSessionId) {
-    syncLoraStreamUi(session);
-  }
-}
-
-async function queueLoraPayload(session: BleBoatSession, payload: string): Promise<boolean> {
-  if (!payload) {
-    return false;
-  }
-  if (!session.charLoraTx) {
-    await bindSessionCharacteristics(session);
-  }
-  if (!session.charLoraTx) {
-    const msg = "! LoRa TX 0xFEF7 not found on BLE service — reconnect.\n";
-    session.loraRadioStatus = "BLE LoRa TX (0xFEF7) not found";
-    renderLoraStatus(session);
-    appendLoraLog(session, msg);
-    return false;
-  }
-  if (session.loraBusy) {
-    return false;
-  }
-  const ttlMs = parseLoraTtlMs();
-  const body = `TTL=${ttlMs}\n${payload}`;
-  session.loraBusy = true;
-  appendLoraLog(session, `>> queue ttl=${ttlMs} ms: ${payload}\n`);
-  try {
-    const imuWasOn = await pauseImuForComms(session);
-    try {
-      await ensureLoraComms(session);
-      await gattWrite(session, "lora", new TextEncoder().encode(body));
-    } finally {
-      await restoreImuAfterComms(session, imuWasOn);
-    }
-    return true;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    appendLoraLog(session, `! Write error: ${msg}\n`);
-    return false;
-  } finally {
-    session.loraBusy = false;
-    updateBleToolbar();
-  }
-}
-
-async function loraStreamStep(session: BleBoatSession): Promise<void> {
-  if (!session.loraStreamRunning || activeSessionId !== session.deviceId) {
-    return;
-  }
-  const base = loraBasePayload();
-  if (!base) {
-    appendLoraLog(session, "! Stream stopped — message text is empty\n");
-    stopLoraStream(session);
-    return;
-  }
-  const seq = session.loraStreamSeq;
-  session.loraStreamSeq += 1;
-  syncLoraStreamUi(session);
-  const payload = `${base} #${seq}`;
-  await queueLoraPayload(session, payload);
-  if (!session.loraStreamRunning) {
-    return;
-  }
-  const delayMs = parseLoraIntervalMs();
-  session.loraStreamTimer = setTimeout(() => {
-    session.loraStreamTimer = null;
-    void loraStreamStep(session);
-  }, delayMs);
-}
-
-async function startLoraStream(): Promise<void> {
-  const session = getActiveSession();
-  if (!session || session.loraStreamRunning) {
-    return;
-  }
-  if (session.loraStats.mesh.active || session.loraMeshRunning) {
-    return;
-  }
-  stopLoraMesh(session);
-  const base = loraBasePayload();
-  if (!base) {
-    return;
-  }
-  session.loraTxDraft = document.querySelector<HTMLInputElement>("#lora-tx-input")?.value ?? "";
-  session.loraStreamSeq = 1;
-  session.loraStreamRunning = true;
-  syncLoraStreamUi(session);
-  await writeLoraStreamGate(session, true);
-  appendLoraLog(session, `>> stream started (interval ${parseLoraIntervalMs()} ms)\n`);
-  await loraStreamStep(session);
-}
-
-function stopLoraStreamActive(): void {
-  stopLoraStream(getActiveSession());
-}
-
-async function sendLoraTx(): Promise<void> {
-  const session = getActiveSession();
-  if (!session) {
-    const statusEl = document.querySelector("#lora-status");
-    if (statusEl) {
-      statusEl.textContent = "LoRa radio: connect a BLE device first";
-    }
-    return;
-  }
-  if (session.loraStreamRunning) {
-    return;
-  }
-  if (session.loraStats.mesh.active || session.loraMeshRunning) {
-    return;
-  }
-  const payload = loraBasePayload();
-  if (!payload) {
-    return;
-  }
-  session.loraTxDraft = document.querySelector<HTMLInputElement>("#lora-tx-input")?.value ?? "";
-  await queueLoraPayload(session, payload);
-}
 
 async function sendUwbAt(): Promise<void> {
   const session = getActiveSession();
@@ -3150,9 +2141,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     nativeBle: true,
     name: pick.name,
     charImu: null,
-    charLoraTx: null,
-    charLoraLine: null,
-    charLoraStats: null,
     charMeshtasticRx: null,
     charMeshtasticTx: null,
     charMeshtasticStats: null,
@@ -3165,13 +2153,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     boatIdDraft: "",
     deviceType: "boat",
     deviceTypeDraft: "boat",
-    loraLineLogText: "",
-    loraRadioStatus: "",
-    loraStats: defaultLoraStats(),
-    loraStatsReceivedWallMs: 0,
-    loraStatsNotifyBuf: "",
     uwbLineLogText: "",
-    loraTxDraft: "",
     uwbAtDraft: "",
     lastImuWallMs: 0,
     imu: defaultImuDisplay(),
@@ -3179,13 +2161,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     imuNotificationsOn: false,
     commsGen: 0,
     activeUwbGen: 0,
-    loraBusy: false,
-    loraStreamRunning: false,
-    loraStreamSeq: 1,
-    loraStreamTimer: null,
-    loraTabView: "normal",
-    loraMeshRunning: false,
-    meshMessageLog: [],
     meshtasticStats: defaultMeshtasticStats(),
     meshtasticStatsReceivedWallMs: 0,
     meshtasticStatsNotifyBuf: "",
@@ -3196,8 +2171,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
-    onLoraLineNotify: () => {},
-    onLoraStatsNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
@@ -3228,9 +2201,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     nativeBle: false,
     name: dev.name ?? "Boat",
     charImu: null,
-    charLoraTx: null,
-    charLoraLine: null,
-    charLoraStats: null,
     charMeshtasticRx: null,
     charMeshtasticTx: null,
     charMeshtasticStats: null,
@@ -3243,13 +2213,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     boatIdDraft: "",
     deviceType: "boat",
     deviceTypeDraft: "boat",
-    loraLineLogText: "",
-    loraRadioStatus: "",
-    loraStats: defaultLoraStats(),
-    loraStatsReceivedWallMs: 0,
-    loraStatsNotifyBuf: "",
     uwbLineLogText: "",
-    loraTxDraft: "",
     uwbAtDraft: "",
     lastImuWallMs: 0,
     imu: defaultImuDisplay(),
@@ -3257,13 +2221,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     imuNotificationsOn: false,
     commsGen: 0,
     activeUwbGen: 0,
-    loraBusy: false,
-    loraStreamRunning: false,
-    loraStreamSeq: 1,
-    loraStreamTimer: null,
-    loraTabView: "normal",
-    loraMeshRunning: false,
-    meshMessageLog: [],
     meshtasticStats: defaultMeshtasticStats(),
     meshtasticStatsReceivedWallMs: 0,
     meshtasticStatsNotifyBuf: "",
@@ -3274,8 +2231,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
-    onLoraLineNotify: () => {},
-    onLoraStatsNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
@@ -3396,15 +2351,6 @@ export function startRegattaApp(): void {
 
   document.addEventListener("click", (ev) => {
     const target = ev.target as HTMLElement | null;
-    const peerRow = target?.closest<HTMLTableRowElement>("tr.lora-mesh-peer-clickable");
-    if (peerRow?.dataset["meshPeerId"]) {
-      const session = getActiveSession();
-      const destId = Number(peerRow.dataset["meshPeerId"]);
-      if (session && Number.isFinite(destId)) {
-        void promptAndSendMeshMessage(session, destId);
-      }
-      return;
-    }
     const mtPeerRow = target?.closest<HTMLTableRowElement>("tr[data-mt-peer-num]");
     if (mtPeerRow?.dataset["mtPeerNum"]) {
       const session = getActiveSession();
@@ -3418,57 +2364,12 @@ export function startRegattaApp(): void {
     if (!btn) {
       return;
     }
-    if (btn.id === "lora-tx-send") {
-      void sendLoraTx();
-      return;
-    }
-    if (btn.id === "lora-stream-start") {
-      void startLoraStream();
-      return;
-    }
-    if (btn.id === "lora-stream-stop") {
-      stopLoraStreamActive();
-      return;
-    }
-    if (btn.id === "lora-view-mesh") {
-      const session = getActiveSession();
-      if (session) {
-        session.loraTabView = "mesh";
-        syncLoraTabView(session);
-        renderLoraMesh(session);
-      }
-      return;
-    }
-    if (btn.id === "lora-view-normal") {
-      const session = getActiveSession();
-      if (session) {
-        session.loraTabView = "normal";
-        syncLoraTabView(session);
-      }
-      return;
-    }
-    if (btn.id === "lora-mesh-start") {
-      void startLoraMesh();
-      return;
-    }
-    if (btn.id === "lora-mesh-stop") {
-      stopLoraMeshActive();
-      return;
-    }
-    if (btn.id === "lora-mesh-log-clear") {
-      clearMeshMessageLog(getActiveSession());
-      return;
-    }
     if (btn.id === "uwb-at-send") {
       void sendUwbAt();
       return;
     }
     if (btn.id === "uwb-log-clear") {
       clearUwbLog(getActiveSession());
-      return;
-    }
-    if (btn.id === "lora-log-clear") {
-      clearLoraLog(getActiveSession());
       return;
     }
     if (btn.id === "meshtastic-roster-refresh") {
@@ -3518,10 +2419,6 @@ export function startRegattaApp(): void {
       void sendUwbAt();
       return;
     }
-    if (target instanceof HTMLInputElement && target.id === "lora-tx-input") {
-      void sendLoraTx();
-      return;
-    }
     if (target instanceof HTMLInputElement && target.id === "meshtastic-tx-input") {
       const session = getActiveSession();
       if (session) {
@@ -3535,10 +2432,6 @@ export function startRegattaApp(): void {
       return;
     }
     const target = ev.target;
-    if (target instanceof HTMLInputElement && target.id === "lora-tx-input") {
-      session.loraTxDraft = target.value;
-      return;
-    }
     if (target instanceof HTMLInputElement && target.id === "meshtastic-tx-input") {
       session.meshtasticTxDraft = target.value;
       return;

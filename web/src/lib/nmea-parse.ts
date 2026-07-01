@@ -173,6 +173,25 @@ export function formatUtc(time: string | null, date: string | null): string {
   return [date, time].filter(Boolean).join(" ");
 }
 
+/** PPS pulse count from firmware $PREGPPS. */
+export function formatPpsCount(count: number | null): string {
+  if (count === null || !Number.isFinite(count)) {
+    return "—";
+  }
+  return String(count);
+}
+
+/** Interval between last two PPS edges (~1,000,000 µs when locked). */
+export function formatPpsIntervalUs(deltaUs: number | null): string {
+  if (deltaUs === null || !Number.isFinite(deltaUs) || deltaUs <= 0) {
+    return "—";
+  }
+  const sec = deltaUs / 1_000_000;
+  const ppm = Math.round((deltaUs - 1_000_000) * 1000 / 1_000_000);
+  const ppmNote = Math.abs(ppm) <= 5000 ? ` · ${ppm >= 0 ? "+" : ""}${ppm} ppm` : "";
+  return `${sec.toFixed(6)} s (${Math.round(deltaUs)} µs)${ppmNote}`;
+}
+
 export function openStreetMapUrl(lat: number, lon: number, zoom = 16): string {
   return `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=${zoom}/${lat}/${lon}`;
 }
@@ -419,7 +438,6 @@ export function applyNmeaLine(fix: GpsFix, rawLine: string): GpsFix {
   if (line.startsWith("$PREGPPS,")) {
     const fields = line.split(",");
     applyPregpps(fix, fields);
-    fix.updatedAtMs = performance.now();
     return fix;
   }
   if (!nmeaChecksumOk(line)) {

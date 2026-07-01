@@ -6,6 +6,7 @@ set(regattaone_srcs
     "meshtastic_uart.c"
     "meshtastic_client.c"
     "gps_nmea.c"
+    "gps_pps.c"
     "i2c_bus_mux.c"
     "regattaone-laser.c"
     "sen0140_10dof.c"

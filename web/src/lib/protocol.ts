@@ -5,18 +5,6 @@ export const BLE_SERVICE_UUID = "0000fef0-0000-1000-8000-00805f9b34fb";
 /** Notify: binary IMU packet (`sen0140_ble_imu_pkt_t`, 42 bytes v2). */
 export const BLE_IMU_CHAR_UUID = "0000fef1-0000-1000-8000-00805f9b34fb";
 
-/**
- * Write LoRa TX request (SX1262): optional `TTL=<ms>\n` prefix, then UTF-8 payload.
- * Firmware queues with CAD/CSMA backoff; events notify on FEF8.
- */
-export const BLE_LORA_TX_CHAR_UUID = "0000fef7-0000-1000-8000-00805f9b34fb";
-/** Notify: LoRa RX, CRC errors, TX queue/CAD events, and `! STATUS:` radio health. */
-export const BLE_LORA_LINE_CHAR_UUID = "0000fef8-0000-1000-8000-00805f9b34fb";
-/**
- * Read/notify: LoRa session stats + mesh roster JSON.
- * Write `stream=1`/`0`, `mesh=1`/`0`, `stats=1` (refresh notify), or `mesh_tx=<id>\\n<text>`.
- */
-export const BLE_LORA_STATS_CHAR_UUID = "0000fefe-0000-1000-8000-00805f9b34fb";
 /** Notify: UTF-8 lines from RYUW122 UART. */
 export const BLE_UWB_LINE_CHAR_UUID = "0000fef9-0000-1000-8000-00805f9b34fb";
 /** Write UTF-8 AT command to RYUW122 (firmware appends CRLF if missing). */

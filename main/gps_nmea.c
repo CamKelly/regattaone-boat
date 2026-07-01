@@ -5,6 +5,7 @@
 #if CONFIG_REGATTAONE_GPS_ENABLE
 
 #include "ble_sen0140.h"
+#include "gps_pps.h"
 
 #include "driver/gpio.h"
 #include "driver/uart.h"
@@ -121,6 +122,14 @@ esp_err_t gps_nmea_start(void)
 
     ESP_LOGI(TAG, "UART%d active: TX=GPIO%d RX=GPIO%d @ %d baud (NMEA → BLE 0xFEFD)",
              CONFIG_GPS_UART_PORT_NUM, CONFIG_GPS_UART_TX_GPIO, CONFIG_GPS_UART_RX_GPIO, CONFIG_GPS_UART_BAUD);
+
+    if (CONFIG_GPS_PPS_GPIO >= 0) {
+        err = gps_pps_start();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "PPS GPIO%d: %s", CONFIG_GPS_PPS_GPIO, esp_err_to_name(err));
+        }
+    }
+
     return ESP_OK;
 }
 

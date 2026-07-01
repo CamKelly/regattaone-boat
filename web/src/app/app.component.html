@@ -139,140 +139,10 @@
             <pre id="uwb-line-log" class="ble-log uwb-line-log" aria-live="polite"></pre>
           </nz-tab>
 
-          <nz-tab nzTitle="LoRa · 0xFEF7" id="lora-tab" hidden>
-            <div class="lora-view-toggle-row" id="lora-view-mesh-row">
-              <button nz-button nzType="default" type="button" id="lora-view-mesh">Mesh roster</button>
-            </div>
-            <div id="lora-panel-normal">
-            <p id="lora-status" class="tab-hint">LoRa radio: connect BLE for status</p>
-            <p class="tab-hint">
-              TX is queued with CAD (listen-before-talk) and TTL expiry. Payloads use
-              <code>TTL=&lt;ms&gt;</code> then a newline, then UTF-8. The log below shows
-              received packets only (from <code>0xFEF8</code>); radio status is above.
-            </p>
-            <div nz-row [nzGutter]="8" class="uwb-input-row">
-              <div nz-col [nzFlex]="'auto'">
-                <input
-                  nz-input
-                  id="lora-tx-input"
-                  type="text"
-                  spellcheck="false"
-                  autocomplete="off"
-                  placeholder="Hello LoRa"
-                />
-              </div>
-              <div nz-col [nzFlex]="'none'">
-                <input
-                  nz-input
-                  id="lora-ttl-input"
-                  type="number"
-                  min="100"
-                  max="600000"
-                  step="1000"
-                  class="lora-ttl-input"
-                  title="Time-to-live (ms) for queued TX"
-                  aria-label="LoRa TX TTL milliseconds"
-                  value="30000"
-                />
-              </div>
-              <div nz-col [nzFlex]="'none'">
-                <button nz-button nzType="primary" type="button" id="lora-tx-send">Send</button>
-              </div>
-            </div>
-            <div nz-row [nzGutter]="8" class="uwb-input-row lora-stream-row">
-              <div nz-col [nzFlex]="'none'">
-                <label class="field-label lora-interval-label" for="lora-interval-input">Interval (ms)</label>
-                <input
-                  nz-input
-                  id="lora-interval-input"
-                  type="number"
-                  min="500"
-                  max="600000"
-                  step="500"
-                  class="lora-interval-input"
-                  title="Delay between sequenced messages"
-                  aria-label="LoRa stream interval milliseconds"
-                  value="3000"
-                />
-              </div>
-              <div nz-col [nzFlex]="'none'">
-                <button nz-button nzType="primary" type="button" id="lora-stream-start">Start sending</button>
-              </div>
-              <div nz-col [nzFlex]="'none'">
-                <button nz-button nzDanger type="button" id="lora-stream-stop" disabled>Stop sending</button>
-              </div>
-            </div>
-            <p id="lora-stream-status" class="tab-hint" aria-live="polite">Stream: stopped</p>
-            <h3 class="field-label">Session stats (0xFEFE)</h3>
-            <p id="lora-stats-tx" class="tab-hint" aria-live="polite">
-              Stream TX — queued: 0, ok: 0, timeout: 0 · RX bad: 0
-            </p>
-            <div class="lora-stats-table-wrap">
-              <table class="lora-stats-table" aria-label="LoRa per-sender receive stats">
-                <thead>
-                  <tr>
-                    <th>Sender</th>
-                    <th>First #</th>
-                    <th>Last #</th>
-                    <th>Missing</th>
-                    <th>RX</th>
-                  </tr>
-                </thead>
-                <tbody id="lora-stats-senders-body"></tbody>
-              </table>
-            </div>
-            <div class="log-header">
-              <label class="field-label" for="lora-line-log">Received</label>
-              <button nz-button nzType="default" nzSize="small" type="button" id="lora-log-clear">
-                Clear
-              </button>
-            </div>
-            <pre id="lora-line-log" class="ble-log lora-line-log" aria-live="polite"></pre>
-            </div>
-            <div id="lora-panel-mesh" class="lora-panel-mesh" hidden>
-              <div class="lora-view-toggle-row">
-                <button nz-button nzType="default" type="button" id="lora-view-normal">Send &amp; stream</button>
-              </div>
-              <h3 class="field-label">Democratic mesh IDs</h3>
-              <p class="tab-hint">
-                Ephemeral 16-bit IDs via LoRa heartbeats (RAM only — cleared on power cycle or stop).
-              </p>
-              <div nz-row [nzGutter]="8" class="lora-stream-row">
-                <div nz-col [nzFlex]="'none'">
-                  <button nz-button nzType="primary" type="button" id="lora-mesh-start">Start mesh</button>
-                </div>
-                <div nz-col [nzFlex]="'none'">
-                  <button nz-button nzDanger type="button" id="lora-mesh-stop" disabled>Stop mesh</button>
-                </div>
-              </div>
-              <p id="lora-mesh-self" class="tab-hint" aria-live="polite">This device: mesh off</p>
-              <p id="lora-mesh-stats" class="tab-hint" aria-live="polite">Mesh TX ok: 0 · fail: 0 · RX: 0</p>
-              <div class="lora-stats-table-wrap">
-                <table class="lora-stats-table" aria-label="LoRa mesh peer roster">
-                  <thead>
-                    <tr>
-                      <th>Mesh ID</th>
-                      <th>Type</th>
-                      <th>Last heard</th>
-                    </tr>
-                  </thead>
-                  <tbody id="lora-mesh-peers-body"></tbody>
-                </table>
-              </div>
-              <div class="log-header">
-                <label class="field-label" for="lora-mesh-rx-log">Messages for this device</label>
-                <button nz-button nzType="default" nzSize="small" type="button" id="lora-mesh-log-clear">
-                  Clear
-                </button>
-              </div>
-              <pre id="lora-mesh-rx-log" class="ble-log lora-line-log" aria-live="polite"></pre>
-            </div>
-          </nz-tab>
-
           <nz-tab nzTitle="Meshtastic · 0xFEE5" id="meshtastic-tab" hidden>
             <p id="meshtastic-status" class="tab-hint">Meshtastic: connect BLE for status</p>
             <p class="tab-hint">
-              LoRa via companion ESP32 (UART PROTO). Node roster on <code>0xFEE7</code>;
+              Meshtastic radio on companion ESP32 (UART PROTO). Node roster on <code>0xFEE7</code>;
               line log on <code>0xFEE5</code>; send with <code>0xFEE6</code>
               (<code>send=&lt;nodeNum&gt;\n&lt;text&gt;</code>). Use <strong>Refresh roster</strong>
               to re-fetch nodes (<code>config=1</code> then <code>stats=1</code>).
@@ -408,6 +278,18 @@
                 <div class="gps-cell">
                   <span class="gps-cell-label">Altitude</span>
                   <span id="gps-altitude" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">PPS pulses</span>
+                  <span id="gps-pps-count" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell">
+                  <span class="gps-cell-label">PPS last edge</span>
+                  <span id="gps-pps-last" class="gps-cell-value">—</span>
+                </div>
+                <div class="gps-cell gps-cell--wide">
+                  <span class="gps-cell-label">PPS interval</span>
+                  <span id="gps-pps-interval" class="gps-cell-value">—</span>
                 </div>
               </div>
             </div>

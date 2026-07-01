@@ -403,7 +403,8 @@ menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
         default 21
         depends on REGATTAONE_GPS_ENABLE
         help
-            Optional 1 Hz pulse-per-second. Reserved for future PPS/timebase support.
+            Optional 1 Hz pulse-per-second input (rising edge). When wired, firmware
+            emits $PREGPPS lines on BLE 0xFEFD alongside NMEA. Set -1 if unwired.
 
     config GPS_BOOT_DELAY_MS
         int "Delay after UART init before first read (ms)"
