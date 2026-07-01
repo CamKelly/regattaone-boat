@@ -110,6 +110,10 @@ void app_main(void)
 
     i2c_bus_mux_init();
 
+#if CONFIG_REGATTAONE_SC16IS752_ENABLE
+    sc16is752_prepare_reset();
+#endif
+
     esp_err_t err;
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
     err = sen0140_board_init();

@@ -278,33 +278,37 @@ static bool mag_try_ak8963_at(uint8_t addr)
     return true;
 }
 
-static void i2c_log_scan(void)
+static void i2c_log_full_scan(void)
 {
-    char buf[160];
-    size_t n = 0;
-    bool any = false;
-    int ret = snprintf(buf, sizeof(buf), "I2C scan (7-bit addrs that ACK):");
-    if (ret > 0) {
-        n = (size_t)ret;
+    if (s_bus == NULL) {
+        return;
     }
-    for (unsigned addr = 0x08; addr < 0x78 && n + 5 < sizeof(buf); addr++) {
-        /* Yield periodically; do not call esp_task_wdt_reset() from app_main — it is often
-         * not subscribed to the task WDT ("task not found") and does not help here. */
+    ESP_LOGI(TAG, "I2C full scan SDA=GPIO%d SCL=GPIO%d (7-bit 0x08..0x77):", (int)SEN0140_I2C_SDA_GPIO,
+             (int)SEN0140_I2C_SCL_GPIO);
+    unsigned count = 0;
+    for (unsigned addr = 0x08; addr < 0x78; addr++) {
         if ((addr & 0x0fU) == 0x08U) {
             vTaskDelay(pdMS_TO_TICKS(1));
         }
         if (i2c_master_probe(s_bus, addr, I2C_SCAN_PROBE_TIMEOUT_MS) == ESP_OK) {
-            any = true;
-            ret = snprintf(buf + n, sizeof(buf) - n, " 0x%02x", addr);
-            if (ret > 0) {
-                n += (size_t)ret;
-            }
+            ESP_LOGI(TAG, "  0x%02x", addr);
+            count++;
         }
     }
-    if (!any && n + 8 < sizeof(buf)) {
-        (void)snprintf(buf + n, sizeof(buf) - n, " (none)");
+    if (count == 0U) {
+        ESP_LOGI(TAG, "I2C full scan: no devices ACK'd");
+    } else {
+        ESP_LOGI(TAG, "I2C full scan: %u device(s)", count);
     }
-    ESP_LOGI(TAG, "%s", buf);
+}
+
+void sen0140_i2c_log_full_scan(void)
+{
+#if CONFIG_REGATTAONE_SEN0140_ENABLE
+    i2c_log_full_scan();
+#else
+    ESP_LOGI(TAG, "I2C full scan skipped (SEN0140 disabled — no bus)");
+#endif
 }
 
 /** Right after bus bring-up: distinguish NACK / timeout / invalid state from “silent” failures. */
@@ -352,8 +356,7 @@ static void mag_bus_init(void)
         return;
     }
 
-    ESP_LOGW(TAG, "Magnetometer: no known mag chip found (see I2C scan below)");
-    i2c_log_scan();
+    ESP_LOGW(TAG, "Magnetometer: no known mag chip found");
 }
 
 typedef struct {
@@ -615,9 +618,11 @@ esp_err_t sen0140_board_init(void)
                  "Wiring to D6/D7 is a different SoC pair and will fail every probe.");
 #endif
         ESP_LOGE(TAG, "No SEN0140 sensors responded — fix I2C pins, wiring, or power (or disable SEN0140 in menuconfig)");
+        i2c_log_full_scan();
         return ESP_ERR_NOT_FOUND;
     }
 
+    i2c_log_full_scan();
     return ESP_OK;
 #endif /* CONFIG_REGATTAONE_SEN0140_ENABLE */
 }

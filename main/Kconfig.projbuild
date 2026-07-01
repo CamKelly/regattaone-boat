@@ -292,9 +292,14 @@ menu "RegattaOne — SC16IS752 (I2C dual-UART bridge)"
         depends on REGATTAONE_SC16IS752_ENABLE && !SC16IS752_USE_SEN0140_I2C_PINS
 
     config SC16IS752_I2C_ADDR
-        hex "7-bit I2C address (A1=A0=0 → 0x48)"
-        default 0x48
+        hex "7-bit I2C address (CJMCU: A0G A1G → 0x4D)"
+        default 0x4D
         depends on REGATTAONE_SC16IS752_ENABLE
+        help
+            CJMCU-752 with A0/A1 tied only to VDD or GND:
+            0x48 (both 3V3), 0x49 (A0 GND A1 3V3), 0x4C (A0 3V3 A1 GND),
+            0x4D (both GND — common when both straps go to GND).
+            NOT the sequential 0x48–0x4B table from some datasheet summaries.
 
     config SC16IS752_CRYSTAL_HZ
         int "External crystal frequency (Hz)"

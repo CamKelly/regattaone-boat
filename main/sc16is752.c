@@ -38,6 +38,11 @@ static const char *TAG = "sc16is752";
 #define SC16IS752_IER_RX 0x01U
 #define SC16IS752_LSR_DR 0x01U
 #define SC16IS752_TX_FIFO_DEPTH 64U
+#define SC16IS752_ADDR_BASE 0x48U
+/** CJMCU-752: A0/A1 tied to VDD or VSS only → 0x48, 0x49, 0x4C, 0x4D (not 0x48–0x4B sequential). */
+static const uint8_t sc16is752_probe_addrs[] = { 0x48, 0x49, 0x4C, 0x4D };
+#define SC16IS752_PROBE_ADDR_COUNT (sizeof(sc16is752_probe_addrs) / sizeof(sc16is752_probe_addrs[0]))
+#define SC16IS752_SCAN_TIMEOUT_MS 40
 
 static i2c_master_bus_handle_t s_bus;
 static i2c_master_dev_handle_t s_dev;
@@ -62,7 +67,7 @@ static esp_err_t sc16is752_reg_read(sc16is752_channel_t ch, uint8_t reg, uint8_t
     return i2c_master_transmit_receive(s_dev, &sub, 1, val, 1, SC16IS752_XFER_TIMEOUT_MS);
 }
 
-static void sc16is752_hw_reset(void)
+static void sc16is752_reset_gpio_init(void)
 {
 #if CONFIG_SC16IS752_RESET_GPIO >= 0
     const gpio_num_t nrst = (gpio_num_t)CONFIG_SC16IS752_RESET_GPIO;
@@ -75,13 +80,21 @@ static void sc16is752_hw_reset(void)
     };
     ESP_ERROR_CHECK(gpio_config(&io));
     gpio_set_level(nrst, 1);
+    ESP_LOGI(TAG, "RESET GPIO%d → HIGH (out of reset)", CONFIG_SC16IS752_RESET_GPIO);
     vTaskDelay(pdMS_TO_TICKS(10));
+#endif
+}
+
+static void sc16is752_reset_pulse(void)
+{
+#if CONFIG_SC16IS752_RESET_GPIO >= 0
+    const gpio_num_t nrst = (gpio_num_t)CONFIG_SC16IS752_RESET_GPIO;
     ESP_LOGI(TAG, "RESET pulse GPIO%d (%ums low)", CONFIG_SC16IS752_RESET_GPIO,
              CONFIG_SC16IS752_RESET_PULSE_MS);
     gpio_set_level(nrst, 0);
     vTaskDelay(pdMS_TO_TICKS(CONFIG_SC16IS752_RESET_PULSE_MS));
     gpio_set_level(nrst, 1);
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(pdMS_TO_TICKS(10));
 #endif
 }
 
@@ -170,6 +183,58 @@ static esp_err_t sc16is752_irq_init(void)
     return ESP_OK;
 }
 
+/** Probe CJMCU-752 strap addresses (A0/A1 → VDD or GND). */
+static void sc16is752_log_addr_scan(void)
+{
+    char buf[96];
+    size_t n = 0;
+    bool any = false;
+    int ret = snprintf(buf, sizeof(buf), "SC16IS752 addr scan ACK:");
+    if (ret > 0) {
+        n = (size_t)ret;
+    }
+    for (unsigned i = 0; i < SC16IS752_PROBE_ADDR_COUNT && n + 6 < sizeof(buf); i++) {
+        const unsigned addr = sc16is752_probe_addrs[i];
+        if (i2c_master_probe(s_bus, addr, SC16IS752_SCAN_TIMEOUT_MS) == ESP_OK) {
+            any = true;
+            ret = snprintf(buf + n, sizeof(buf) - n, " 0x%02x", addr);
+            if (ret > 0) {
+                n += (size_t)ret;
+            }
+        }
+    }
+    if (!any && n + 8 < sizeof(buf)) {
+        (void)snprintf(buf + n, sizeof(buf) - n, " (none)");
+    }
+    ESP_LOGI(TAG, "%s (menuconfig=0x%02x)", buf, CONFIG_SC16IS752_I2C_ADDR);
+    if (!any) {
+        ESP_LOGW(TAG,
+                 "No ACK at 0x48/49/4C/4D — check VCC/GND, SDA/SCL, I2C/SPI→3V3, RESET; "
+                 "CJMCU straps: 0x48=A0V A1V | 0x49=A0G A1V | 0x4C=A0V A1G | 0x4D=A0G A1G");
+    }
+}
+
+/** Full 7-bit address scan (0x08..0x77), one line per ACK. */
+static void sc16is752_log_full_scan(void)
+{
+    ESP_LOGI(TAG, "I2C full scan (7-bit 0x08..0x77):");
+    unsigned count = 0;
+    for (unsigned addr = 0x08; addr < 0x78; addr++) {
+        if ((addr & 0x0fU) == 0x08U) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        if (i2c_master_probe(s_bus, addr, SC16IS752_SCAN_TIMEOUT_MS) == ESP_OK) {
+            ESP_LOGI(TAG, "  0x%02x", addr);
+            count++;
+        }
+    }
+    if (count == 0U) {
+        ESP_LOGI(TAG, "I2C full scan: no devices ACK'd");
+    } else {
+        ESP_LOGI(TAG, "I2C full scan: %u device(s)", count);
+    }
+}
+
 static esp_err_t sc16is752_bus_attach(void)
 {
 #if CONFIG_SC16IS752_USE_SEN0140_I2C_PINS && CONFIG_REGATTAONE_SEN0140_ENABLE
@@ -204,6 +269,11 @@ static esp_err_t sc16is752_bus_attach(void)
     ESP_LOGI(TAG, "I2C bus new: SDA=GPIO%d SCL=GPIO%d", sda, scl);
 #endif
 
+    sc16is752_log_addr_scan();
+#if !(CONFIG_SC16IS752_USE_SEN0140_I2C_PINS && CONFIG_REGATTAONE_SEN0140_ENABLE)
+    sc16is752_log_full_scan();
+#endif
+
     const i2c_device_config_t dev_cfg = {
         .device_address = CONFIG_SC16IS752_I2C_ADDR,
         .scl_speed_hz = SC16IS752_I2C_FREQ_HZ,
@@ -218,15 +288,23 @@ static esp_err_t sc16is752_bus_attach(void)
     return ESP_OK;
 }
 
+void sc16is752_prepare_reset(void)
+{
+    sc16is752_reset_gpio_init();
+}
+
 esp_err_t sc16is752_init(void)
 {
     if (s_ready) {
         return ESP_OK;
     }
 
+    /* Drive RESET high before I2C probe — GPIO12 floats at boot and holds chip in reset. */
+    sc16is752_reset_gpio_init();
+
     ESP_RETURN_ON_ERROR(sc16is752_bus_attach(), TAG, "bus");
 
-    sc16is752_hw_reset();
+    sc16is752_reset_pulse();
 
     ESP_RETURN_ON_ERROR(sc16is752_irq_init(), TAG, "irq");
 
@@ -324,6 +402,10 @@ bool sc16is752_ready(void)
 }
 
 #else
+
+void sc16is752_prepare_reset(void)
+{
+}
 
 esp_err_t sc16is752_init(void)
 {

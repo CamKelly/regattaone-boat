@@ -88,21 +88,20 @@ In I²C mode:
 | **A0/CS** | Address bit **A0** |
 | **A1/SI** | Address bit **A1** |
 
-For a **single** board on the bus, tie both low:
-
-| Pin | Connect to |
-| --- | ---------- |
-| **A0/CS** | **GND** |
-| **A1/SI** | **GND** |
-
-**7-bit I²C address: `0x48`**
+For a **single** board on the bus with **A0/A1 tied only to 3V3 or GND** (typical CJMCU wiring):
 
 | A1 | A0 | 7-bit address |
 | -- | -- | ------------- |
-| 0 | 0 | **0x48** |
-| 0 | 1 | 0x49 |
-| 1 | 0 | 0x4A |
-| 1 | 1 | 0x4B |
+| 3V3 | 3V3 | **0x48** |
+| 3V3 | GND | **0x49** |
+| GND | 3V3 | **0x4C** |
+| GND | GND | **0x4D** |
+
+**Common mistake:** both **A0** and **A1** to **GND** is **0x4D**, not 0x48. Our Freenove Option A doc uses both GND → set firmware to **0x4D**.
+
+The chip can also use **SCL** or **SDA** as strap levels (16 addresses total); see the NXP SC16IS752 datasheet Table 32 if you strap to bus lines.
+
+Legacy shorthand (A1/A0 as binary 0–3 → 0x48–0x4B) appears in some summaries — **CJMCU-752 boards follow the VDD/VSS table above**, not 0x48 for “both low”.
 
 ### Unused in I²C mode
 
@@ -191,8 +190,8 @@ Wire SC16IS752 **SDA/SCL** to the same pins as the SEN0140 bus. Address **0x48**
 | **SDA/VSS** | **10** (left) | **10** |
 | **SCL/SCLK** | **11** (left) | **11** |
 | **I2C/SPI** | **3V3** (left) | I²C mode |
-| **A0/CS** | **GND** | address **0x48** |
-| **A1/SI** | **GND** | address **0x48** |
+| **A0/CS** | **GND** | address **0x4D** |
+| **A1/SI** | **GND** | address **0x4D** |
 | **NC/SO** | *(no wire)* | — |
 | **IRQ** | **7** (left) | **7** |
 | **RESET** | **12** (left) | **12** *(optional)* |

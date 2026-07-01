@@ -39,6 +39,8 @@ esp_err_t sen0140_board_init(void);
  * `ESP_ERR_NOT_FOUND` but the bus was created). Cast to `i2c_master_bus_handle_t`.
  */
 void *sen0140_i2c_bus_handle(void);
+/** Log every ACK on SDA/SCL (0x08..0x77) to the serial monitor. Requires bus from `sen0140_board_init`. */
+void sen0140_i2c_log_full_scan(void);
 void sen0140_read_sample(sen0140_sample_t *out);
 void sen0140_print_sample_human(const sen0140_sample_t *s);
 void sen0140_print_sample_csv(const sen0140_sample_t *s);
