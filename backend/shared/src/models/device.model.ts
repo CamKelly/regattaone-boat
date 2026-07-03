@@ -4,18 +4,17 @@ import { GeoPoint } from './geo-point.model';
 export type DeviceKind = 'anchor' | 'tag';
 
 /**
- * Anchor subtypes:
- * - port: port-side mark
- * - starboard: starboard-side mark
- * - fixed_dgps_mark: fixed differential GPS mark with exact lat/lng
- * - waypoint: race course waypoint
- * - boat: a boat acting as an anchor device
+ * BLE / firmware device type (0xFEFC). SC16IS752 routing when bridge enabled:
+ *   UART A — anchor RYUW122
+ *   UART B — tag RYUW122
  */
 export type DeviceType =
   | 'port'
+  | 'port_anchor'
   | 'starboard'
-  | 'fixed_dgps_mark'
+  | 'starboard_anchor'
   | 'waypoint'
+  | 'waypoint_anchor'
   | 'boat';
 
 export interface DeviceTimestamps {
@@ -38,17 +37,15 @@ export interface TagDevice extends DeviceBase {
 export interface AnchorDevice extends DeviceBase {
   kind: 'anchor';
   anchorType: DeviceType;
-  /** Required for fixed_dgps_mark; optional for other anchor types. */
   position?: GeoPoint;
 }
 
 export type Device = TagDevice | AnchorDevice;
 
 export const ANCHOR_TYPES: readonly DeviceType[] = [
-  'port',
-  'starboard',
-  'fixed_dgps_mark',
-  'waypoint',
+  'port_anchor',
+  'starboard_anchor',
+  'waypoint_anchor',
   'boat',
 ] as const;
 
@@ -62,6 +59,19 @@ export function isTagDevice(device: Device): device is TagDevice {
   return device.kind === 'tag';
 }
 
-export function anchorTypeRequiresPosition(anchorType: DeviceType): boolean {
-  return anchorType === 'fixed_dgps_mark';
+export function deviceTypeHasAnchor(type: DeviceType): boolean {
+  return (
+    type === 'port_anchor' ||
+    type === 'starboard_anchor' ||
+    type === 'waypoint_anchor' ||
+    type === 'boat'
+  );
+}
+
+export function deviceTypeHasTag(type: DeviceType): boolean {
+  return type !== 'boat';
+}
+
+export function anchorTypeRequiresPosition(_anchorType: DeviceType): boolean {
+  return false;
 }

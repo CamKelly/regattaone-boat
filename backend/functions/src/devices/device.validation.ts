@@ -3,8 +3,6 @@ import {
   DeviceType,
   Device,
   DeviceKind,
-  anchorTypeRequiresPosition,
-  isValidGeoPoint,
 } from '@regattaone/shared';
 
 export interface DeviceValidationResult {
@@ -18,10 +16,9 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isAnchorType(value: unknown): value is DeviceType {
   return (
-    value === 'port' ||
-    value === 'starboard' ||
-    value === 'fixed_dgps_mark' ||
-    value === 'waypoint' ||
+    value === 'port_anchor' ||
+    value === 'starboard_anchor' ||
+    value === 'waypoint_anchor' ||
     value === 'boat'
   );
 }
@@ -58,10 +55,6 @@ export function validateDevicePayload(data: unknown): DeviceValidationResult {
   if (record['kind'] === 'anchor') {
     if (!isAnchorType(record['anchorType'])) {
       errors.push('Anchor devices require a valid anchorType.');
-    } else if (anchorTypeRequiresPosition(record['anchorType'])) {
-      if (!isValidGeoPoint(record['position'] as AnchorDevice['position'])) {
-        errors.push('fixed_dgps_mark anchors require a valid latitude and longitude.');
-      }
     }
   }
 

@@ -204,15 +204,19 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         default DEVICE_DEFAULT_TYPE_BOAT
 
         config DEVICE_DEFAULT_TYPE_PORT
-            bool "Port"
+            bool "Port (tag only, UART B)"
+        config DEVICE_DEFAULT_TYPE_PORT_ANCHOR
+            bool "Port + anchor (tag B, anchor A)"
         config DEVICE_DEFAULT_TYPE_STARBOARD
-            bool "Starboard"
-        config DEVICE_DEFAULT_TYPE_FIXED_DGPS_MARK
-            bool "Fixed DGPS mark"
+            bool "Starboard (tag only, UART B)"
+        config DEVICE_DEFAULT_TYPE_STARBOARD_ANCHOR
+            bool "Starboard + anchor (tag B, anchor A)"
         config DEVICE_DEFAULT_TYPE_WAYPOINT
-            bool "Waypoint"
+            bool "Waypoint (tag only, UART B)"
+        config DEVICE_DEFAULT_TYPE_WAYPOINT_ANCHOR
+            bool "Waypoint + anchor (tag B, anchor A)"
         config DEVICE_DEFAULT_TYPE_BOAT
-            bool "Boat"
+            bool "Boat (anchor only, UART A)"
     endchoice
 
     config RYUW122_UART_TX_GPIO
@@ -257,6 +261,14 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         default 100
         help
             How long to hold NRST low during boot reset. 50–200 ms is typical.
+
+    config RYUW122_CPIN
+        string "UWB network AES key (32 hex digits, AT+CPIN)"
+        default "524547415454414F4E31A5C9D2E7B6F0"
+        depends on REGATTAONE_RYUW122_ENABLE
+        help
+            32-character hexadecimal password sent as AT+CPIN during auto-provision.
+            All anchors and tags must use the same value. Not the REYAX datasheet example.
 
 endmenu
 

@@ -25,3 +25,6 @@ void meshtastic_client_request_stats_notify(void);
 
 /** Push stats JSON immediately (BLE `stats=1` / subscribe). */
 void meshtastic_client_request_stats_notify_now(void);
+
+/** True when companion reported our node number (for UWB AT+ADDRESS). */
+bool meshtastic_client_get_my_num(uint32_t *out_num);

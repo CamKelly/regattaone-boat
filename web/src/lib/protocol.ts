@@ -28,31 +28,59 @@ export const BLE_MESHTASTIC_TX_CHAR_UUID = "0000fee6-0000-1000-8000-00805f9b34fb
  */
 export const BLE_MESHTASTIC_STATS_CHAR_UUID = "0000fee7-0000-1000-8000-00805f9b34fb";
 
+/**
+ * Device type (BLE 0xFEFC) selects SC16IS752 UWB routing when the bridge is enabled:
+ *   UART A (TXA/RXA) — ANCHOR RYUW122
+ *   UART B (TXB/RXB) — TAG RYUW122
+ */
 export type DeviceType =
   | "port"
+  | "port_anchor"
   | "starboard"
-  | "fixed_dgps_mark"
+  | "starboard_anchor"
   | "waypoint"
+  | "waypoint_anchor"
   | "boat";
 
 export const DEVICE_TYPES: DeviceType[] = [
   "port",
+  "port_anchor",
   "starboard",
-  "fixed_dgps_mark",
+  "starboard_anchor",
   "waypoint",
+  "waypoint_anchor",
   "boat",
 ];
+
+export type UwbRole = "anchor" | "tag";
+
+export function deviceTypeHasAnchor(type: DeviceType): boolean {
+  return (
+    type === "port_anchor" ||
+    type === "starboard_anchor" ||
+    type === "waypoint_anchor" ||
+    type === "boat"
+  );
+}
+
+export function deviceTypeHasTag(type: DeviceType): boolean {
+  return type !== "boat";
+}
 
 export function deviceTypeLabel(type: DeviceType): string {
   switch (type) {
     case "port":
       return "Port";
+    case "port_anchor":
+      return "Port + anchor";
     case "starboard":
       return "Starboard";
-    case "fixed_dgps_mark":
-      return "Fixed DGPS mark";
+    case "starboard_anchor":
+      return "Starboard + anchor";
     case "waypoint":
       return "Waypoint";
+    case "waypoint_anchor":
+      return "Waypoint + anchor";
     case "boat":
       return "Boat";
   }
@@ -60,10 +88,39 @@ export function deviceTypeLabel(type: DeviceType): string {
 
 export function parseDeviceType(raw: string): DeviceType | null {
   const s = raw.trim().toLowerCase().replace(/-/g, "_");
+  if (s === "fixed_dgps_mark") {
+    return "waypoint";
+  }
   if (DEVICE_TYPES.includes(s as DeviceType)) {
     return s as DeviceType;
   }
   return null;
+}
+
+/** Prefix AT writes for dual-UART SC16IS752 routing (firmware strips prefix). */
+export function encodeUwbAtWrite(role: UwbRole, cmd: string): Uint8Array {
+  const prefix = role === "anchor" ? "@ANCHOR\n" : "@TAG\n";
+  const body = new TextEncoder().encode(cmd);
+  const head = new TextEncoder().encode(prefix);
+  const out = new Uint8Array(head.length + body.length);
+  out.set(head);
+  out.set(body, head.length);
+  return out;
+}
+
+/** Split firmware notify line into role + payload (after optional prefix). */
+export function parseUwbNotifyLine(raw: string): { role: UwbRole; line: string } | null {
+  if (raw.startsWith("[ANCHOR]")) {
+    return { role: "anchor", line: raw.slice("[ANCHOR]".length).replace(/^\s*/, "") };
+  }
+  if (raw.startsWith("[TAG]")) {
+    return { role: "tag", line: raw.slice("[TAG]".length).replace(/^\s*/, "") };
+  }
+  return null;
+}
+
+export function uwbWriteNeedsRolePrefix(type: DeviceType): boolean {
+  return deviceTypeHasAnchor(type) && deviceTypeHasTag(type);
 }
 
 export const BOAT_ID_MAX_LEN = 32;

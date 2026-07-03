@@ -63,11 +63,13 @@
               <div nz-row [nzGutter]="8">
                 <div nz-col [nzXs]="24" [nzSm]="16" [nzMd]="12" [nzLg]="8">
                   <select id="device-type-select" class="native-select">
-                    <option value="port">Port</option>
-                    <option value="starboard">Starboard</option>
-                    <option value="fixed_dgps_mark">Fixed DGPS mark</option>
-                    <option value="waypoint">Waypoint</option>
-                    <option value="boat">Boat</option>
+                    <option value="port">Port (tag · UART B)</option>
+                    <option value="port_anchor">Port + anchor (tag B · anchor A)</option>
+                    <option value="starboard">Starboard (tag · UART B)</option>
+                    <option value="starboard_anchor">Starboard + anchor (tag B · anchor A)</option>
+                    <option value="waypoint">Waypoint (tag · UART B)</option>
+                    <option value="waypoint_anchor">Waypoint + anchor (tag B · anchor A)</option>
+                    <option value="boat">Boat (anchor · UART A)</option>
                   </select>
                 </div>
                 <div nz-col [nzFlex]="'none'">
@@ -109,34 +111,60 @@
           </nz-tab>
 
           <nz-tab nzTitle="UWB · 0xFEFA">
-            <p class="tab-hint">
-              REYAX RYUW122 on UART1. Cross-connect:
-              <strong>Freenove GPIO 17 (ESP TX) → module RX</strong>,
-              <strong>GPIO 18 (ESP RX) ← module TX</strong>, plus <strong>GND</strong>.
-              AT commands (e.g. <code>AT</code>) — firmware appends <code>CRLF</code> if needed.
+            <p id="uwb-routing-hint" class="tab-hint">
+              RYUW122 on SC16IS752: UART A (TXA/RXA) = anchor, UART B (TXB/RXB) = tag. Device type
+              selects which UARTs are active. Lines are prefixed <code>[ANCHOR]</code> / <code>[TAG]</code>.
             </p>
-            <div nz-row [nzGutter]="8" class="uwb-input-row">
-              <div nz-col [nzFlex]="'auto'">
-                <input
-                  nz-input
-                  id="uwb-at-input"
-                  type="text"
-                  spellcheck="false"
-                  autocomplete="off"
-                  placeholder="AT"
-                />
+            <div id="uwb-panel-anchor" class="uwb-role-panel" hidden>
+              <h3 class="field-label">Anchor · UART A</h3>
+              <div nz-row [nzGutter]="8" class="uwb-input-row">
+                <div nz-col [nzFlex]="'auto'">
+                  <input
+                    nz-input
+                    id="uwb-at-input-anchor"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="AT"
+                  />
+                </div>
+                <div nz-col [nzFlex]="'none'">
+                  <button nz-button nzType="primary" type="button" id="uwb-at-send-anchor">Send</button>
+                </div>
               </div>
-              <div nz-col [nzFlex]="'none'">
-                <button nz-button nzType="primary" type="button" id="uwb-at-send">Send</button>
+              <div class="log-header">
+                <label class="field-label" for="uwb-line-log-anchor">Anchor UART log</label>
+                <button nz-button nzType="default" nzSize="small" type="button" id="uwb-log-clear-anchor">
+                  Clear
+                </button>
               </div>
+              <pre id="uwb-line-log-anchor" class="ble-log uwb-line-log" aria-live="polite"></pre>
             </div>
-            <div class="log-header">
-              <label class="field-label" for="uwb-line-log">UART log</label>
-              <button nz-button nzType="default" nzSize="small" type="button" id="uwb-log-clear">
-                Clear
-              </button>
+            <div id="uwb-panel-tag" class="uwb-role-panel" hidden>
+              <h3 class="field-label">Tag · UART B</h3>
+              <div nz-row [nzGutter]="8" class="uwb-input-row">
+                <div nz-col [nzFlex]="'auto'">
+                  <input
+                    nz-input
+                    id="uwb-at-input-tag"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="AT"
+                  />
+                </div>
+                <div nz-col [nzFlex]="'none'">
+                  <button nz-button nzType="primary" type="button" id="uwb-at-send-tag">Send</button>
+                </div>
+              </div>
+              <div class="log-header">
+                <label class="field-label" for="uwb-line-log-tag">Tag UART log</label>
+                <button nz-button nzType="default" nzSize="small" type="button" id="uwb-log-clear-tag">
+                  Clear
+                </button>
+              </div>
+              <pre id="uwb-line-log-tag" class="ble-log uwb-line-log" aria-live="polite"></pre>
             </div>
-            <pre id="uwb-line-log" class="ble-log uwb-line-log" aria-live="polite"></pre>
           </nz-tab>
 
           <nz-tab nzTitle="Meshtastic · 0xFEE5" id="meshtastic-tab" hidden>

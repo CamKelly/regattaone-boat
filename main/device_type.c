@@ -7,6 +7,9 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+#include "ryuw122_uart.h"
+#endif
 
 static const char *TAG = "device_type";
 static const char *NVS_NS = "boat";
@@ -19,12 +22,16 @@ static device_type_t default_type(void)
 {
 #if CONFIG_DEVICE_DEFAULT_TYPE_PORT
     return DEVICE_TYPE_PORT;
+#elif CONFIG_DEVICE_DEFAULT_TYPE_PORT_ANCHOR
+    return DEVICE_TYPE_PORT_ANCHOR;
 #elif CONFIG_DEVICE_DEFAULT_TYPE_STARBOARD
     return DEVICE_TYPE_STARBOARD;
-#elif CONFIG_DEVICE_DEFAULT_TYPE_FIXED_DGPS_MARK
-    return DEVICE_TYPE_FIXED_DGPS_MARK;
+#elif CONFIG_DEVICE_DEFAULT_TYPE_STARBOARD_ANCHOR
+    return DEVICE_TYPE_STARBOARD_ANCHOR;
 #elif CONFIG_DEVICE_DEFAULT_TYPE_WAYPOINT
     return DEVICE_TYPE_WAYPOINT;
+#elif CONFIG_DEVICE_DEFAULT_TYPE_WAYPOINT_ANCHOR
+    return DEVICE_TYPE_WAYPOINT_ANCHOR;
 #else
     return DEVICE_TYPE_BOAT;
 #endif
@@ -35,16 +42,38 @@ const char *device_type_to_string(device_type_t type)
     switch (type) {
     case DEVICE_TYPE_PORT:
         return "port";
+    case DEVICE_TYPE_PORT_ANCHOR:
+        return "port_anchor";
     case DEVICE_TYPE_STARBOARD:
         return "starboard";
-    case DEVICE_TYPE_FIXED_DGPS_MARK:
-        return "fixed_dgps_mark";
+    case DEVICE_TYPE_STARBOARD_ANCHOR:
+        return "starboard_anchor";
     case DEVICE_TYPE_WAYPOINT:
         return "waypoint";
+    case DEVICE_TYPE_WAYPOINT_ANCHOR:
+        return "waypoint_anchor";
     case DEVICE_TYPE_BOAT:
     default:
         return "boat";
     }
+}
+
+bool device_type_uwb_use_anchor(device_type_t type)
+{
+    switch (type) {
+    case DEVICE_TYPE_PORT_ANCHOR:
+    case DEVICE_TYPE_STARBOARD_ANCHOR:
+    case DEVICE_TYPE_WAYPOINT_ANCHOR:
+    case DEVICE_TYPE_BOAT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool device_type_uwb_use_tag(device_type_t type)
+{
+    return type != DEVICE_TYPE_BOAT;
 }
 
 static bool parse_normalized(const char *tmp, device_type_t *out)
@@ -53,20 +82,33 @@ static bool parse_normalized(const char *tmp, device_type_t *out)
         *out = DEVICE_TYPE_PORT;
         return true;
     }
+    if (strcmp(tmp, "port_anchor") == 0) {
+        *out = DEVICE_TYPE_PORT_ANCHOR;
+        return true;
+    }
     if (strcmp(tmp, "starboard") == 0) {
         *out = DEVICE_TYPE_STARBOARD;
         return true;
     }
-    if (strcmp(tmp, "fixed_dgps_mark") == 0) {
-        *out = DEVICE_TYPE_FIXED_DGPS_MARK;
+    if (strcmp(tmp, "starboard_anchor") == 0) {
+        *out = DEVICE_TYPE_STARBOARD_ANCHOR;
         return true;
     }
     if (strcmp(tmp, "waypoint") == 0) {
         *out = DEVICE_TYPE_WAYPOINT;
         return true;
     }
+    if (strcmp(tmp, "waypoint_anchor") == 0) {
+        *out = DEVICE_TYPE_WAYPOINT_ANCHOR;
+        return true;
+    }
     if (strcmp(tmp, "boat") == 0) {
         *out = DEVICE_TYPE_BOAT;
+        return true;
+    }
+    if (strcmp(tmp, "fixed_dgps_mark") == 0) {
+        *out = DEVICE_TYPE_WAYPOINT;
+        ESP_LOGW(TAG, "legacy type fixed_dgps_mark → waypoint");
         return true;
     }
     return false;
@@ -124,7 +166,8 @@ esp_err_t device_type_init(void)
         if (device_type_from_string(buf, strlen(buf), &parsed)) {
             s_type = parsed;
             s_type_in_nvs = true;
-            ESP_LOGI(TAG, "loaded type \"%s\"", device_type_to_string(s_type));
+            ESP_LOGI(TAG, "loaded type \"%s\" (UWB anchor=%d tag=%d)", device_type_to_string(s_type),
+                     (int)device_type_uwb_use_anchor(s_type), (int)device_type_uwb_use_tag(s_type));
         }
     }
     return ESP_OK;
@@ -141,6 +184,7 @@ esp_err_t device_type_set(device_type_t type)
         return ESP_ERR_INVALID_ARG;
     }
 
+    const device_type_t prev = s_type;
     const char *str = device_type_to_string(type);
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
@@ -158,6 +202,12 @@ esp_err_t device_type_set(device_type_t type)
 
     s_type = type;
     s_type_in_nvs = true;
-    ESP_LOGI(TAG, "saved type \"%s\"", str);
+    ESP_LOGI(TAG, "saved type \"%s\" (UWB anchor=%d tag=%d)", str, (int)device_type_uwb_use_anchor(type),
+             (int)device_type_uwb_use_tag(type));
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+    if (prev != type) {
+        ryuw122_provision_on_device_type_changed();
+    }
+#endif
     return ESP_OK;
 }

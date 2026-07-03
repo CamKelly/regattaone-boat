@@ -6,6 +6,9 @@
 
 #include "ble_sen0140.h"
 #include "meshtastic_uart.h"
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+#include "ryuw122_uart.h"
+#endif
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -852,6 +855,9 @@ static void handle_from_radio(const uint8_t *data, size_t len)
                     s_have_my_num = true;
                     ESP_LOGI(TAG, "my_node_num=0x%08lx", (unsigned long)s_my_num);
                     mt_touch_self_node();
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+                    ryuw122_provision_try();
+#endif
                 }
             }
             continue;
@@ -871,6 +877,9 @@ static void handle_from_radio(const uint8_t *data, size_t len)
                 mt_notify_line("! config ready\n");
                 mt_touch_self_node();
                 s_stats_dirty = true;
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+                ryuw122_provision_try();
+#endif
             }
             continue;
         }
@@ -1354,6 +1363,15 @@ void meshtastic_client_request_stats_notify_now(void)
     stats_notify_send(true);
 }
 
+bool meshtastic_client_get_my_num(uint32_t *out_num)
+{
+    if (!s_have_my_num || out_num == NULL) {
+        return false;
+    }
+    *out_num = s_my_num;
+    return true;
+}
+
 #else
 
 esp_err_t meshtastic_client_start(void)
@@ -1394,6 +1412,12 @@ void meshtastic_client_request_stats_notify(void)
 
 void meshtastic_client_request_stats_notify_now(void)
 {
+}
+
+bool meshtastic_client_get_my_num(uint32_t *out_num)
+{
+    (void)out_num;
+    return false;
 }
 
 #endif /* CONFIG_REGATTAONE_MESHTASTIC_ENABLE */
