@@ -280,6 +280,7 @@ menu "RegattaOne — DWM3000 (DW3000 SPI UWB)"
         help
             Qorvo DW3000 over SPI using vendored br101/dw3000-decadriver-source.
             Independent of REYAX RYUW122 UART UWB. Set SPI/GPIO pins under menu "Decadriver".
+            Freenove wiring: boards/WIRING-DWM3000.md
 
 endmenu
 

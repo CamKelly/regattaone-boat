@@ -122,6 +122,7 @@ LoRa is via a **companion ESP32 running Meshtastic** (UART), not a direct SX1262
 | **GPS PPS** | 21 | **21** (right) |
 | **Meshtastic UART TX → module RX** | 16 | **16** (left) |
 | **Meshtastic UART RX ← module TX** | 15 | **15** (left) |
+| **DWM3000 SPI** *(optional eval)* | 6, 8, 9, 13, 14, 17, 18 | See **[WIRING-DWM3000.md](WIRING-DWM3000.md)** |
 
 UART: **GPS = UART1**, **Meshtastic = UART2**, **console = UART0** (USB, GPIO 43/44). **UWB:** use SC16IS752 on I2C — see [WIRING-SC16IS752-I2C.md](WIRING-SC16IS752-I2C.md).
 
@@ -146,6 +147,8 @@ Meshtastic serial module: **PROTO**, **921600**, **TX = 8**, **RX = 9**.
 Alternative without that clash: **GP14** (TX) / **GP15** (RX) on the Zero → Freenove **15/16**.
 
 REYAX UWB via SC16IS752 I2C (not native UART on Freenove 17/18 in current firmware defaults).
+
+**DWM3000 (SPI UWB evaluation):** optional on GPIO **6, 8, 9, 13, 14, 17, 18** — see **[WIRING-DWM3000.md](WIRING-DWM3000.md)**.
 
 ---
 
