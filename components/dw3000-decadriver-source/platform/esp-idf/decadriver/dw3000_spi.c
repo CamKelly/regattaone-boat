@@ -1,4 +1,6 @@
 #include <driver/spi_master.h>
+#include <esp_intr_alloc.h>
+#include <freertos/FreeRTOS.h>
 #include <string.h>
 
 #include "deca_device_api.h"

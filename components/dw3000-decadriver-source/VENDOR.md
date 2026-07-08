@@ -16,6 +16,7 @@ Full source copy for offline use and long-term maintenance if the upstream repo 
 ## Local patches (RegattaOne)
 
 - `platform/esp-idf/decadriver/CMakeLists.txt` — `esp_driver_spi` / `esp_driver_gpio` for ESP-IDF 6.x
+- `platform/esp-idf/decadriver/dw3000_spi.c` — include `esp_intr_alloc.h` and `freertos/FreeRTOS.h` (IDF 6.x)
 
 ## Refresh from upstream
 
