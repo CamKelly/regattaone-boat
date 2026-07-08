@@ -21,6 +21,9 @@
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
 #include "ryuw122_uart.h"
+#if CONFIG_REGATTAONE_DW3000_ENABLE
+#include "dw3000_probe.h"
+#endif
 #if CONFIG_REGATTAONE_SC16IS752_ENABLE
 #include "sc16is752.h"
 #endif
@@ -91,6 +94,8 @@ void app_main(void)
 #endif
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
         "on",
+#elif CONFIG_REGATTAONE_DW3000_ENABLE
+        "DW3000",
 #elif CONFIG_REGATTAONE_SC16IS752_ENABLE
         "bridge",
 #else
@@ -144,6 +149,13 @@ void app_main(void)
     err = ryuw122_uart_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "RYUW122 UART: %s", esp_err_to_name(err));
+    }
+#endif
+
+#if CONFIG_REGATTAONE_DW3000_ENABLE
+    err = dw3000_probe_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "DWM3000 probe: %s", esp_err_to_name(err));
     }
 #endif
 

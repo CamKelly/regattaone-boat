@@ -15,12 +15,20 @@ set(regattaone_srcs
     "lora_stats.c"
     "lora_mesh.c")
 
+if(CONFIG_REGATTAONE_DW3000_ENABLE)
+    list(APPEND regattaone_srcs "dw3000_probe.c")
+endif()
+
+set(regattaone_priv_requires spi_flash esp_driver_i2c esp_driver_gpio esp_driver_uart
+                           esp_driver_spi bt nvs_flash esp_timer esp_system RadioLib)
+if(CONFIG_REGATTAONE_DW3000_ENABLE)
+    list(APPEND regattaone_priv_requires decadriver)
+endif()
+
 # RadioLib: components/RadioLib (vendored). HAL: main/EspHal.h (ESP-IDF example style, S3 SPI).
 # sx1262_lora.cpp is compiled unconditionally; body is #if CONFIG_REGATTAONE_SX1262_ENABLE.
 idf_component_register(SRCS ${regattaone_srcs}
-                       PRIV_REQUIRES spi_flash esp_driver_i2c esp_driver_gpio esp_driver_uart
-                                     esp_driver_spi bt nvs_flash
-                                     esp_timer esp_system RadioLib
+                       PRIV_REQUIRES ${regattaone_priv_requires}
                        INCLUDE_DIRS "")
 
 # RadioLib headers trigger -Werror=overloaded-virtual under ESP-IDF GCC 15.

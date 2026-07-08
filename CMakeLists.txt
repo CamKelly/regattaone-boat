@@ -2,6 +2,10 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.22)
 
+# Qorvo DW3000 decadriver (vendored under components/dw3000-decadriver-source).
+set(EXTRA_COMPONENT_DIRS
+    ${CMAKE_SOURCE_DIR}/components/dw3000-decadriver-source/platform/esp-idf)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(regattaone-laser)
 

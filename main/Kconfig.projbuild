@@ -272,6 +272,17 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
 
 endmenu
 
+menu "RegattaOne — DWM3000 (DW3000 SPI UWB)"
+
+    config REGATTAONE_DW3000_ENABLE
+        bool "Enable DWM3000 evaluation (SPI decadriver)"
+        default n
+        help
+            Qorvo DW3000 over SPI using vendored br101/dw3000-decadriver-source.
+            Independent of REYAX RYUW122 UART UWB. Set SPI/GPIO pins under menu "Decadriver".
+
+endmenu
+
 menu "RegattaOne — SC16IS752 (I2C dual-UART bridge)"
 
     config REGATTAONE_SC16IS752_ENABLE
