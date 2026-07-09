@@ -23,6 +23,9 @@
 #include "ryuw122_uart.h"
 #if CONFIG_REGATTAONE_DW3000_ENABLE
 #include "dw3000_probe.h"
+#if CONFIG_DW3000_RANGING_ENABLE
+#include "dw3000_ranging.h"
+#endif
 #endif
 #if CONFIG_REGATTAONE_SC16IS752_ENABLE
 #include "sc16is752.h"
@@ -153,10 +156,20 @@ void app_main(void)
 #endif
 
 #if CONFIG_REGATTAONE_DW3000_ENABLE
+#if CONFIG_DW3000_RANGING_ENABLE
+    err = dw3000_ranging_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "DWM3000 ranging init: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "DWM3000 ranging ready, addr 0x%04X",
+                 dw3000_ranging_self_addr());
+    }
+#else
     err = dw3000_probe_start();
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "DWM3000 probe: %s", esp_err_to_name(err));
     }
+#endif
 #endif
 
 #if CONFIG_REGATTAONE_GPS_ENABLE

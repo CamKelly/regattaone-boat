@@ -96,20 +96,73 @@ Keep leads short; SPI at 2 MHz during init (driver default), up to ~22 MHz in me
 1. Wire per table above.
 2. `idf.py menuconfig`:
    - **RegattaOne — DWM3000** → enable evaluation
+   - **Enable UWB two-way ranging (libdeca TWR)** — for distance measurement (not just DEVID probe)
+   - Set **This device's 16-bit UWB address** (unique per board; other devices use this as the ranging target id)
+   - Set **UWB PAN id** the same on every device (default `0xDECA`)
+   - **TWR processing delay** must match on all ranging peers (default 2000 µs; increase if you see TX timing errors)
    - **Decadriver** → confirm GPIOs (pre-filled in Freenove `sdkconfig.defaults`)
    - **Select Chip** → **DW3000** (DW3110 / DW3120 on DWM3000)
 3. Build and flash (`./scripts/idf-s3.sh freenove build flash monitor`).
-4. Expect serial log:
+4. With ranging **disabled**, expect serial log:
    ```
    dw3000_probe: DEVID 0xdeca0302
    ```
-   DW3110 = `0xDECA0302`, DW3120 = `0xDECA0312`.
+   With ranging **enabled**, expect:
+   ```
+   dw3000_rng: ready: addr 0x0001, pan 0xdeca, ant 16368, proc 2000 us
+   ```
 
 If DEVID is wrong: check 3.3 V, GND, CS/RST wiring, and that **GPIO 12** is not used for SPI CLK (it is SC16IS752 reset on this board).
 
 ---
 
+## Two-way ranging (distance to another device)
+
+Vendored [libdeca](https://github.com/br101/libdeca) (`components/libdeca/`) provides DS-TWR on top of the decadriver. RegattaOne wraps it in `main/dw3000_ranging.h`.
+
+### Setup (two or more boards)
+
+| Setting | Device A | Device B |
+| ------- | -------- | -------- |
+| `DW3000_ADDR` | `0x0001` | `0x0002` |
+| `DW3000_PANID` | `0xDECA` | `0xDECA` (same) |
+| `DW3000_TWR_PROCESSING_DELAY_US` | `2000` | `2000` (same) |
+
+Each device automatically listens for ranging requests. No separate “anchor” mode is required.
+
+### API (firmware)
+
+```c
+#include "dw3000_ranging.h"
+
+// After boot (app_main calls dw3000_ranging_init when ranging is enabled):
+uint16_t cm;
+esp_err_t err = dw3000_range_to(0x0002, &cm, 120);  // measure distance to device 0x0002
+if (err == ESP_OK) {
+    ESP_LOGI("app", "peer 0x0002 is %u cm away", cm);
+}
+
+// Optional async callback for every completed range (initiated locally or by a peer):
+dw3000_ranging_set_callback(my_range_cb);
+```
+
+- `dw3000_range_to(peer_addr, &dist_cm, timeout_ms)` — blocking; returns distance in **centimetres**
+- `dw3000_ranging_self_addr()` — this device's UWB address (`DW3000_ADDR`)
+- Only one `dw3000_range_to()` at a time per device
+
+### Bench test
+
+1. Flash two boards with different `DW3000_ADDR` values.
+2. On device A, add a periodic call to `dw3000_range_to(0x0002, &cm, 120)` (or use the serial log from a temporary test hook).
+3. Move boards apart; logged distance should track separation (UWB line-of-sight, ~10 cm–200 m depending on environment).
+
+Antenna delay (`DW3000_ANTENNA_DELAY`) affects absolute accuracy; calibrate against a known distance if you need cm-level precision.
+
+---
+
 ## See also
+
+- [components/libdeca/VENDOR.md](../components/libdeca/VENDOR.md) — vendored libdeca notes
 
 - [FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)
 - [WIRING-SC16IS752-I2C.md](WIRING-SC16IS752-I2C.md) — RYUW122 UART path

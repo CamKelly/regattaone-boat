@@ -15,14 +15,19 @@ set(regattaone_srcs
     "lora_stats.c"
     "lora_mesh.c")
 
-if(CONFIG_REGATTAONE_DW3000_ENABLE)
-    list(APPEND regattaone_srcs "dw3000_probe.c")
-endif()
-
+# ESP-IDF 6 evaluates main/CMakeLists.txt before sdkconfig symbols are visible to
+# if(CONFIG_*) — keep decadriver/libdeca in PRIV_REQUIRES unconditionally and pick
+# the implementation file after reconfigure via the stub/ranging split.
 set(regattaone_priv_requires spi_flash esp_driver_i2c esp_driver_gpio esp_driver_uart
-                           esp_driver_spi bt nvs_flash esp_timer esp_system RadioLib)
-if(CONFIG_REGATTAONE_DW3000_ENABLE)
-    list(APPEND regattaone_priv_requires decadriver)
+                           esp_driver_spi bt nvs_flash esp_timer esp_system RadioLib
+                           decadriver libdeca)
+if(CONFIG_DW3000_RANGING_ENABLE)
+    list(APPEND regattaone_srcs "dw3000_ranging.c")
+else()
+    list(APPEND regattaone_srcs "dw3000_ranging_stub.c")
+    if(CONFIG_REGATTAONE_DW3000_ENABLE)
+        list(APPEND regattaone_srcs "dw3000_probe.c")
+    endif()
 endif()
 
 # RadioLib: components/RadioLib (vendored). HAL: main/EspHal.h (ESP-IDF example style, S3 SPI).

@@ -282,6 +282,47 @@ menu "RegattaOne — DWM3000 (DW3000 SPI UWB)"
             Independent of REYAX RYUW122 UART UWB. Set SPI/GPIO pins under menu "Decadriver".
             Freenove wiring: boards/WIRING-DWM3000.md
 
+    config DW3000_RANGING_ENABLE
+        bool "Enable UWB two-way ranging (libdeca TWR)"
+        default n
+        depends on REGATTAONE_DW3000_ENABLE
+        help
+            Bring up the libdeca TWR stack (components/libdeca) so this device can
+            measure the distance to other DW3000 devices by address, and answer
+            ranging requests from them. Uses dw3000_range_to() in main/dw3000_ranging.h.
+
+    config DW3000_ADDR
+        hex "This device's 16-bit UWB address"
+        default 0x0001
+        depends on DW3000_RANGING_ENABLE
+        help
+            Unique per device on the same PAN. This is the "id" other devices pass
+            to dw3000_range_to() to measure distance to this unit.
+
+    config DW3000_PANID
+        hex "UWB PAN id (shared by all RegattaOne devices)"
+        default 0xDECA
+        depends on DW3000_RANGING_ENABLE
+
+    config DW3000_ANTENNA_DELAY
+        int "Antenna delay (DTU, TX+RX combined)"
+        default 16368
+        range 0 65535
+        depends on DW3000_RANGING_ENABLE
+        help
+            Calibration constant for the DWM3000 module. libdeca default is 16368.
+            Adjust against a known reference distance for best accuracy.
+
+    config DW3000_TWR_PROCESSING_DELAY_US
+        int "TWR processing delay (us)"
+        default 2000
+        range 300 20000
+        depends on DW3000_RANGING_ENABLE
+        help
+            Time budget for the CPU to turn a received poll around into the next
+            frame. MUST be identical on both ranging devices. Larger is safer but
+            slightly less accurate; reduce once IRQ handling is proven fast enough.
+
 endmenu
 
 menu "RegattaOne — SC16IS752 (I2C dual-UART bridge)"
