@@ -29,6 +29,10 @@
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
 #include "ryuw122_uart.h"
 #endif
+#if CONFIG_DW3000_RANGING_ENABLE
+#include "dw3000_config.h"
+#include "dw3000_ranging.h"
+#endif
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 #include "meshtastic_client.h"
 #endif
@@ -43,6 +47,10 @@ static const char *TAG = "ble_sen0140";
 /** 16-bit UUIDs (full: 0000XXXX-0000-1000-8000-00805f9b34fb). */
 #define SEN0140_GATT_SVC_UUID      0xfef0
 #define SEN0140_GATT_CHR_UUID      0xfef1
+/** Read/write: DWM3000 config JSON (addr, pan, ant, twr) — persisted in NVS. */
+#define SEN0140_GATT_DW3000_CONFIG_UUID  0xfef2
+/** Read/write: DWM3000 ranging — write peer addr, read JSON result. */
+#define SEN0140_GATT_DW3000_RANGE_UUID   0xfef3
 #define SEN0140_GATT_LORA_TX_UUID        0xfef7
 #define SEN0140_GATT_LORA_LINE_UUID      0xfef8
 #define SEN0140_GATT_UWB_LINE_UUID      0xfef9
@@ -109,6 +117,10 @@ static bool s_lora_line_notify_enabled;
 static char s_lora_stats_json[8192];
 static bool s_uwb_line_notify_enabled;
 static uint16_t s_seq;
+
+#if CONFIG_DW3000_RANGING_ENABLE
+static char s_dw3000_range_json[96];
+#endif
 
 #if CONFIG_REGATTAONE_RYUW122_ENABLE
 #define UWB_LINE_BUF_MAX 384U
@@ -273,9 +285,17 @@ static int gatt_svr_access_device_type(uint16_t conn_handle, uint16_t attr_handl
         if (!device_type_from_string(buf, om_len, &type)) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+        const device_type_t prev = device_type_get();
+#endif
         if (device_type_set(type) != ESP_OK) {
             return BLE_ATT_ERR_UNLIKELY;
         }
+#if CONFIG_REGATTAONE_RYUW122_ENABLE
+        if (prev != type) {
+            ryuw122_provision_on_device_type_changed();
+        }
+#endif
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;
@@ -519,6 +539,131 @@ static int gatt_svr_access_meshtastic_stats(uint16_t conn_handle, uint16_t attr_
 }
 #endif
 
+#if CONFIG_DW3000_RANGING_ENABLE
+static bool parse_peer_addr(const char *s, size_t len, uint16_t *out)
+{
+    if (s == NULL || out == NULL || len == 0U) {
+        return false;
+    }
+    char tmp[32];
+    if (len >= sizeof(tmp)) {
+        return false;
+    }
+    memcpy(tmp, s, len);
+    tmp[len] = '\0';
+    for (size_t i = 0; i < len; i++) {
+        if (tmp[i] == '\r' || tmp[i] == '\n') {
+            tmp[i] = '\0';
+            break;
+        }
+    }
+    const char *p = tmp;
+    if (strncmp(p, "range=", 6) == 0) {
+        p += 6;
+    }
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    char *end = NULL;
+    unsigned long v = strtoul(p, &end, 0);
+    if (end == p || v == 0UL || v > 0xFFFEUL) {
+        return false;
+    }
+    *out = (uint16_t)v;
+    return true;
+}
+
+static int gatt_svr_access_dw3000_config(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                         void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        char json[96];
+        const size_t n = dw3000_config_format_json(json, sizeof(json));
+        if (n == 0U) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        return os_mbuf_append(ctxt->om, json, (uint16_t)n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (om_len == 0U || om_len > 127U) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        char buf[128];
+        if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        buf[om_len] = '\0';
+        dw3000_config_t cfg;
+        if (!dw3000_config_from_json(buf, om_len, &cfg)) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        if (dw3000_config_set(&cfg) != ESP_OK) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        if (dw3000_ranging_apply_config() != ESP_OK) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
+static int gatt_svr_access_dw3000_range(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                        void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        const size_t n = strlen(s_dw3000_range_json);
+        if (n == 0U) {
+            const char *idle = "{\"peer\":0,\"ok\":false,\"err\":\"none\"}";
+            return os_mbuf_append(ctxt->om, idle, (uint16_t)strlen(idle)) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+        }
+        return os_mbuf_append(ctxt->om, s_dw3000_range_json, (uint16_t)n) == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+    }
+    if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
+        if (om_len == 0U || om_len > 31U) {
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        char buf[32];
+        if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        uint16_t peer = 0;
+        if (!parse_peer_addr(buf, om_len, &peer)) {
+            snprintf(s_dw3000_range_json, sizeof(s_dw3000_range_json),
+                     "{\"peer\":0,\"ok\":false,\"err\":\"bad peer\"}");
+            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+        }
+        uint16_t dist_cm = 0;
+        const esp_err_t err = dw3000_range_to(peer, &dist_cm, 3000U);
+        if (err == ESP_OK) {
+            snprintf(s_dw3000_range_json, sizeof(s_dw3000_range_json),
+                     "{\"peer\":%u,\"dist_cm\":%u,\"ok\":true}", (unsigned)peer, (unsigned)dist_cm);
+        } else {
+            const char *why = "failed";
+            if (err == ESP_ERR_TIMEOUT) {
+                why = "timeout";
+            } else if (err == ESP_ERR_INVALID_STATE) {
+                why = "busy";
+            }
+            snprintf(s_dw3000_range_json, sizeof(s_dw3000_range_json),
+                     "{\"peer\":%u,\"ok\":false,\"err\":\"%s\"}", (unsigned)peer, why);
+        }
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+#endif
+
 static int gatt_svr_access_uwb_at(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                   void *arg)
 {
@@ -573,6 +718,18 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
                     .val_handle = &s_chr_val_handle,
                 },
+#if CONFIG_DW3000_RANGING_ENABLE
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_DW3000_CONFIG_UUID),
+                    .access_cb = gatt_svr_access_dw3000_config,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                },
+                {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_DW3000_RANGE_UUID),
+                    .access_cb = gatt_svr_access_dw3000_range,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE,
+                },
+#endif
 #if CONFIG_REGATTAONE_SX1262_ENABLE
                 {
                     .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_LORA_TX_UUID),

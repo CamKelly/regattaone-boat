@@ -1,5 +1,7 @@
 #include "dw3000_ranging.h"
 
+#include "dw3000_config.h"
+
 #include "sdkconfig.h"
 
 #include "esp_log.h"
@@ -31,7 +33,7 @@ static dw3000_range_result_cb_t s_user_cb;
 
 static uint16_t self_addr(void)
 {
-    return (uint16_t)CONFIG_DW3000_ADDR;
+    return dw3000_config_get()->addr;
 }
 
 /* libdeca observer: called from the dwmac worker task for every settled TWR
@@ -104,26 +106,40 @@ esp_err_t dw3000_ranging_init(void)
         ESP_LOGE(TAG, "dwphy_config failed");
         return ESP_FAIL;
     }
-    dwphy_set_antenna_delay((uint16_t)CONFIG_DW3000_ANTENNA_DELAY);
+    dwphy_set_antenna_delay(dw3000_config_get()->antenna_delay);
 
-    if (!dwmac_init((uint16_t)CONFIG_DW3000_PANID, self_addr(),
-                    dwprot_rx_handler, NULL, NULL)) {
+    const dw3000_config_t *cfg = dw3000_config_get();
+    if (!dwmac_init(cfg->panid, cfg->addr, dwprot_rx_handler, NULL, NULL)) {
         ESP_LOGE(TAG, "dwmac_init failed");
         return ESP_FAIL;
     }
     dwmac_set_frame_filter();
 
-    twr_init((uint32_t)CONFIG_DW3000_TWR_PROCESSING_DELAY_US, true);
+    twr_init(cfg->twr_delay_us, true);
     twr_set_observer(twr_observer);
 
     /* Stay in RX so we can answer ranging requests from other devices. */
     dwmac_set_rx_reenable(true);
 
     s_ready = true;
-    ESP_LOGI(TAG, "ready: addr 0x%04X, pan 0x%04X, ant %d, proc %d us",
-             self_addr(), (uint16_t)CONFIG_DW3000_PANID,
-             (int)CONFIG_DW3000_ANTENNA_DELAY,
-             (int)CONFIG_DW3000_TWR_PROCESSING_DELAY_US);
+    ESP_LOGI(TAG, "ready: addr 0x%04X, pan 0x%04X, ant %u, proc %lu us",
+             self_addr(), cfg->panid, (unsigned)cfg->antenna_delay, (unsigned long)cfg->twr_delay_us);
+    return ESP_OK;
+}
+
+esp_err_t dw3000_ranging_apply_config(void)
+{
+    if (!s_ready) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    const dw3000_config_t *cfg = dw3000_config_get();
+    dwphy_set_antenna_delay(cfg->antenna_delay);
+    if (!dwmac_set_pan_addr(cfg->panid, cfg->addr)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    twr_init(cfg->twr_delay_us, true);
+    ESP_LOGI(TAG, "applied config: addr 0x%04X pan 0x%04X ant %u twr %lu us", (unsigned)cfg->addr,
+             (unsigned)cfg->panid, (unsigned)cfg->antenna_delay, (unsigned long)cfg->twr_delay_us);
     return ESP_OK;
 }
 
@@ -134,7 +150,7 @@ uint16_t dw3000_ranging_self_addr(void)
 
 uint16_t dw3000_ranging_panid(void)
 {
-    return (uint16_t)CONFIG_DW3000_PANID;
+    return dw3000_config_get()->panid;
 }
 
 void dw3000_ranging_set_callback(dw3000_range_result_cb_t cb)

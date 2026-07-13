@@ -15,6 +15,10 @@
 #include "ble_sen0140.h"
 #include "boat_id.h"
 #include "device_type.h"
+#include "dw3000_config.h"
+#if CONFIG_DW3000_RANGING_ENABLE
+#include "dw3000_ranging.h"
+#endif
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 #include "sx1262_lora.h"
 #endif
@@ -81,6 +85,7 @@ void app_main(void)
     ESP_ERROR_CHECK(ret);
     ESP_ERROR_CHECK(boat_id_init());
     ESP_ERROR_CHECK(device_type_init());
+    ESP_ERROR_CHECK(dw3000_config_init());
 
     ESP_LOGI(
         TAG,

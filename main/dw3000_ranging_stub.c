@@ -22,6 +22,11 @@ void dw3000_ranging_set_callback(dw3000_range_result_cb_t cb)
     (void)cb;
 }
 
+esp_err_t dw3000_ranging_apply_config(void)
+{
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
 esp_err_t dw3000_range_to(uint16_t peer_addr, uint16_t *dist_cm,
                           uint32_t timeout_ms)
 {

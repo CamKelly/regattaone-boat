@@ -4,9 +4,8 @@ import { GeoPoint } from './geo-point.model';
 export type DeviceKind = 'anchor' | 'tag';
 
 /**
- * BLE / firmware device type (0xFEFC). SC16IS752 routing when bridge enabled:
- *   UART A — anchor RYUW122
- *   UART B — tag RYUW122
+ * BLE / firmware device type (0xFEFC) — course / fleet role.
+ * RYUW122 maps anchor/tag roles to SC16IS752 UART A/B when the bridge is enabled.
  */
 export type DeviceType =
   | 'port'

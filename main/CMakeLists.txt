@@ -1,6 +1,7 @@
 set(regattaone_srcs
     "boat_id.c"
     "device_type.c"
+    "dw3000_config.c"
     "ryuw122_uart.c"
     "sc16is752.c"
     "meshtastic_uart.c"

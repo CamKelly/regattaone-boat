@@ -6,7 +6,7 @@ import { BLE_SERVICE_UUID } from "./protocol";
 /** Minimal GATT characteristic surface used by regatta-main.ts */
 export interface BleGattCharacteristicLike {
   readValue(): Promise<DataView>;
-  writeValue(data: BufferSource): Promise<void>;
+  writeValue(data: ArrayBuffer | Uint8Array): Promise<void>;
   startNotifications(): Promise<void>;
   stopNotifications(): Promise<void>;
   addEventListener(type: "characteristicvaluechanged", listener: (ev: Event) => void): void;
@@ -37,10 +37,15 @@ export function isBleAvailable(): boolean {
   return isNativeBle() || typeof navigator !== "undefined" && !!navigator.bluetooth;
 }
 
-function bufferToDataView(data: BufferSource): DataView {
-  if (data instanceof DataView) {
+/** Normalize typed arrays for Web APIs that expect BufferSource (TS 5.7+ ArrayBufferLike mismatch). */
+export function toBufferSource(data: ArrayBuffer | Uint8Array): ArrayBuffer {
+  if (data instanceof ArrayBuffer) {
     return data;
   }
+  return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+}
+
+function bufferToDataView(data: ArrayBuffer | Uint8Array): DataView {
   if (data instanceof ArrayBuffer) {
     return new DataView(data);
   }
@@ -74,7 +79,7 @@ class NativeBleCharacteristic implements BleGattCharacteristicLike {
     return BleClient.read(this.deviceId, this.serviceUuid, this.characteristicUuid);
   }
 
-  async writeValue(data: BufferSource): Promise<void> {
+  async writeValue(data: ArrayBuffer | Uint8Array): Promise<void> {
     await BleClient.write(
       this.deviceId,
       this.serviceUuid,
@@ -187,7 +192,7 @@ export async function connectNativeGatt(
 export function asWebCharacteristic(char: BluetoothRemoteGATTCharacteristic): BleGattCharacteristicLike {
   return {
     readValue: () => char.readValue(),
-    writeValue: (data) => char.writeValue(data),
+    writeValue: (data) => char.writeValue(toBufferSource(data)),
     startNotifications: async () => {
       await char.startNotifications();
     },

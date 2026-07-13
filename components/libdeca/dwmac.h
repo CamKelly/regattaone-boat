@@ -148,6 +148,9 @@ uint16_t dwmac_get_mac16(void);
 uint16_t dwmac_get_panid(void);
 uint64_t dwmac_get_mac64(void);
 
+/** Update PAN and 16-bit address after init (also programs the radio). */
+bool dwmac_set_pan_addr(uint16_t panid, uint16_t addr);
+
 /** "TDMA" tx time of slot in us, pkt_len including headers */
 int dwmac_get_slot_us(size_t pkt_len, int slot_num);
 

@@ -678,6 +678,18 @@ uint16_t dwmac_get_panid(void)
 	return panId;
 }
 
+bool dwmac_set_pan_addr(uint16_t mypanId, uint16_t myAddr)
+{
+	if (myAddr == 0 || myAddr == 0xffff) {
+		return false;
+	}
+	panId = mypanId;
+	macAddr = myAddr;
+	dwt_setaddress16(macAddr);
+	dwt_setpanid(panId);
+	return true;
+}
+
 uint64_t dwmac_get_mac64(void)
 {
 	return mac64;

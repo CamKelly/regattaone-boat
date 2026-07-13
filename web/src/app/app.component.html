@@ -63,20 +63,22 @@
               <div nz-row [nzGutter]="8">
                 <div nz-col [nzXs]="24" [nzSm]="16" [nzMd]="12" [nzLg]="8">
                   <select id="device-type-select" class="native-select">
-                    <option value="port">Port (tag · UART B)</option>
-                    <option value="port_anchor">Port + anchor (tag B · anchor A)</option>
-                    <option value="starboard">Starboard (tag · UART B)</option>
-                    <option value="starboard_anchor">Starboard + anchor (tag B · anchor A)</option>
-                    <option value="waypoint">Waypoint (tag · UART B)</option>
-                    <option value="waypoint_anchor">Waypoint + anchor (tag B · anchor A)</option>
-                    <option value="boat">Boat (anchor · UART A)</option>
+                    <option value="port">Port mark</option>
+                    <option value="port_anchor">Port mark + anchor role</option>
+                    <option value="starboard">Starboard mark</option>
+                    <option value="starboard_anchor">Starboard mark + anchor role</option>
+                    <option value="waypoint">Waypoint</option>
+                    <option value="waypoint_anchor">Waypoint + anchor role</option>
+                    <option value="boat">Boat</option>
                   </select>
                 </div>
                 <div nz-col [nzFlex]="'none'">
                   <button nz-button nzType="default" type="button" id="device-type-save">Save</button>
                 </div>
               </div>
-              <p id="device-type-status" class="field-hint">Connect a device to set its type.</p>
+              <p id="device-type-status" class="field-hint">
+                Course / fleet role for mesh and ranging. Saved on device NVS.
+              </p>
             </div>
           </div>
         </nz-card>
@@ -112,8 +114,9 @@
 
           <nz-tab nzTitle="UWB · 0xFEFA">
             <p id="uwb-routing-hint" class="tab-hint">
-              RYUW122 on SC16IS752: UART A (TXA/RXA) = anchor, UART B (TXB/RXB) = tag. Device type
-              selects which UARTs are active. Lines are prefixed <code>[ANCHOR]</code> / <code>[TAG]</code>.
+              REYAX RYUW122 on SC16IS752: UART A (TXA/RXA) = anchor role, UART B (TXB/RXB) = tag role.
+              Device type selects which roles are active. Lines are prefixed <code>[ANCHOR]</code> /
+              <code>[TAG]</code>.
             </p>
             <div id="uwb-panel-anchor" class="uwb-role-panel" hidden>
               <h3 class="field-label">Anchor · UART A</h3>
@@ -164,6 +167,111 @@
                 </button>
               </div>
               <pre id="uwb-line-log-tag" class="ble-log uwb-line-log" aria-live="polite"></pre>
+            </div>
+          </nz-tab>
+
+          <nz-tab nzTitle="DWM3000 · 0xFEF2" id="dwm3000-tab" hidden>
+            <p class="tab-hint">
+              Qorvo DWM3000 SPI UWB settings (<code>0xFEF2</code>) and two-way ranging
+              (<code>0xFEF3</code>). Values are saved to device NVS and survive power-off.
+              All devices must share the same PAN id and TWR processing delay.
+            </p>
+            <div nz-row [nzGutter]="[12, 12]">
+              <div nz-col [nzXs]="24" [nzMd]="12">
+                <label class="field-label" for="dwm3000-addr-input">This device&apos;s 16-bit UWB address</label>
+                <input
+                  nz-input
+                  id="dwm3000-addr-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="0x0001"
+                />
+              </div>
+              <div nz-col [nzXs]="24" [nzMd]="12">
+                <label class="field-label" for="dwm3000-pan-input">UWB PAN id (shared by all devices)</label>
+                <input
+                  nz-input
+                  id="dwm3000-pan-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="0xDECA"
+                />
+              </div>
+              <div nz-col [nzXs]="24" [nzMd]="12">
+                <label class="field-label" for="dwm3000-ant-input">Antenna delay (DTU, TX+RX combined)</label>
+                <input
+                  nz-input
+                  id="dwm3000-ant-input"
+                  type="number"
+                  min="0"
+                  max="65535"
+                  step="1"
+                  placeholder="16368"
+                />
+              </div>
+              <div nz-col [nzXs]="24" [nzMd]="12">
+                <label class="field-label" for="dwm3000-twr-input">TWR processing delay (µs)</label>
+                <input
+                  nz-input
+                  id="dwm3000-twr-input"
+                  type="number"
+                  min="300"
+                  max="20000"
+                  step="1"
+                  placeholder="2000"
+                />
+              </div>
+              <div nz-col [nzSpan]="24">
+                <div nz-row [nzGutter]="8">
+                  <div nz-col [nzFlex]="'none'">
+                    <button nz-button nzType="primary" type="button" id="dwm3000-config-save">Save settings</button>
+                  </div>
+                </div>
+                <p id="dwm3000-config-status" class="field-hint">Connect a DWM3000 device to edit settings.</p>
+              </div>
+              <div nz-col [nzSpan]="24">
+                <label class="field-label" for="dwm3000-device-type-select">Device type <code>0xFEFC</code></label>
+                <div nz-row [nzGutter]="8">
+                  <div nz-col [nzXs]="24" [nzSm]="16" [nzMd]="12" [nzLg]="8">
+                    <select id="dwm3000-device-type-select" class="native-select">
+                      <option value="port">Port mark</option>
+                      <option value="port_anchor">Port mark + anchor role</option>
+                      <option value="starboard">Starboard mark</option>
+                      <option value="starboard_anchor">Starboard mark + anchor role</option>
+                      <option value="waypoint">Waypoint</option>
+                      <option value="waypoint_anchor">Waypoint + anchor role</option>
+                      <option value="boat">Boat</option>
+                    </select>
+                  </div>
+                  <div nz-col [nzFlex]="'none'">
+                    <button nz-button nzType="default" type="button" id="dwm3000-device-type-save">Save</button>
+                  </div>
+                </div>
+                <p id="dwm3000-device-type-status" class="field-hint">
+                  Course / fleet role for mesh and ranging. Saved on device NVS.
+                </p>
+              </div>
+              <div nz-col [nzSpan]="24">
+                <label class="field-label" for="dwm3000-peer-input">Measure distance to peer UWB address</label>
+                <div nz-row [nzGutter]="8">
+                  <div nz-col [nzFlex]="'auto'">
+                    <input
+                      nz-input
+                      id="dwm3000-peer-input"
+                      type="text"
+                      spellcheck="false"
+                      autocomplete="off"
+                      placeholder="0x0002"
+                    />
+                  </div>
+                  <div nz-col [nzFlex]="'none'">
+                    <button nz-button nzType="primary" type="button" id="dwm3000-range-btn">Measure</button>
+                  </div>
+                </div>
+                <p id="dwm3000-range-status" class="field-hint">Enter another device&apos;s UWB address and tap Measure.</p>
+              </div>
             </div>
           </nz-tab>
 

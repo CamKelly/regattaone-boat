@@ -170,6 +170,33 @@ menu "RegattaOne — SX1262 LoRa (SPI, RadioLib)"
 
 endmenu
 
+menu "RegattaOne — Device type"
+
+    choice DEVICE_DEFAULT_TYPE
+        prompt "Default device type (NVS overrides after BLE save)"
+        default DEVICE_DEFAULT_TYPE_BOAT
+        help
+            Course / fleet role stored on BLE 0xFEFC. Independent of UWB hardware.
+            RYUW122 maps anchor/tag roles to SC16IS752 UART A/B when enabled.
+
+        config DEVICE_DEFAULT_TYPE_PORT
+            bool "Port mark"
+        config DEVICE_DEFAULT_TYPE_PORT_ANCHOR
+            bool "Port mark + anchor role"
+        config DEVICE_DEFAULT_TYPE_STARBOARD
+            bool "Starboard mark"
+        config DEVICE_DEFAULT_TYPE_STARBOARD_ANCHOR
+            bool "Starboard mark + anchor role"
+        config DEVICE_DEFAULT_TYPE_WAYPOINT
+            bool "Waypoint"
+        config DEVICE_DEFAULT_TYPE_WAYPOINT_ANCHOR
+            bool "Waypoint + anchor role"
+        config DEVICE_DEFAULT_TYPE_BOAT
+            bool "Boat"
+    endchoice
+
+endmenu
+
 menu "RegattaOne — REYAX RYUW122 (UWB UART)"
 
     config REGATTAONE_RYUW122_ENABLE
@@ -198,26 +225,6 @@ menu "RegattaOne — REYAX RYUW122 (UWB UART)"
         default 1000
         help
             RYUW122 may need hundreds of ms after hardware reset before UART responds.
-
-    choice DEVICE_DEFAULT_TYPE
-        prompt "Default device type (NVS overrides after BLE save)"
-        default DEVICE_DEFAULT_TYPE_BOAT
-
-        config DEVICE_DEFAULT_TYPE_PORT
-            bool "Port (tag only, UART B)"
-        config DEVICE_DEFAULT_TYPE_PORT_ANCHOR
-            bool "Port + anchor (tag B, anchor A)"
-        config DEVICE_DEFAULT_TYPE_STARBOARD
-            bool "Starboard (tag only, UART B)"
-        config DEVICE_DEFAULT_TYPE_STARBOARD_ANCHOR
-            bool "Starboard + anchor (tag B, anchor A)"
-        config DEVICE_DEFAULT_TYPE_WAYPOINT
-            bool "Waypoint (tag only, UART B)"
-        config DEVICE_DEFAULT_TYPE_WAYPOINT_ANCHOR
-            bool "Waypoint + anchor (tag B, anchor A)"
-        config DEVICE_DEFAULT_TYPE_BOAT
-            bool "Boat (anchor only, UART A)"
-    endchoice
 
     config RYUW122_UART_TX_GPIO
         int "UWB module RX ← ESP TX (GPIO)"

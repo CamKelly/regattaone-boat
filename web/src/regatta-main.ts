@@ -25,6 +25,8 @@ import {
 import {
   BLE_BOAT_ID_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
+  BLE_DWM3000_CONFIG_CHAR_UUID,
+  BLE_DWM3000_RANGE_CHAR_UUID,
   BLE_GPS_LINE_CHAR_UUID,
   BLE_IMU_CHAR_UUID,
   BLE_MESHTASTIC_RX_CHAR_UUID,
@@ -35,13 +37,18 @@ import {
   BLE_UWB_LINE_CHAR_UUID,
   BOAT_ID_MAX_LEN,
   BOAT_ID_BLE_NAME_MAX_LEN,
+  DWM3000_DEFAULTS,
   type DeviceType,
+  type Dwm3000Config,
   type UwbRole,
   deviceTypeHasAnchor,
   deviceTypeHasTag,
   deviceTypeLabel,
   encodeUwbAtWrite,
+  formatDwm3000ConfigJson,
   parseDeviceType,
+  parseDwm3000ConfigJson,
+  parseDwm3000RangeJson,
   parseUwbNotifyLine,
   uwbWriteNeedsRolePrefix,
 } from "./lib/protocol";
@@ -134,6 +141,11 @@ function hasMeshtastic(session: BleBoatSession | null): boolean {
 }
 
 
+function hasDwm3000(session: BleBoatSession | null): boolean {
+  return session?.charDwm3000Config != null;
+}
+
+
 function formatAgo(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) {
     return "—";
@@ -152,6 +164,8 @@ function formatAgo(ms: number): string {
 const BLE_OPTIONAL_SERVICES = [
   BLE_SERVICE_UUID,
   BLE_IMU_CHAR_UUID,
+  BLE_DWM3000_CONFIG_CHAR_UUID,
+  BLE_DWM3000_RANGE_CHAR_UUID,
   BLE_UWB_LINE_CHAR_UUID,
   BLE_UWB_AT_CHAR_UUID,
   BLE_BOAT_ID_CHAR_UUID,
@@ -176,11 +190,16 @@ interface BleBoatSession {
   charUwbAt: BleGattCharacteristicLike | null;
   charBoatId: BleGattCharacteristicLike | null;
   charDeviceType: BleGattCharacteristicLike | null;
+  charDwm3000Config: BleGattCharacteristicLike | null;
+  charDwm3000Range: BleGattCharacteristicLike | null;
   charGpsLine: BleGattCharacteristicLike | null;
   boatId: string;
   boatIdDraft: string;
   deviceType: DeviceType;
   deviceTypeDraft: DeviceType;
+  dwm3000Config: Dwm3000Config;
+  dwm3000ConfigDraft: Dwm3000Config;
+  dwm3000PeerDraft: string;
   uwbAnchorLineLogText: string;
   uwbTagLineLogText: string;
   uwbAnchorAtDraft: string;
@@ -266,33 +285,39 @@ async function readDeviceTypeFromDevice(session: BleBoatSession): Promise<void> 
 
 async function saveDeviceTypeToDevice(): Promise<void> {
   const session = getActiveSession();
-  const select = document.querySelector<HTMLSelectElement>("#device-type-select");
   const statusEl = document.querySelector("#device-type-status");
-  if (!session?.charDeviceType || !select) {
+  const dwmStatusEl = document.querySelector("#dwm3000-device-type-status");
+  if (!session?.charDeviceType) {
+    const msg = "Device type requires firmware with characteristic 0xFEFC.";
     if (statusEl) {
-      statusEl.textContent = "Device type requires firmware with characteristic 0xFEFC.";
+      statusEl.textContent = msg;
+    }
+    if (dwmStatusEl) {
+      dwmStatusEl.textContent = msg;
     }
     return;
   }
-  const type = parseDeviceType(select.value);
-  if (!type) {
-    if (statusEl) {
-      statusEl.textContent = "Choose a valid device type.";
-    }
-    return;
-  }
+  const type = session.deviceTypeDraft;
   try {
     await gattWrite(session, "type", new TextEncoder().encode(type));
     session.deviceType = type;
-    session.deviceTypeDraft = type;
     syncUwbUi(session);
+    syncDeviceTypeUi(session);
+    const saved = `Saved: ${deviceTypeLabel(type)}`;
     if (statusEl) {
-      statusEl.textContent = `Saved: ${deviceTypeLabel(type)}`;
+      statusEl.textContent = saved;
+    }
+    if (dwmStatusEl) {
+      dwmStatusEl.textContent = saved;
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    const err = `Save failed: ${msg}`;
     if (statusEl) {
-      statusEl.textContent = `Save failed: ${msg}`;
+      statusEl.textContent = err;
+    }
+    if (dwmStatusEl) {
+      dwmStatusEl.textContent = err;
     }
   }
 }
@@ -310,26 +335,243 @@ function setFieldEnabled(el: HTMLInputElement | HTMLSelectElement | HTMLButtonEl
 }
 
 function syncDeviceTypeUi(session: BleBoatSession | null): void {
-  const select = document.querySelector<HTMLSelectElement>("#device-type-select");
+  const selects = [
+    document.querySelector<HTMLSelectElement>("#device-type-select"),
+    document.querySelector<HTMLSelectElement>("#dwm3000-device-type-select"),
+  ];
   const saveBtn = document.querySelector<HTMLButtonElement>("#device-type-save");
+  const dwmSaveBtn = document.querySelector<HTMLButtonElement>("#dwm3000-device-type-save");
   const statusEl = document.querySelector("#device-type-status");
+  const dwmStatusEl = document.querySelector("#dwm3000-device-type-status");
   const canEdit = session !== null && session.gatt.connected && session.charDeviceType !== null;
-  if (select) {
-    setFieldEnabled(select, canEdit);
-    select.value = session?.deviceTypeDraft ?? "boat";
-  }
-  setFieldEnabled(saveBtn, canEdit);
-  if (statusEl) {
-    if (!session) {
-      statusEl.textContent = "Connect a device to set its type.";
-    } else if (!session.charDeviceType) {
-      statusEl.textContent = "Flash firmware with device type support (0xFEFC) to enable.";
-    } else if (!session.gatt.connected) {
-      statusEl.textContent = `Stored on device: ${deviceTypeLabel(session.deviceType)}. Reconnect to edit.`;
-    } else {
-      statusEl.textContent = `Stored on device: ${deviceTypeLabel(session.deviceType)}`;
+  for (const select of selects) {
+    if (select) {
+      setFieldEnabled(select, canEdit);
+      select.value = session?.deviceTypeDraft ?? "boat";
     }
   }
+  setFieldEnabled(saveBtn, canEdit);
+  setFieldEnabled(dwmSaveBtn, canEdit);
+  const statusText = !session
+    ? "Connect a device to set its type."
+    : !session.charDeviceType
+      ? "Flash firmware with device type support (0xFEFC) to enable."
+      : !session.gatt.connected
+        ? `Stored on device: ${deviceTypeLabel(session.deviceType)}. Reconnect to edit.`
+        : `Stored on device: ${deviceTypeLabel(session.deviceType)}`;
+  if (statusEl) {
+    statusEl.textContent = statusText;
+  }
+  if (dwmStatusEl) {
+    dwmStatusEl.textContent = statusText;
+  }
+}
+
+function defaultDwm3000Config(): Dwm3000Config {
+  return { ...DWM3000_DEFAULTS };
+}
+
+function formatHexU16(n: number): string {
+  return `0x${n.toString(16).padStart(4, "0").toUpperCase()}`;
+}
+
+function parseHexU16(raw: string, allowZero = false): number | null {
+  const s = raw.trim();
+  if (!s) {
+    return null;
+  }
+  const hex = s.startsWith("0x") || s.startsWith("0X");
+  const v = Number.parseInt(hex ? s.slice(2) : s, hex ? 16 : 10);
+  if (!Number.isFinite(v) || v < 0 || v >= 0xffff) {
+    return null;
+  }
+  if (!allowZero && v === 0) {
+    return null;
+  }
+  return v;
+}
+
+function dwm3000ConfigFromDraft(): Dwm3000Config | null {
+  const addrRaw = document.querySelector<HTMLInputElement>("#dwm3000-addr-input")?.value ?? "";
+  const panRaw = document.querySelector<HTMLInputElement>("#dwm3000-pan-input")?.value ?? "";
+  const antRaw = document.querySelector<HTMLInputElement>("#dwm3000-ant-input")?.value ?? "";
+  const twrRaw = document.querySelector<HTMLInputElement>("#dwm3000-twr-input")?.value ?? "";
+  const addr = parseHexU16(addrRaw);
+  const pan = parseHexU16(panRaw, true);
+  const ant = Number.parseInt(antRaw.trim(), 10);
+  const twr = Number.parseInt(twrRaw.trim(), 10);
+  if (addr == null || pan == null || !Number.isFinite(ant) || !Number.isFinite(twr)) {
+    return null;
+  }
+  if (ant < 0 || ant > 65535 || twr < 300 || twr > 20000) {
+    return null;
+  }
+  return { addr, pan, ant, twr };
+}
+
+async function readDwm3000ConfigFromDevice(session: BleBoatSession): Promise<void> {
+  if (!session.charDwm3000Config || !session.gatt.connected) {
+    return;
+  }
+  try {
+    const val = await session.charDwm3000Config.readValue();
+    const raw = new TextDecoder().decode(val).replace(/\0/g, "").trim();
+    const cfg = parseDwm3000ConfigJson(raw);
+    if (cfg) {
+      session.dwm3000Config = cfg;
+      session.dwm3000ConfigDraft = { ...cfg };
+    }
+  } catch (e) {
+    console.warn("BLE DWM3000 config read failed", session.name, e);
+  }
+}
+
+async function saveDwm3000ConfigToDevice(): Promise<void> {
+  const session = getActiveSession();
+  const statusEl = document.querySelector("#dwm3000-config-status");
+  if (!session?.charDwm3000Config) {
+    if (statusEl) {
+      statusEl.textContent = "DWM3000 settings require firmware with characteristic 0xFEF2.";
+    }
+    return;
+  }
+  if (!session.gatt.connected) {
+    if (statusEl) {
+      statusEl.textContent = "Device not connected — reconnect before saving.";
+    }
+    return;
+  }
+  const cfg = dwm3000ConfigFromDraft();
+  if (!cfg) {
+    if (statusEl) {
+      statusEl.textContent = "Check address (hex), PAN (hex), antenna delay, and TWR delay.";
+    }
+    return;
+  }
+  try {
+    await gattWrite(session, "dwm3000cfg", new TextEncoder().encode(formatDwm3000ConfigJson(cfg)));
+    session.dwm3000Config = cfg;
+    session.dwm3000ConfigDraft = { ...cfg };
+    syncDwm3000Ui(session);
+    if (statusEl) {
+      statusEl.textContent =
+        `Saved: addr ${formatHexU16(cfg.addr)}, PAN ${formatHexU16(cfg.pan)}, ant ${cfg.ant}, twr ${cfg.twr} µs`;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (statusEl) {
+      statusEl.textContent = `Save failed: ${msg}`;
+    }
+  }
+}
+
+async function measureDwm3000Range(): Promise<void> {
+  const session = getActiveSession();
+  const statusEl = document.querySelector("#dwm3000-range-status");
+  const btn = document.querySelector<HTMLButtonElement>("#dwm3000-range-btn");
+  if (!session?.charDwm3000Range) {
+    if (statusEl) {
+      statusEl.textContent = "Ranging requires firmware with characteristic 0xFEF3.";
+    }
+    return;
+  }
+  const peer = parseHexU16(session.dwm3000PeerDraft);
+  if (peer == null) {
+    if (statusEl) {
+      statusEl.textContent = "Enter a valid peer UWB address (e.g. 0x0002).";
+    }
+    return;
+  }
+  setFieldEnabled(btn, false);
+  if (statusEl) {
+    statusEl.textContent = `Ranging to ${formatHexU16(peer)}…`;
+  }
+  try {
+    await gattWrite(session, "dwm3000range", new TextEncoder().encode(`range=${peer}`));
+    const val = await runGattOp(session, () => session.charDwm3000Range!.readValue());
+    const raw = new TextDecoder().decode(val).replace(/\0/g, "").trim();
+    const result = parseDwm3000RangeJson(raw);
+    if (!result) {
+      if (statusEl) {
+        statusEl.textContent = "Unexpected range response from device.";
+      }
+      return;
+    }
+    if (result.ok && result.dist_cm != null) {
+      const m = (result.dist_cm / 100).toFixed(2);
+      if (statusEl) {
+        statusEl.textContent = `Distance to ${formatHexU16(result.peer)}: ${result.dist_cm} cm (${m} m)`;
+      }
+    } else {
+      if (statusEl) {
+        statusEl.textContent = `Range to ${formatHexU16(result.peer)} failed${result.err ? `: ${result.err}` : ""}`;
+      }
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (statusEl) {
+      statusEl.textContent = `Range failed: ${msg}`;
+    }
+  } finally {
+    syncDwm3000Ui(session);
+  }
+}
+
+function syncDwm3000TabVisibility(session: BleBoatSession | null): void {
+  const tab = document.querySelector<HTMLElement>("#dwm3000-tab");
+  if (tab) {
+    tab.hidden = !hasDwm3000(session);
+  }
+}
+
+function syncDwm3000Ui(session: BleBoatSession | null): void {
+  const addrInput = document.querySelector<HTMLInputElement>("#dwm3000-addr-input");
+  const panInput = document.querySelector<HTMLInputElement>("#dwm3000-pan-input");
+  const antInput = document.querySelector<HTMLInputElement>("#dwm3000-ant-input");
+  const twrInput = document.querySelector<HTMLInputElement>("#dwm3000-twr-input");
+  const peerInput = document.querySelector<HTMLInputElement>("#dwm3000-peer-input");
+  const saveBtn = document.querySelector<HTMLButtonElement>("#dwm3000-config-save");
+  const rangeBtn = document.querySelector<HTMLButtonElement>("#dwm3000-range-btn");
+  const statusEl = document.querySelector("#dwm3000-config-status");
+  const canEdit = session !== null && session.gatt.connected && session.charDwm3000Config !== null;
+  const canRange = session !== null && session.gatt.connected && session.charDwm3000Range !== null;
+  const cfg = session?.dwm3000ConfigDraft ?? defaultDwm3000Config();
+  if (addrInput && document.activeElement !== addrInput) {
+    addrInput.value = formatHexU16(cfg.addr);
+  }
+  if (panInput && document.activeElement !== panInput) {
+    panInput.value = formatHexU16(cfg.pan);
+  }
+  if (antInput && document.activeElement !== antInput) {
+    antInput.value = String(cfg.ant);
+  }
+  if (twrInput && document.activeElement !== twrInput) {
+    twrInput.value = String(cfg.twr);
+  }
+  if (peerInput && document.activeElement !== peerInput) {
+    peerInput.value = session?.dwm3000PeerDraft ?? "";
+  }
+  setFieldEnabled(addrInput, canEdit);
+  setFieldEnabled(panInput, canEdit);
+  setFieldEnabled(antInput, canEdit);
+  setFieldEnabled(twrInput, canEdit);
+  setFieldEnabled(saveBtn, canEdit);
+  setFieldEnabled(peerInput, canRange);
+  setFieldEnabled(rangeBtn, canRange && !session?.uwbBusy);
+  if (statusEl) {
+    if (!session) {
+      statusEl.textContent = "Connect a DWM3000 device to edit settings.";
+    } else if (!session.charDwm3000Config) {
+      statusEl.textContent = "Flash firmware with DWM3000 ranging (0xFEF2) to enable.";
+    } else if (!session.gatt.connected) {
+      statusEl.textContent = `Stored: addr ${formatHexU16(session.dwm3000Config.addr)}. Reconnect to edit.`;
+    } else {
+      statusEl.textContent =
+        `Stored: addr ${formatHexU16(session.dwm3000Config.addr)}, PAN ${formatHexU16(session.dwm3000Config.pan)}`;
+    }
+  }
+  syncDwm3000TabVisibility(session);
+  syncDeviceTypeUi(session);
 }
 
 async function readBoatIdFromDevice(session: BleBoatSession): Promise<void> {
@@ -502,6 +744,7 @@ function syncActionButtons(): void {
   }
   syncBoatIdUi(session);
   syncDeviceTypeUi(session);
+  syncDwm3000Ui(session);
   syncUwbUi(session);
 }
 
@@ -541,6 +784,8 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   session.charUwbAt = null;
   session.charBoatId = null;
   session.charDeviceType = null;
+  session.charDwm3000Config = null;
+  session.charDwm3000Range = null;
   session.charGpsLine = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
@@ -594,6 +839,16 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     console.warn("BLE device type unavailable", session.name, e);
   }
   try {
+    session.charDwm3000Config = await svc.getCharacteristic(BLE_DWM3000_CONFIG_CHAR_UUID);
+  } catch {
+    session.charDwm3000Config = null;
+  }
+  try {
+    session.charDwm3000Range = await svc.getCharacteristic(BLE_DWM3000_RANGE_CHAR_UUID);
+  } catch {
+    session.charDwm3000Range = null;
+  }
+  try {
     session.charGpsLine = await svc.getCharacteristic(BLE_GPS_LINE_CHAR_UUID);
     session.charGpsLine.addEventListener("characteristicvaluechanged", session.onGpsLineNotify);
   } catch {
@@ -602,6 +857,7 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
 
   markMeshtasticBleReady(session);
   syncMeshtasticTabVisibility(session);
+  syncDwm3000TabVisibility(session);
 }
 
 
@@ -982,8 +1238,8 @@ function syncUwbUi(session: BleBoatSession | null): void {
   }
   if (hint) {
     hint.textContent = session
-      ? `Device type: ${deviceTypeLabel(type)} · UART A = anchor, UART B = tag`
-      : "Connect a device — device type selects anchor (A) and/or tag (B) UARTs.";
+      ? `RYUW122 routing for ${deviceTypeLabel(type)} · UART A = anchor role, UART B = tag role`
+      : "Connect a device — RYUW122 UART panels follow device type anchor/tag roles.";
   }
 }
 
@@ -1068,8 +1324,10 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
     await setImuNotifications(session, true);
     await readBoatIdFromDevice(session);
     await readDeviceTypeFromDevice(session);
+    await readDwm3000ConfigFromDevice(session);
     syncBoatIdUi(session);
     syncDeviceTypeUi(session);
+    syncDwm3000Ui(session);
     return session.gatt.connected;
   } catch (e) {
     console.error("BLE activate failed", session.name, e);
@@ -1091,6 +1349,8 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charUwbAt = null;
   session.charBoatId = null;
   session.charDeviceType = null;
+  session.charDwm3000Config = null;
+  session.charDwm3000Range = null;
   session.charGpsLine = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
@@ -1218,7 +1478,7 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
   }
 }
 
-type GattWriteTarget = "uwb" | "boatid" | "type" | "meshtastic" | "mtstats";
+type GattWriteTarget = "uwb" | "boatid" | "type" | "meshtastic" | "mtstats" | "dwm3000cfg" | "dwm3000range";
 
 function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BleGattCharacteristicLike | null {
   if (target === "meshtastic") {
@@ -1233,10 +1493,16 @@ function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget
   if (target === "type") {
     return session.charDeviceType;
   }
+  if (target === "dwm3000cfg") {
+    return session.charDwm3000Config;
+  }
+  if (target === "dwm3000range") {
+    return session.charDwm3000Range;
+  }
   return session.charBoatId;
 }
 
-async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data: BufferSource): Promise<void> {
+async function gattWrite(session: BleBoatSession, target: GattWriteTarget, data: ArrayBuffer | Uint8Array): Promise<void> {
   if (!(await ensureSessionConnected(session))) {
     throw new Error("Device not connected");
   }
@@ -1921,10 +2187,22 @@ function saveUiToSession(session: BleBoatSession): void {
   const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
   session.boatIdDraft = boatIdInput?.value ?? session.boatIdDraft;
   const typeSelect = document.querySelector<HTMLSelectElement>("#device-type-select");
+  const dwmTypeSelect = document.querySelector<HTMLSelectElement>("#dwm3000-device-type-select");
   const typeParsed = typeSelect ? parseDeviceType(typeSelect.value) : null;
   if (typeParsed) {
     session.deviceTypeDraft = typeParsed;
+  } else if (dwmTypeSelect) {
+    const dwmParsed = parseDeviceType(dwmTypeSelect.value);
+    if (dwmParsed) {
+      session.deviceTypeDraft = dwmParsed;
+    }
   }
+  const cfgDraft = dwm3000ConfigFromDraft();
+  if (cfgDraft) {
+    session.dwm3000ConfigDraft = cfgDraft;
+  }
+  session.dwm3000PeerDraft =
+    document.querySelector<HTMLInputElement>("#dwm3000-peer-input")?.value ?? session.dwm3000PeerDraft;
 }
 
 function loadSessionToUi(session: BleBoatSession): void {
@@ -1946,6 +2224,7 @@ function loadSessionToUi(session: BleBoatSession): void {
   renderGpsDisplay(session);
   renderUwbLogs(session);
   syncUwbUi(session);
+  syncDwm3000Ui(session);
   updateBleToolbar();
   syncActionButtons();
 }
@@ -1984,6 +2263,8 @@ function clearUiPanels(): void {
   setText("meshtastic-stats", "TX ok: 0 · fail: 0 · RX: 0");
   syncMeshtasticTabVisibility(null);
   syncMeshtasticUiRefresh(null);
+  syncDwm3000TabVisibility(null);
+  syncDwm3000Ui(null);
   clearGpsDisplay(null);
 }
 
@@ -2249,11 +2530,16 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     charUwbAt: null,
     charBoatId: null,
     charDeviceType: null,
+    charDwm3000Config: null,
+    charDwm3000Range: null,
     charGpsLine: null,
     boatId: "",
     boatIdDraft: "",
     deviceType: "boat",
     deviceTypeDraft: "boat",
+    dwm3000Config: defaultDwm3000Config(),
+    dwm3000ConfigDraft: defaultDwm3000Config(),
+    dwm3000PeerDraft: "",
     uwbAnchorLineLogText: "",
     uwbTagLineLogText: "",
     uwbAnchorAtDraft: "",
@@ -2312,11 +2598,16 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     charUwbAt: null,
     charBoatId: null,
     charDeviceType: null,
+    charDwm3000Config: null,
+    charDwm3000Range: null,
     charGpsLine: null,
     boatId: "",
     boatIdDraft: "",
     deviceType: "boat",
     deviceTypeDraft: "boat",
+    dwm3000Config: defaultDwm3000Config(),
+    dwm3000ConfigDraft: defaultDwm3000Config(),
+    dwm3000PeerDraft: "",
     uwbAnchorLineLogText: "",
     uwbTagLineLogText: "",
     uwbAnchorAtDraft: "",
@@ -2505,8 +2796,16 @@ export function startRegattaApp(): void {
       clearMeshtasticLog(getActiveSession());
       return;
     }
-    if (btn.id === "device-type-save") {
+    if (btn.id === "device-type-save" || btn.id === "dwm3000-device-type-save") {
       void saveDeviceTypeToDevice();
+      return;
+    }
+    if (btn.id === "dwm3000-config-save") {
+      void saveDwm3000ConfigToDevice();
+      return;
+    }
+    if (btn.id === "dwm3000-range-btn") {
+      void measureDwm3000Range();
       return;
     }
     if (btn.id === "boat-id-save") {
@@ -2563,6 +2862,23 @@ export function startRegattaApp(): void {
       session.uwbTagAtDraft = target.value;
       return;
     }
+    if (target instanceof HTMLInputElement && target.id === "dwm3000-peer-input") {
+      session.dwm3000PeerDraft = target.value;
+      return;
+    }
+    if (
+      target instanceof HTMLInputElement &&
+      (target.id === "dwm3000-addr-input" ||
+        target.id === "dwm3000-pan-input" ||
+        target.id === "dwm3000-ant-input" ||
+        target.id === "dwm3000-twr-input")
+    ) {
+      const cfg = dwm3000ConfigFromDraft();
+      if (cfg) {
+        session.dwm3000ConfigDraft = cfg;
+      }
+      return;
+    }
     if (target instanceof HTMLInputElement && target.id === "boat-id-input") {
       session.boatIdDraft = target.value;
     }
@@ -2590,6 +2906,17 @@ export function startRegattaApp(): void {
       const type = parseDeviceType(ev.target.value);
       if (type) {
         session.deviceTypeDraft = type;
+        syncDeviceTypeUi(session);
+      }
+    }
+  });
+  document.querySelector<HTMLSelectElement>("#dwm3000-device-type-select")?.addEventListener("change", (ev) => {
+    const session = getActiveSession();
+    if (session && ev.target instanceof HTMLSelectElement) {
+      const type = parseDeviceType(ev.target.value);
+      if (type) {
+        session.deviceTypeDraft = type;
+        syncDeviceTypeUi(session);
       }
     }
   });
@@ -2637,7 +2964,10 @@ export function startRegattaApp(): void {
   clearUiPanels();
   syncBoatIdUi(null);
   syncDeviceTypeUi(null);
+  syncDwm3000Ui(null);
   renderDeviceSelector();
   updateBleToolbar();
   syncActionButtons();
+}
+
 }

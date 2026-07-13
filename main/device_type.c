@@ -7,10 +7,6 @@
 #include "nvs.h"
 #include "sdkconfig.h"
 
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-#include "ryuw122_uart.h"
-#endif
-
 static const char *TAG = "device_type";
 static const char *NVS_NS = "boat";
 static const char *NVS_KEY = "type";
@@ -58,7 +54,7 @@ const char *device_type_to_string(device_type_t type)
     }
 }
 
-bool device_type_uwb_use_anchor(device_type_t type)
+bool device_type_has_anchor_role(device_type_t type)
 {
     switch (type) {
     case DEVICE_TYPE_PORT_ANCHOR:
@@ -71,7 +67,7 @@ bool device_type_uwb_use_anchor(device_type_t type)
     }
 }
 
-bool device_type_uwb_use_tag(device_type_t type)
+bool device_type_has_tag_role(device_type_t type)
 {
     return type != DEVICE_TYPE_BOAT;
 }
@@ -166,8 +162,8 @@ esp_err_t device_type_init(void)
         if (device_type_from_string(buf, strlen(buf), &parsed)) {
             s_type = parsed;
             s_type_in_nvs = true;
-            ESP_LOGI(TAG, "loaded type \"%s\" (UWB anchor=%d tag=%d)", device_type_to_string(s_type),
-                     (int)device_type_uwb_use_anchor(s_type), (int)device_type_uwb_use_tag(s_type));
+            ESP_LOGI(TAG, "loaded type \"%s\" (anchor_role=%d tag_role=%d)", device_type_to_string(s_type),
+                     (int)device_type_has_anchor_role(s_type), (int)device_type_has_tag_role(s_type));
         }
     }
     return ESP_OK;
@@ -184,7 +180,6 @@ esp_err_t device_type_set(device_type_t type)
         return ESP_ERR_INVALID_ARG;
     }
 
-    const device_type_t prev = s_type;
     const char *str = device_type_to_string(type);
     nvs_handle_t h;
     esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &h);
@@ -202,12 +197,7 @@ esp_err_t device_type_set(device_type_t type)
 
     s_type = type;
     s_type_in_nvs = true;
-    ESP_LOGI(TAG, "saved type \"%s\" (UWB anchor=%d tag=%d)", str, (int)device_type_uwb_use_anchor(type),
-             (int)device_type_uwb_use_tag(type));
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-    if (prev != type) {
-        ryuw122_provision_on_device_type_changed();
-    }
-#endif
+    ESP_LOGI(TAG, "saved type \"%s\" (anchor_role=%d tag_role=%d)", str, (int)device_type_has_anchor_role(type),
+             (int)device_type_has_tag_role(type));
     return ESP_OK;
 }

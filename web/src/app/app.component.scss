@@ -394,7 +394,8 @@
 
 /* Hide BLE tabs when firmware lacks that radio (ng-zorro still renders tab headers). */
 #lora-tab[hidden],
-#meshtastic-tab[hidden] {
+#meshtastic-tab[hidden],
+#dwm3000-tab[hidden] {
   display: none !important;
 }
 

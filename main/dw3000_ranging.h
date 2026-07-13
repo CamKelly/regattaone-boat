@@ -38,6 +38,9 @@ typedef void (*dw3000_range_result_cb_t)(uint16_t peer_addr, uint16_t dist_cm,
  */
 esp_err_t dw3000_ranging_init(void);
 
+/** Re-apply NVS/runtime config to an initialized ranging stack. */
+esp_err_t dw3000_ranging_apply_config(void);
+
 /** This device's own 16-bit UWB address. */
 uint16_t dw3000_ranging_self_addr(void);
 

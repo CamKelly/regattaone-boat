@@ -5,6 +5,11 @@ export const BLE_SERVICE_UUID = "0000fef0-0000-1000-8000-00805f9b34fb";
 /** Notify: binary IMU packet (`sen0140_ble_imu_pkt_t`, 42 bytes v2). */
 export const BLE_IMU_CHAR_UUID = "0000fef1-0000-1000-8000-00805f9b34fb";
 
+/** Read/write: DWM3000 config JSON (addr, pan, ant, twr) — persisted in device NVS. */
+export const BLE_DWM3000_CONFIG_CHAR_UUID = "0000fef2-0000-1000-8000-00805f9b34fb";
+/** Read/write: DWM3000 ranging — write peer address, read JSON distance result. */
+export const BLE_DWM3000_RANGE_CHAR_UUID = "0000fef3-0000-1000-8000-00805f9b34fb";
+
 /** Notify: UTF-8 lines from RYUW122 UART. */
 export const BLE_UWB_LINE_CHAR_UUID = "0000fef9-0000-1000-8000-00805f9b34fb";
 /** Write UTF-8 AT command to RYUW122 (firmware appends CRLF if missing). */
@@ -29,9 +34,10 @@ export const BLE_MESHTASTIC_TX_CHAR_UUID = "0000fee6-0000-1000-8000-00805f9b34fb
 export const BLE_MESHTASTIC_STATS_CHAR_UUID = "0000fee7-0000-1000-8000-00805f9b34fb";
 
 /**
- * Device type (BLE 0xFEFC) selects SC16IS752 UWB routing when the bridge is enabled:
- *   UART A (TXA/RXA) — ANCHOR RYUW122
- *   UART B (TXB/RXB) — TAG RYUW122
+ * Device type (BLE 0xFEFC) — course / fleet role (port, starboard, waypoint, boat, …).
+ * Stored in NVS; used by mesh, backend, and ranging stacks.
+ *
+ * RYUW122 (when enabled) maps anchor/tag roles from device type to SC16IS752 UART A/B.
  */
 export type DeviceType =
   | "port"
@@ -54,7 +60,8 @@ export const DEVICE_TYPES: DeviceType[] = [
 
 export type UwbRole = "anchor" | "tag";
 
-export function deviceTypeHasAnchor(type: DeviceType): boolean {
+/** Anchor role implied by device type (used by RYUW122 UART routing and similar). */
+export function deviceTypeHasAnchorRole(type: DeviceType): boolean {
   return (
     type === "port_anchor" ||
     type === "starboard_anchor" ||
@@ -63,20 +70,27 @@ export function deviceTypeHasAnchor(type: DeviceType): boolean {
   );
 }
 
-export function deviceTypeHasTag(type: DeviceType): boolean {
+/** Tag role implied by device type (used by RYUW122 UART routing and similar). */
+export function deviceTypeHasTagRole(type: DeviceType): boolean {
   return type !== "boat";
 }
+
+/** @deprecated Use deviceTypeHasAnchorRole */
+export const deviceTypeHasAnchor = deviceTypeHasAnchorRole;
+
+/** @deprecated Use deviceTypeHasTagRole */
+export const deviceTypeHasTag = deviceTypeHasTagRole;
 
 export function deviceTypeLabel(type: DeviceType): string {
   switch (type) {
     case "port":
-      return "Port";
+      return "Port mark";
     case "port_anchor":
-      return "Port + anchor";
+      return "Port mark + anchor";
     case "starboard":
-      return "Starboard";
+      return "Starboard mark";
     case "starboard_anchor":
-      return "Starboard + anchor";
+      return "Starboard mark + anchor";
     case "waypoint":
       return "Waypoint";
     case "waypoint_anchor":
@@ -121,6 +135,64 @@ export function parseUwbNotifyLine(raw: string): { role: UwbRole; line: string }
 
 export function uwbWriteNeedsRolePrefix(type: DeviceType): boolean {
   return deviceTypeHasAnchor(type) && deviceTypeHasTag(type);
+}
+
+/** DWM3000 SPI UWB settings (BLE 0xFEF2), persisted in device NVS. */
+export interface Dwm3000Config {
+  addr: number;
+  pan: number;
+  ant: number;
+  twr: number;
+}
+
+export const DWM3000_DEFAULTS: Dwm3000Config = {
+  addr: 0x0001,
+  pan: 0xdeca,
+  ant: 16368,
+  twr: 2000,
+};
+
+export function parseDwm3000ConfigJson(raw: string): Dwm3000Config | null {
+  try {
+    const o = JSON.parse(raw) as Partial<Dwm3000Config>;
+    if (typeof o.addr !== "number" || typeof o.pan !== "number" || typeof o.ant !== "number" || typeof o.twr !== "number") {
+      return null;
+    }
+    if (o.addr <= 0 || o.addr >= 0xffff || o.ant < 0 || o.ant > 65535 || o.twr < 300 || o.twr > 20000) {
+      return null;
+    }
+    return { addr: o.addr, pan: o.pan, ant: o.ant, twr: o.twr };
+  } catch {
+    return null;
+  }
+}
+
+export function formatDwm3000ConfigJson(cfg: Dwm3000Config): string {
+  return JSON.stringify({ addr: cfg.addr, pan: cfg.pan, ant: cfg.ant, twr: cfg.twr });
+}
+
+export interface Dwm3000RangeResult {
+  peer: number;
+  dist_cm?: number;
+  ok: boolean;
+  err?: string;
+}
+
+export function parseDwm3000RangeJson(raw: string): Dwm3000RangeResult | null {
+  try {
+    const o = JSON.parse(raw) as Partial<Dwm3000RangeResult>;
+    if (typeof o.peer !== "number" || typeof o.ok !== "boolean") {
+      return null;
+    }
+    return {
+      peer: o.peer,
+      dist_cm: typeof o.dist_cm === "number" ? o.dist_cm : undefined,
+      ok: o.ok,
+      err: typeof o.err === "string" ? o.err : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export const BOAT_ID_MAX_LEN = 32;

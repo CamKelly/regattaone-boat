@@ -8,13 +8,12 @@
 /**
  * Regatta device classification (persisted in NVS, BLE 0xFEFC).
  *
- * UWB routing on SC16IS752 (when enabled):
- *   UART A (TXA/RXA) — ANCHOR RYUW122
- *   UART B (TXB/RXB) — TAG RYUW122
+ * Describes where the device sits in the course / fleet, independent of radio hardware.
+ * Ranging stacks (REYAX RYUW122, DWM3000, …) map these types to anchor/tag roles as needed.
  *
- *   Boat                         → anchor only (A)
- *   Port / Starboard / Waypoint  → tag only (B)
- *   *_ANCHOR variants            → tag (B) + anchor (A)
+ *   Port / Starboard / Waypoint     — mark or mobile node with tag role
+ *   *_anchor variants               — same mark + anchor role (dual-role)
+ *   Boat                            — primary vessel; anchor role only
  */
 typedef enum {
     DEVICE_TYPE_PORT = 0,
@@ -39,8 +38,8 @@ bool device_type_from_string(const char *s, size_t len, device_type_t *out);
 
 esp_err_t device_type_set(device_type_t type);
 
-/** True when firmware should listen/write SC16IS752 UART A (anchor). */
-bool device_type_uwb_use_anchor(device_type_t type);
+/** True when this device acts as an anchor in a range network (boat, *_anchor). */
+bool device_type_has_anchor_role(device_type_t type);
 
-/** True when firmware should listen/write SC16IS752 UART B (tag). */
-bool device_type_uwb_use_tag(device_type_t type);
+/** True when this device acts as a tag in a range network (all except boat-only). */
+bool device_type_has_tag_role(device_type_t type);

@@ -169,6 +169,8 @@ static void ryuw122_feed_bytes(ryuw122_line_buf_t *lb, const char *prefix, const
 
 #if CONFIG_REGATTAONE_SC16IS752_ENABLE
 
+/* RYUW122 on SC16IS752: UART A = anchor role, UART B = tag role (from device_type). */
+
 static bool ryuw122_prefix_match(const uint8_t *data, size_t len, const char *prefix, size_t *skip_out)
 {
     const size_t plen = strlen(prefix);
@@ -182,8 +184,8 @@ static bool ryuw122_prefix_match(const uint8_t *data, size_t len, const char *pr
 static bool ryuw122_resolve_write_channel(const uint8_t **data, size_t *len, sc16is752_channel_t *ch_out)
 {
     const device_type_t dt = device_type_get();
-    const bool use_anchor = device_type_uwb_use_anchor(dt);
-    const bool use_tag = device_type_uwb_use_tag(dt);
+    const bool use_anchor = device_type_has_anchor_role(dt);
+    const bool use_tag = device_type_has_tag_role(dt);
     size_t skip = 0U;
 
     if (ryuw122_prefix_match(*data, *len, "@ANCHOR\n", &skip) || ryuw122_prefix_match(*data, *len, "@A\n", &skip)) {
@@ -246,17 +248,17 @@ static void ryuw122_task(void *arg)
 
     const device_type_t dt = device_type_get();
     ESP_LOGI(TAG, "read task started (SC16IS752 type=%s anchor=%d tag=%d @ %d baud)",
-             device_type_to_string(dt), (int)device_type_uwb_use_anchor(dt), (int)device_type_uwb_use_tag(dt),
+             device_type_to_string(dt), (int)device_type_has_anchor_role(dt), (int)device_type_has_tag_role(dt),
              CONFIG_RYUW122_UART_BAUD);
 
     for (;;) {
         sc16is752_wait_rx(pdMS_TO_TICKS(50));
         const device_type_t active = device_type_get();
         i2c_bus_mux_lock();
-        if (device_type_uwb_use_anchor(active)) {
+        if (device_type_has_anchor_role(active)) {
             ryuw122_drain_channel(SC16IS752_CH_A, "[ANCHOR] ", &lb_a, "ANCHOR");
         }
-        if (device_type_uwb_use_tag(active)) {
+        if (device_type_has_tag_role(active)) {
             ryuw122_drain_channel(SC16IS752_CH_B, "[TAG] ", &lb_b, "TAG");
         }
         i2c_bus_mux_unlock();
@@ -576,22 +578,22 @@ static void ryuw122_provision_worker(void *arg)
     const device_type_t dt = device_type_get();
 
 #if CONFIG_REGATTAONE_SC16IS752_ENABLE
-    if (device_type_uwb_use_anchor(dt) && !s_prov_anchor_done) {
+    if (device_type_has_anchor_role(dt) && !s_prov_anchor_done) {
         if (ryuw122_provision_role_sc16(SC16IS752_CH_A, true, node_num) == ESP_OK) {
             s_prov_anchor_done = true;
         }
     }
-    if (device_type_uwb_use_tag(dt) && !s_prov_tag_done) {
+    if (device_type_has_tag_role(dt) && !s_prov_tag_done) {
         if (ryuw122_provision_role_sc16(SC16IS752_CH_B, false, node_num) == ESP_OK) {
             s_prov_tag_done = true;
         }
     }
 #else
-    if (device_type_uwb_use_anchor(dt) && !device_type_uwb_use_tag(dt) && !s_prov_anchor_done) {
+    if (device_type_has_anchor_role(dt) && !device_type_has_tag_role(dt) && !s_prov_anchor_done) {
         if (ryuw122_provision_role_native(true, node_num) == ESP_OK) {
             s_prov_anchor_done = true;
         }
-    } else if (device_type_uwb_use_tag(dt) && !s_prov_tag_done) {
+    } else if (device_type_has_tag_role(dt) && !s_prov_tag_done) {
         if (ryuw122_provision_role_native(false, node_num) == ESP_OK) {
             s_prov_tag_done = true;
         }
@@ -625,8 +627,8 @@ void ryuw122_provision_try(void)
     }
 
     const device_type_t dt = device_type_get();
-    const bool need_anchor = device_type_uwb_use_anchor(dt) && !s_prov_anchor_done;
-    const bool need_tag = device_type_uwb_use_tag(dt) && !s_prov_tag_done;
+    const bool need_anchor = device_type_has_anchor_role(dt) && !s_prov_anchor_done;
+    const bool need_tag = device_type_has_tag_role(dt) && !s_prov_tag_done;
     if (!need_anchor && !need_tag) {
         return;
     }
