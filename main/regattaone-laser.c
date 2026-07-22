@@ -22,6 +22,7 @@
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 #include "sx1262_lora.h"
 #endif
+#include "mark_broadcast.h"
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
 #if CONFIG_REGATTAONE_DW3000_ENABLE
@@ -174,6 +175,13 @@ void app_main(void)
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "SX1262 LoRa start: %s", esp_err_to_name(err));
         }
+    }
+#endif
+
+#if CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE
+    err = mark_broadcast_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Mark broadcast: %s", esp_err_to_name(err));
     }
 #endif
 

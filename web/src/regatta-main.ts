@@ -101,6 +101,19 @@ interface MeshtasticRxMsg {
   last_ms: number;
 }
 
+/** Latest Port/Starboard mark broadcast received over Meshtastic ($PREGMARK). */
+interface MarkBroadcastSnapshot {
+  role: "P" | "S";
+  uwb: number;
+  lat_e7: number;
+  lon_e7: number;
+  acc_cm: number;
+  dist_cm: number | null;
+  gps_valid: boolean;
+  from: number;
+  updatedAtMs: number;
+}
+
 interface MeshtasticStatsSnapshot {
   connected: boolean;
   config_ok: boolean;
@@ -197,6 +210,8 @@ interface BleBoatSession {
   meshtasticStatsNotifyBuf: string;
   meshtasticLineLogText: string;
   meshtasticTxDraft: string;
+  markPort: MarkBroadcastSnapshot | null;
+  markStarboard: MarkBroadcastSnapshot | null;
   gpsFix: GpsFix;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -1612,10 +1627,128 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
   if (!chunk) {
     return;
   }
-  appendStreamLine(session, chunk);
-  mergeMeshtasticPeersFromLog(session);
+  const lines = chunk.split(/\r?\n/);
+  let hadMark = false;
+  let other = "";
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith("$PREGMARK,")) {
+      if (applyMarkBroadcastLine(session, line)) {
+        hadMark = true;
+      }
+      continue;
+    }
+    other += `${line}\n`;
+  }
+  if (other.length > 0) {
+    appendStreamLine(session, other);
+    mergeMeshtasticPeersFromLog(session);
+  }
+  if (hadMark) {
+    renderMarkBroadcasts(session);
+  }
   renderMeshtastic(session);
   syncMeshtasticUiRefresh(session);
+}
+
+function applyMarkBroadcastLine(session: BleBoatSession, line: string): boolean {
+  const jsonPart = line.slice("$PREGMARK,".length).trim();
+  try {
+    const o = JSON.parse(jsonPart) as {
+      role?: string;
+      uwb?: number;
+      lat_e7?: number;
+      lon_e7?: number;
+      acc_cm?: number;
+      dist_cm?: number;
+      gps?: boolean;
+      from?: number;
+    };
+    if (o.role !== "P" && o.role !== "S") {
+      return false;
+    }
+    if (typeof o.uwb !== "number" || typeof o.lat_e7 !== "number" || typeof o.lon_e7 !== "number") {
+      return false;
+    }
+    const distRaw = typeof o.dist_cm === "number" ? o.dist_cm : 65535;
+    const snap: MarkBroadcastSnapshot = {
+      role: o.role,
+      uwb: o.uwb & 0xffff,
+      lat_e7: o.lat_e7,
+      lon_e7: o.lon_e7,
+      acc_cm: typeof o.acc_cm === "number" ? o.acc_cm : 0,
+      dist_cm: distRaw >= 65535 ? null : distRaw,
+      gps_valid: o.gps === true,
+      from: typeof o.from === "number" ? o.from : 0,
+      updatedAtMs: Date.now(),
+    };
+    if (snap.role === "P") {
+      session.markPort = snap;
+    } else {
+      session.markStarboard = snap;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function formatMarkCoord(e7: number, gpsValid: boolean): string {
+  if (!gpsValid && e7 === 0) {
+    return "—";
+  }
+  return `${(e7 / 1e7).toFixed(6)}°`;
+}
+
+function formatMarkDist(cm: number | null, oppositeLabel: string): string {
+  if (cm === null) {
+    return "—";
+  }
+  if (cm >= 100) {
+    return `${(cm / 100).toFixed(2)} m to ${oppositeLabel}`;
+  }
+  return `${cm} cm to ${oppositeLabel}`;
+}
+
+function renderMarkBroadcastPanel(
+  prefix: "port" | "starboard",
+  snap: MarkBroadcastSnapshot | null,
+  oppositeLabel: string,
+): void {
+  const set = (suffix: string, value: string) => {
+    const el = document.querySelector(`#mark-${prefix}-${suffix}`);
+    if (el) {
+      el.textContent = value;
+    }
+  };
+  if (!snap) {
+    set("uwb", "—");
+    set("lat", "—");
+    set("lon", "—");
+    set("acc", "—");
+    set("dist", "—");
+    set("from", "—");
+    set("updated", "Waiting for broadcast…");
+    return;
+  }
+  set("uwb", `0x${snap.uwb.toString(16).toUpperCase().padStart(4, "0")}`);
+  set("lat", formatMarkCoord(snap.lat_e7, snap.gps_valid));
+  set("lon", formatMarkCoord(snap.lon_e7, snap.gps_valid));
+  set("acc", snap.acc_cm > 0 ? `${snap.acc_cm} cm` : "—");
+  set("dist", formatMarkDist(snap.dist_cm, oppositeLabel));
+  set("from", snap.from ? `0x${snap.from.toString(16).toUpperCase().padStart(8, "0")}` : "—");
+  set("updated", new Date(snap.updatedAtMs).toLocaleTimeString());
+}
+
+function renderMarkBroadcasts(session: BleBoatSession | null): void {
+  if (session && session.deviceId !== activeSessionId) {
+    return;
+  }
+  renderMarkBroadcastPanel("port", session?.markPort ?? null, "Starboard");
+  renderMarkBroadcastPanel("starboard", session?.markStarboard ?? null, "Port");
 }
 
 function applyMeshtasticStats(session: BleBoatSession, parsed: MeshtasticStatsSnapshot): void {
@@ -1815,6 +1948,7 @@ function renderMeshtastic(session: BleBoatSession): void {
   if (statsEl) {
     statsEl.textContent = `TX ok: ${m.tx_ok}, fail: ${m.tx_fail}, RX: ${m.rx}, GPS: ${m.gps_rx} (api ${m.gps_api_rx}) · nodes: ${m.nodes.length}`;
   }
+  renderMarkBroadcasts(session);
   if (!tbody) {
     return;
   }
@@ -2024,6 +2158,7 @@ function clearUiPanels(): void {
   setText("meshtastic-status", "Meshtastic: connect BLE for status");
   setText("meshtastic-self", "This device: waiting…");
   setText("meshtastic-stats", "TX ok: 0 · fail: 0 · RX: 0");
+  renderMarkBroadcasts(null);
   syncMeshtasticTabVisibility(null);
   syncMeshtasticUiRefresh(null);
   syncDwm3000TabVisibility(null);
@@ -2226,6 +2361,8 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     meshtasticStatsNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
+    markPort: null,
+    markStarboard: null,
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),
@@ -2283,6 +2420,8 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     meshtasticStatsNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
+    markPort: null,
+    markStarboard: null,
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),

@@ -219,6 +219,81 @@
             </p>
             <p id="meshtastic-self" class="tab-hint" aria-live="polite">This device: waiting…</p>
             <p id="meshtastic-stats" class="tab-hint" aria-live="polite">TX ok: 0 · fail: 0 · RX: 0</p>
+
+            <h3 class="field-label">Mark broadcasts</h3>
+            <p class="tab-hint">
+              Live Port / Starboard frames received over Meshtastic. Each panel refreshes in place
+              when that mark transmits.
+            </p>
+            <div class="mark-bcast-grid" aria-live="polite">
+              <section class="mark-bcast-panel" aria-labelledby="mark-port-title">
+                <h4 id="mark-port-title" class="mark-bcast-title">Port</h4>
+                <dl class="mark-bcast-fields">
+                  <div class="mark-bcast-row">
+                    <dt>UWB address</dt>
+                    <dd id="mark-port-uwb">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Latitude</dt>
+                    <dd id="mark-port-lat">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Longitude</dt>
+                    <dd id="mark-port-lon">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Accuracy</dt>
+                    <dd id="mark-port-acc">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Distance to Starboard</dt>
+                    <dd id="mark-port-dist">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>From node</dt>
+                    <dd id="mark-port-from">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Last update</dt>
+                    <dd id="mark-port-updated">—</dd>
+                  </div>
+                </dl>
+              </section>
+              <section class="mark-bcast-panel" aria-labelledby="mark-starboard-title">
+                <h4 id="mark-starboard-title" class="mark-bcast-title">Starboard</h4>
+                <dl class="mark-bcast-fields">
+                  <div class="mark-bcast-row">
+                    <dt>UWB address</dt>
+                    <dd id="mark-starboard-uwb">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Latitude</dt>
+                    <dd id="mark-starboard-lat">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Longitude</dt>
+                    <dd id="mark-starboard-lon">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Accuracy</dt>
+                    <dd id="mark-starboard-acc">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Distance to Port</dt>
+                    <dd id="mark-starboard-dist">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>From node</dt>
+                    <dd id="mark-starboard-from">—</dd>
+                  </div>
+                  <div class="mark-bcast-row">
+                    <dt>Last update</dt>
+                    <dd id="mark-starboard-updated">—</dd>
+                  </div>
+                </dl>
+              </section>
+            </div>
+
             <div nz-row [nzGutter]="8" class="lora-stream-row">
               <div nz-col [nzFlex]="'none'">
                 <button nz-button nzType="default" type="button" id="meshtastic-roster-refresh">

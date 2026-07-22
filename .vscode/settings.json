@@ -5,7 +5,7 @@
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.port": "/dev/tty.usbmodem5AE70741681",
+  "idf.port": "/dev/tty.usbmodem5AE70718461",
   "idf.enableSerialPortChipIdRequest": false,
   "idf.currentSetup": "/Users/cameronkelly/.espressif/v6.0/esp-idf",
   "idf.pythonBinPath": "/Users/cameronkelly/.espressif/python_env/idf6.0_py3.12_env/bin/python",

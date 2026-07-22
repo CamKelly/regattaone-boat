@@ -5,6 +5,7 @@ set(regattaone_srcs
     "meshtastic_uart.c"
     "meshtastic_client.c"
     "gps_nmea.c"
+    "gps_fix.c"
     "gps_pps.c"
     "i2c_bus_mux.c"
     "regattaone-laser.c"
@@ -12,7 +13,8 @@ set(regattaone_srcs
     "ble_sen0140.c"
     "sx1262_lora.cpp"
     "lora_stats.c"
-    "lora_mesh.c")
+    "lora_mesh.c"
+    "mark_broadcast.c")
 
 # ESP-IDF 6 evaluates main/CMakeLists.txt before sdkconfig symbols are visible to
 # if(CONFIG_*) — keep decadriver/libdeca in PRIV_REQUIRES unconditionally and pick

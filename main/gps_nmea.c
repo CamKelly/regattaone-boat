@@ -5,6 +5,7 @@
 #if CONFIG_REGATTAONE_GPS_ENABLE
 
 #include "ble_sen0140.h"
+#include "gps_fix.h"
 #include "gps_pps.h"
 
 #include "driver/gpio.h"
@@ -75,6 +76,7 @@ static void gps_task(void *arg)
             }
             if (c == '\n') {
                 if (li > 0U) {
+                    gps_fix_feed_line(line, li);
                     gps_emit_line(line, li);
                     li = 0U;
                 }

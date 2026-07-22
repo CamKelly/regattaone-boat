@@ -28,3 +28,12 @@ void meshtastic_client_request_stats_notify_now(void);
 
 /** True when companion reported our node number (for UWB AT+ADDRESS). */
 bool meshtastic_client_get_my_num(uint32_t *out_num);
+
+/** True after Meshtastic want_config handshake completes (safe to TX). */
+bool meshtastic_client_is_config_ready(void);
+
+/**
+ * Broadcast raw bytes on Meshtastic PRIVATE_APP (for compact mark frames).
+ * Max length 240 bytes. Requires config-complete.
+ */
+esp_err_t meshtastic_client_broadcast_bytes(const uint8_t *data, size_t len);

@@ -241,6 +241,38 @@ menu "RegattaOne — DWM3000 (DW3000 SPI UWB)"
 
 endmenu
 
+menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
+
+    config REGATTAONE_MARK_BROADCAST_ENABLE
+        bool "Enable Port/Starboard mark broadcasts (via Meshtastic UART)"
+        default y if REGATTAONE_MESHTASTIC_ENABLE
+        default n
+        depends on REGATTAONE_MESHTASTIC_ENABLE
+        help
+            Port and Starboard devices periodically broadcast a compact 18-byte
+            frame (role P/S, UWB address, lat/lon, accuracy, opposite-mark distance)
+            over the Meshtastic companion UART (PRIVATE_APP). The SX1262 radio is
+            owned by Meshtastic firmware, not this app. Boat devices store the
+            latest Port and Starboard records in RAM.
+
+    config MARK_BROADCAST_INTERVAL_MS
+        int "Broadcast interval (ms)"
+        range 1000 600000
+        default 10000
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE
+        help
+            How often Port/Starboard devices transmit. Default 10 seconds.
+
+    config MARK_BROADCAST_PEER_UWB_ADDR
+        hex "Opposite-mark UWB address (0 = learn from RX)"
+        default 0x0
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE
+        help
+            Optional fixed peer address for DWM3000 ranging before the first
+            opposite-mark broadcast is heard. 0 means auto-learn from RX.
+
+endmenu
+
 menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
 
     config REGATTAONE_GPS_ENABLE

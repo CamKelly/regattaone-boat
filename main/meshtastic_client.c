@@ -5,6 +5,7 @@
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 
 #include "ble_sen0140.h"
+#include "mark_broadcast.h"
 #include "meshtastic_uart.h"
 
 #include "esp_log.h"
@@ -23,6 +24,7 @@ static const char *TAG = "mt_client";
 #define MT_BROADCAST 0xFFFFFFFFU
 #define MT_TEXT_APP 1U
 #define MT_POSITION_APP 3U
+#define MT_PRIVATE_APP 256U
 #define MT_TRANSPORT_LORA 1U
 #define MT_TRANSPORT_API 7U
 #define MT_MESHPACKET_TRANSPORT_FIELD 21U
@@ -542,6 +544,78 @@ static size_t encode_data_text(const char *text, uint8_t *out, size_t cap)
     return n;
 }
 
+static size_t encode_data_bytes(uint32_t portnum, const uint8_t *payload, size_t plen, uint8_t *out, size_t cap)
+{
+    if (payload == NULL || plen == 0U || plen > MT_TEXT_MAX) {
+        return 0;
+    }
+    size_t n = 0;
+    out[n++] = 0x08U;
+    n += pb_encode_varint(out + n, cap - n, portnum);
+    out[n++] = 0x12U;
+    n += pb_encode_varint(out + n, cap - n, plen);
+    if (n + plen > cap) {
+        return 0;
+    }
+    memcpy(out + n, payload, plen);
+    n += plen;
+    return n;
+}
+
+static esp_err_t send_bytes_packet(uint32_t dest, uint32_t portnum, const uint8_t *payload, size_t plen)
+{
+    if (!s_config_complete) {
+        ESP_LOGW(TAG, "binary send blocked: config not ready");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    uint8_t data[MT_TEXT_MAX + 16U];
+    const size_t data_len = encode_data_bytes(portnum, payload, plen, data, sizeof(data));
+    if (data_len == 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t packet[MT_TEXT_MAX + 32U];
+    size_t n = 0;
+    packet[n++] = 0x15U;
+    memcpy(packet + n, &dest, 4U);
+    n += 4U;
+    packet[n++] = 0x22U;
+    n += pb_encode_varint(packet + n, sizeof(packet) - n, data_len);
+    if (n + data_len > sizeof(packet)) {
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(packet + n, data, data_len);
+    n += data_len;
+    packet[n++] = 0x50U;
+    n += pb_encode_varint(packet + n, sizeof(packet) - n, 1U);
+
+    uint8_t toradio[MT_TEXT_MAX + 40U];
+    size_t m = 0;
+    toradio[m++] = 0x0AU;
+    m += pb_encode_varint(toradio + m, sizeof(toradio) - m, n);
+    if (m + n > sizeof(toradio)) {
+        return ESP_ERR_NO_MEM;
+    }
+    memcpy(toradio + m, packet, n);
+    m += n;
+
+    const esp_err_t err = uart_send_frame(toradio, m);
+    if (err == ESP_OK) {
+        s_tx_ok++;
+        ESP_LOGI(TAG, "TX binary port=%lu %u bytes to 0x%08lx", (unsigned long)portnum, (unsigned)plen,
+                 (unsigned long)dest);
+    } else {
+        s_tx_fail++;
+    }
+    return err;
+}
+
+esp_err_t meshtastic_client_broadcast_bytes(const uint8_t *data, size_t len)
+{
+    return send_bytes_packet(MT_BROADCAST, MT_PRIVATE_APP, data, len);
+}
+
 static esp_err_t send_text_packet(uint32_t dest, const char *text)
 {
     if (text == NULL || text[0] == '\0') {
@@ -669,6 +743,13 @@ static void handle_mesh_packet(const uint8_t *data, size_t len)
                          (unsigned long)node->fix_quality, (unsigned long)node->sats_in_view,
                          node->has_pos ? " (fix)" : "");
             }
+        }
+        return;
+    }
+
+    if (portnum == MT_PRIVATE_APP) {
+        if (payload != NULL && payload_len > 0U) {
+            mark_broadcast_on_rx(payload, payload_len, from);
         }
         return;
     }
@@ -1363,6 +1444,11 @@ bool meshtastic_client_get_my_num(uint32_t *out_num)
     return true;
 }
 
+bool meshtastic_client_is_config_ready(void)
+{
+    return s_config_complete;
+}
+
 #else
 
 esp_err_t meshtastic_client_start(void)
@@ -1409,6 +1495,18 @@ bool meshtastic_client_get_my_num(uint32_t *out_num)
 {
     (void)out_num;
     return false;
+}
+
+bool meshtastic_client_is_config_ready(void)
+{
+    return false;
+}
+
+esp_err_t meshtastic_client_broadcast_bytes(const uint8_t *data, size_t len)
+{
+    (void)data;
+    (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 #endif /* CONFIG_REGATTAONE_MESHTASTIC_ENABLE */
