@@ -52,7 +52,7 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_LORA_LINE_UUID      0xfef8
 /** Read/write: user-assigned boat id (UTF-8, max 32 chars, persisted in NVS). */
 #define SEN0140_GATT_BOAT_ID_UUID       0xfefb
-/** Read/write: device type — port | port_anchor | starboard | … | boat (BLE 0xFEFC). */
+/** Read/write: device type — port | starboard | boat (BLE 0xFEFC). */
 #define SEN0140_GATT_DEVICE_TYPE_UUID     0xfefc
 /** Notify: GPS NMEA 0183 lines from UART. */
 #define SEN0140_GATT_GPS_LINE_UUID        0xfefd

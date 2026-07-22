@@ -30,41 +30,21 @@ export const BLE_MESHTASTIC_TX_CHAR_UUID = "0000fee6-0000-1000-8000-00805f9b34fb
 export const BLE_MESHTASTIC_STATS_CHAR_UUID = "0000fee7-0000-1000-8000-00805f9b34fb";
 
 /**
- * Device type (BLE 0xFEFC) — course / fleet role (port, starboard, waypoint, boat, …).
+ * Device type (BLE 0xFEFC) — course / fleet role (port, starboard, boat).
  * Stored in NVS; used by mesh, backend, and ranging stacks.
  */
-export type DeviceType =
-  | "port"
-  | "port_anchor"
-  | "starboard"
-  | "starboard_anchor"
-  | "waypoint"
-  | "waypoint_anchor"
-  | "boat";
+export type DeviceType = "port" | "starboard" | "boat";
 
-export const DEVICE_TYPES: DeviceType[] = [
-  "port",
-  "port_anchor",
-  "starboard",
-  "starboard_anchor",
-  "waypoint",
-  "waypoint_anchor",
-  "boat",
-];
+export const DEVICE_TYPES: DeviceType[] = ["port", "starboard", "boat"];
 
-/** Anchor role implied by device type (used by ranging and device-role UI). */
+/** Anchor role implied by device type (boat). */
 export function deviceTypeHasAnchorRole(type: DeviceType): boolean {
-  return (
-    type === "port_anchor" ||
-    type === "starboard_anchor" ||
-    type === "waypoint_anchor" ||
-    type === "boat"
-  );
+  return type === "boat";
 }
 
-/** Tag role implied by device type (used by ranging and device-role UI). */
+/** Tag role implied by device type (port, starboard). */
 export function deviceTypeHasTagRole(type: DeviceType): boolean {
-  return type !== "boat";
+  return type === "port" || type === "starboard";
 }
 
 /** @deprecated Use deviceTypeHasAnchorRole */
@@ -76,17 +56,9 @@ export const deviceTypeHasTag = deviceTypeHasTagRole;
 export function deviceTypeLabel(type: DeviceType): string {
   switch (type) {
     case "port":
-      return "Port mark";
-    case "port_anchor":
-      return "Port mark + anchor";
+      return "Port";
     case "starboard":
-      return "Starboard mark";
-    case "starboard_anchor":
-      return "Starboard mark + anchor";
-    case "waypoint":
-      return "Waypoint";
-    case "waypoint_anchor":
-      return "Waypoint + anchor";
+      return "Starboard";
     case "boat":
       return "Boat";
   }
@@ -94,8 +66,14 @@ export function deviceTypeLabel(type: DeviceType): string {
 
 export function parseDeviceType(raw: string): DeviceType | null {
   const s = raw.trim().toLowerCase().replace(/-/g, "_");
-  if (s === "fixed_dgps_mark") {
-    return "waypoint";
+  if (s === "port_anchor") {
+    return "port";
+  }
+  if (s === "starboard_anchor") {
+    return "starboard";
+  }
+  if (s === "waypoint" || s === "waypoint_anchor" || s === "fixed_dgps_mark") {
+    return "boat";
   }
   if (DEVICE_TYPES.includes(s as DeviceType)) {
     return s as DeviceType;

@@ -26,8 +26,6 @@ Anchor subtypes (`anchorType`):
 |------|-------------|
 | `port` | Port-side mark |
 | `starboard` | Starboard-side mark |
-| `fixed_dgps_mark` | Fixed differential GPS mark with exact latitude/longitude |
-| `waypoint` | Race course waypoint |
 | `boat` | A boat acting as an anchor device |
 
 Shared types live in `@regattaone/shared` and are imported by both the PWA and Cloud Functions.

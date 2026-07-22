@@ -1,5 +1,5 @@
 /** Lifecycle reasons published by Notecard firmware in `boat.qo`. */
-import { ANCHOR_TYPES, DeviceType } from './device.model';
+import { DEVICE_TYPES, DeviceType } from './device.model';
 
 export type NotehubBoatIdReason = 'boot' | 'set' | 'changed';
 
@@ -143,9 +143,25 @@ export function extractBoatId(body: Record<string, unknown>): string {
 }
 
 export function parseDeviceType(value: unknown): DeviceType | null {
-  const normalized = String(value ?? '').trim().toLowerCase();
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
 
-  if ((ANCHOR_TYPES as readonly string[]).includes(normalized)) {
+  if (normalized === 'port_anchor') {
+    return 'port';
+  }
+  if (normalized === 'starboard_anchor') {
+    return 'starboard';
+  }
+  if (
+    normalized === 'waypoint' ||
+    normalized === 'waypoint_anchor' ||
+    normalized === 'fixed_dgps_mark'
+  ) {
+    return 'boat';
+  }
+  if ((DEVICE_TYPES as readonly string[]).includes(normalized)) {
     return normalized as DeviceType;
   }
 

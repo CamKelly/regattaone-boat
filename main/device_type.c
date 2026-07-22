@@ -18,16 +18,8 @@ static device_type_t default_type(void)
 {
 #if CONFIG_DEVICE_DEFAULT_TYPE_PORT
     return DEVICE_TYPE_PORT;
-#elif CONFIG_DEVICE_DEFAULT_TYPE_PORT_ANCHOR
-    return DEVICE_TYPE_PORT_ANCHOR;
 #elif CONFIG_DEVICE_DEFAULT_TYPE_STARBOARD
     return DEVICE_TYPE_STARBOARD;
-#elif CONFIG_DEVICE_DEFAULT_TYPE_STARBOARD_ANCHOR
-    return DEVICE_TYPE_STARBOARD_ANCHOR;
-#elif CONFIG_DEVICE_DEFAULT_TYPE_WAYPOINT
-    return DEVICE_TYPE_WAYPOINT;
-#elif CONFIG_DEVICE_DEFAULT_TYPE_WAYPOINT_ANCHOR
-    return DEVICE_TYPE_WAYPOINT_ANCHOR;
 #else
     return DEVICE_TYPE_BOAT;
 #endif
@@ -38,16 +30,8 @@ const char *device_type_to_string(device_type_t type)
     switch (type) {
     case DEVICE_TYPE_PORT:
         return "port";
-    case DEVICE_TYPE_PORT_ANCHOR:
-        return "port_anchor";
     case DEVICE_TYPE_STARBOARD:
         return "starboard";
-    case DEVICE_TYPE_STARBOARD_ANCHOR:
-        return "starboard_anchor";
-    case DEVICE_TYPE_WAYPOINT:
-        return "waypoint";
-    case DEVICE_TYPE_WAYPOINT_ANCHOR:
-        return "waypoint_anchor";
     case DEVICE_TYPE_BOAT:
     default:
         return "boat";
@@ -56,55 +40,33 @@ const char *device_type_to_string(device_type_t type)
 
 bool device_type_has_anchor_role(device_type_t type)
 {
-    switch (type) {
-    case DEVICE_TYPE_PORT_ANCHOR:
-    case DEVICE_TYPE_STARBOARD_ANCHOR:
-    case DEVICE_TYPE_WAYPOINT_ANCHOR:
-    case DEVICE_TYPE_BOAT:
-        return true;
-    default:
-        return false;
-    }
+    return type == DEVICE_TYPE_BOAT;
 }
 
 bool device_type_has_tag_role(device_type_t type)
 {
-    return type != DEVICE_TYPE_BOAT;
+    return type == DEVICE_TYPE_PORT || type == DEVICE_TYPE_STARBOARD;
 }
 
 static bool parse_normalized(const char *tmp, device_type_t *out)
 {
-    if (strcmp(tmp, "port") == 0) {
+    if (strcmp(tmp, "port") == 0 || strcmp(tmp, "port_anchor") == 0) {
         *out = DEVICE_TYPE_PORT;
         return true;
     }
-    if (strcmp(tmp, "port_anchor") == 0) {
-        *out = DEVICE_TYPE_PORT_ANCHOR;
-        return true;
-    }
-    if (strcmp(tmp, "starboard") == 0) {
+    if (strcmp(tmp, "starboard") == 0 || strcmp(tmp, "starboard_anchor") == 0) {
         *out = DEVICE_TYPE_STARBOARD;
-        return true;
-    }
-    if (strcmp(tmp, "starboard_anchor") == 0) {
-        *out = DEVICE_TYPE_STARBOARD_ANCHOR;
-        return true;
-    }
-    if (strcmp(tmp, "waypoint") == 0) {
-        *out = DEVICE_TYPE_WAYPOINT;
-        return true;
-    }
-    if (strcmp(tmp, "waypoint_anchor") == 0) {
-        *out = DEVICE_TYPE_WAYPOINT_ANCHOR;
         return true;
     }
     if (strcmp(tmp, "boat") == 0) {
         *out = DEVICE_TYPE_BOAT;
         return true;
     }
-    if (strcmp(tmp, "fixed_dgps_mark") == 0) {
-        *out = DEVICE_TYPE_WAYPOINT;
-        ESP_LOGW(TAG, "legacy type fixed_dgps_mark → waypoint");
+    /* Legacy types removed from the product — map to boat until reconfigured. */
+    if (strcmp(tmp, "waypoint") == 0 || strcmp(tmp, "waypoint_anchor") == 0 ||
+        strcmp(tmp, "fixed_dgps_mark") == 0) {
+        *out = DEVICE_TYPE_BOAT;
+        ESP_LOGW(TAG, "legacy type \"%s\" → boat", tmp);
         return true;
     }
     return false;

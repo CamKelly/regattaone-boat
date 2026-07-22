@@ -179,17 +179,9 @@ menu "RegattaOne — Device type"
             Course / fleet role stored on BLE 0xFEFC. Independent of UWB hardware.
 
         config DEVICE_DEFAULT_TYPE_PORT
-            bool "Port mark"
-        config DEVICE_DEFAULT_TYPE_PORT_ANCHOR
-            bool "Port mark + anchor role"
+            bool "Port"
         config DEVICE_DEFAULT_TYPE_STARBOARD
-            bool "Starboard mark"
-        config DEVICE_DEFAULT_TYPE_STARBOARD_ANCHOR
-            bool "Starboard mark + anchor role"
-        config DEVICE_DEFAULT_TYPE_WAYPOINT
-            bool "Waypoint"
-        config DEVICE_DEFAULT_TYPE_WAYPOINT_ANCHOR
-            bool "Waypoint + anchor role"
+            bool "Starboard"
         config DEVICE_DEFAULT_TYPE_BOAT
             bool "Boat"
     endchoice

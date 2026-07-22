@@ -6,14 +6,9 @@ export type DeviceKind = 'anchor' | 'tag';
 /**
  * BLE / firmware device type (0xFEFC) — course / fleet role.
  */
-export type DeviceType =
-  | 'port'
-  | 'port_anchor'
-  | 'starboard'
-  | 'starboard_anchor'
-  | 'waypoint'
-  | 'waypoint_anchor'
-  | 'boat';
+export type DeviceType = 'port' | 'starboard' | 'boat';
+
+export const DEVICE_TYPES: readonly DeviceType[] = ['port', 'starboard', 'boat'] as const;
 
 export interface DeviceTimestamps {
   createdAt: string;
@@ -40,12 +35,8 @@ export interface AnchorDevice extends DeviceBase {
 
 export type Device = TagDevice | AnchorDevice;
 
-export const ANCHOR_TYPES: readonly DeviceType[] = [
-  'port_anchor',
-  'starboard_anchor',
-  'waypoint_anchor',
-  'boat',
-] as const;
+/** Valid `anchorType` values for AnchorDevice records. */
+export const ANCHOR_TYPES: readonly DeviceType[] = ['port', 'starboard', 'boat'] as const;
 
 export const DEVICE_KINDS: readonly DeviceKind[] = ['anchor', 'tag'] as const;
 
@@ -58,16 +49,11 @@ export function isTagDevice(device: Device): device is TagDevice {
 }
 
 export function deviceTypeHasAnchor(type: DeviceType): boolean {
-  return (
-    type === 'port_anchor' ||
-    type === 'starboard_anchor' ||
-    type === 'waypoint_anchor' ||
-    type === 'boat'
-  );
+  return type === 'boat';
 }
 
 export function deviceTypeHasTag(type: DeviceType): boolean {
-  return type !== 'boat';
+  return type === 'port' || type === 'starboard';
 }
 
 export function anchorTypeRequiresPosition(_anchorType: DeviceType): boolean {

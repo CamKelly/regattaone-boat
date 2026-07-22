@@ -91,7 +91,7 @@ Service **16-bit UUID `0xFEF0`** (full UUID `0000fef0-0000-1000-8000-00805f9b34f
 | **LoRa RX / status** | **`0xFEF8`** | **Notify** | UTF-8 lines from LoRa RX and `! STATUS:` diagnostics. |
 | **LoRa stats** | **`0xFEFE`** | **Read/Notify/Write** | Session JSON (`tx`, per-sender RX gaps, `mesh` peer roster). Write `stream=1`/`0` (auto-send) or `mesh=1`/`0` (democratic ephemeral mesh IDs). |
 | Boat ID | `0xFEFB` | Read/Write | User boat id (NVS). |
-| Device type | `0xFEFC` | Read/Write | port / starboard / fixed_dgps_mark / waypoint / boat. |
+| Device type | `0xFEFC` | Read/Write | port / starboard / boat. |
 | GPS NMEA | `0xFEFD` | Notify | GPS UART lines when GPS enabled. |
 
 The web client uses **`web/src/lib/protocol.ts`** for these UUIDs.
