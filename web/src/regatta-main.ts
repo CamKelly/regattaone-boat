@@ -2970,4 +2970,4 @@ export function startRegattaApp(): void {
   syncActionButtons();
 }
 
-}
+
