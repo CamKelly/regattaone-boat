@@ -33,24 +33,16 @@ import {
   BLE_MESHTASTIC_STATS_CHAR_UUID,
   BLE_MESHTASTIC_TX_CHAR_UUID,
   BLE_SERVICE_UUID,
-  BLE_UWB_AT_CHAR_UUID,
-  BLE_UWB_LINE_CHAR_UUID,
   BOAT_ID_MAX_LEN,
   BOAT_ID_BLE_NAME_MAX_LEN,
   DWM3000_DEFAULTS,
   type DeviceType,
   type Dwm3000Config,
-  type UwbRole,
-  deviceTypeHasAnchor,
-  deviceTypeHasTag,
   deviceTypeLabel,
-  encodeUwbAtWrite,
   formatDwm3000ConfigJson,
   parseDeviceType,
   parseDwm3000ConfigJson,
   parseDwm3000RangeJson,
-  parseUwbNotifyLine,
-  uwbWriteNeedsRolePrefix,
 } from "./lib/protocol";
 import {
   asWebGatt,
@@ -166,8 +158,6 @@ const BLE_OPTIONAL_SERVICES = [
   BLE_IMU_CHAR_UUID,
   BLE_DWM3000_CONFIG_CHAR_UUID,
   BLE_DWM3000_RANGE_CHAR_UUID,
-  BLE_UWB_LINE_CHAR_UUID,
-  BLE_UWB_AT_CHAR_UUID,
   BLE_BOAT_ID_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
   BLE_GPS_LINE_CHAR_UUID,
@@ -186,8 +176,6 @@ interface BleBoatSession {
   charMeshtasticRx: BleGattCharacteristicLike | null;
   charMeshtasticTx: BleGattCharacteristicLike | null;
   charMeshtasticStats: BleGattCharacteristicLike | null;
-  charUwbLine: BleGattCharacteristicLike | null;
-  charUwbAt: BleGattCharacteristicLike | null;
   charBoatId: BleGattCharacteristicLike | null;
   charDeviceType: BleGattCharacteristicLike | null;
   charDwm3000Config: BleGattCharacteristicLike | null;
@@ -200,25 +188,16 @@ interface BleBoatSession {
   dwm3000Config: Dwm3000Config;
   dwm3000ConfigDraft: Dwm3000Config;
   dwm3000PeerDraft: string;
-  uwbAnchorLineLogText: string;
-  uwbTagLineLogText: string;
-  uwbAnchorAtDraft: string;
-  uwbTagAtDraft: string;
-  activeUwbRole: UwbRole | null;
   lastImuWallMs: number;
   imu: ImuDisplay;
   notificationsOn: boolean;
   imuNotificationsOn: boolean;
-  /** Incremented per UWB request to ignore stale notify/read data. */
-  commsGen: number;
-  activeUwbGen: number;
   meshtasticStats: MeshtasticStatsSnapshot;
   meshtasticStatsReceivedWallMs: number;
   meshtasticStatsNotifyBuf: string;
   meshtasticLineLogText: string;
   meshtasticTxDraft: string;
   gpsFix: GpsFix;
-  uwbBusy: boolean;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
   gattChain: Promise<void>;
@@ -226,7 +205,6 @@ interface BleBoatSession {
   onMeshtasticLineNotify: (ev: Event) => void;
   onMeshtasticStatsNotify: (ev: Event) => void;
   onGpsLineNotify: (ev: Event) => void;
-  onUwbLineNotify: (ev: Event) => void;
   onDisconnected: () => void;
 }
 
@@ -276,7 +254,6 @@ async function readDeviceTypeFromDevice(session: BleBoatSession): Promise<void> 
     if (type) {
       session.deviceType = type;
       session.deviceTypeDraft = type;
-      syncUwbUi(session);
     }
   } catch (e) {
     console.warn("BLE device type read failed", session.name, e);
@@ -301,7 +278,6 @@ async function saveDeviceTypeToDevice(): Promise<void> {
   try {
     await gattWrite(session, "type", new TextEncoder().encode(type));
     session.deviceType = type;
-    syncUwbUi(session);
     syncDeviceTypeUi(session);
     const saved = `Saved: ${deviceTypeLabel(type)}`;
     if (statusEl) {
@@ -557,7 +533,7 @@ function syncDwm3000Ui(session: BleBoatSession | null): void {
   setFieldEnabled(twrInput, canEdit);
   setFieldEnabled(saveBtn, canEdit);
   setFieldEnabled(peerInput, canRange);
-  setFieldEnabled(rangeBtn, canRange && !session?.uwbBusy);
+  setFieldEnabled(rangeBtn, canRange);
   if (statusEl) {
     if (!session) {
       statusEl.textContent = "Connect a DWM3000 device to edit settings.";
@@ -708,9 +684,6 @@ function updateBleToolbar(note?: string): void {
   if (!active.charImu) {
     missing.push("IMU");
   }
-  if (!active.charUwbAt) {
-    missing.push("UWB");
-  }
   if (!active.charMeshtasticRx) {
     missing.push("Meshtastic");
   }
@@ -730,22 +703,9 @@ function setText(id: string, text: string): void {
 
 function syncActionButtons(): void {
   const session = getActiveSession();
-  for (const id of ["uwb-at-send-anchor", "uwb-at-send-tag"] as const) {
-    const btn = document.querySelector<HTMLButtonElement>(`#${id}`);
-    if (btn) {
-      btn.disabled = !session || session.uwbBusy;
-    }
-  }
-  for (const id of ["uwb-at-input-anchor", "uwb-at-input-tag"] as const) {
-    const input = document.querySelector<HTMLInputElement>(`#${id}`);
-    if (input) {
-      input.disabled = !session || session.uwbBusy;
-    }
-  }
   syncBoatIdUi(session);
   syncDeviceTypeUi(session);
   syncDwm3000Ui(session);
-  syncUwbUi(session);
 }
 
 async function runGattOp<T>(session: BleBoatSession, op: () => Promise<T>): Promise<T> {
@@ -770,7 +730,6 @@ function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charMeshtasticRx?.removeEventListener("characteristicvaluechanged", session.onMeshtasticLineNotify);
   session.charMeshtasticStats?.removeEventListener("characteristicvaluechanged", session.onMeshtasticStatsNotify);
   session.charGpsLine?.removeEventListener("characteristicvaluechanged", session.onGpsLineNotify);
-  session.charUwbLine?.removeEventListener("characteristicvaluechanged", session.onUwbLineNotify);
 }
 
 async function bindSessionCharacteristics(session: BleBoatSession): Promise<void> {
@@ -780,8 +739,6 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   session.charMeshtasticRx = null;
   session.charMeshtasticTx = null;
   session.charMeshtasticStats = null;
-  session.charUwbLine = null;
-  session.charUwbAt = null;
   session.charBoatId = null;
   session.charDeviceType = null;
   session.charDwm3000Config = null;
@@ -797,17 +754,6 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     session.charImu.addEventListener("characteristicvaluechanged", session.onImuNotify);
   } catch (e) {
     console.error("BLE IMU unavailable", session.name, e);
-  }
-  try {
-    session.charUwbAt = await svc.getCharacteristic(BLE_UWB_AT_CHAR_UUID);
-  } catch (e) {
-    console.error("BLE UWB AT unavailable", session.name, e);
-  }
-  try {
-    session.charUwbLine = await svc.getCharacteristic(BLE_UWB_LINE_CHAR_UUID);
-    session.charUwbLine.addEventListener("characteristicvaluechanged", session.onUwbLineNotify);
-  } catch (e) {
-    console.warn("BLE UWB RX unavailable", session.name, e);
   }
   try {
     session.charMeshtasticRx = await svc.getCharacteristic(BLE_MESHTASTIC_RX_CHAR_UUID);
@@ -860,27 +806,6 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   syncDwm3000TabVisibility(session);
 }
 
-
-async function ensureUwbComms(session: BleBoatSession): Promise<void> {
-  if (!session.charUwbAt || !session.charUwbLine) {
-    await bindSessionCharacteristics(session);
-  }
-  await setCommsNotifications(session, true);
-}
-
-async function pauseImuForComms(session: BleBoatSession): Promise<boolean> {
-  const wasOn = session.imuNotificationsOn;
-  if (wasOn) {
-    await setImuNotifications(session, false);
-  }
-  return wasOn;
-}
-
-async function restoreImuAfterComms(session: BleBoatSession, wasOn: boolean): Promise<void> {
-  if (wasOn) {
-    await setImuNotifications(session, true);
-  }
-}
 
 function meshtasticSelfNodePlaceholder(num: number): MeshtasticNode {
   return {
@@ -1207,83 +1132,6 @@ function appendStreamLine(session: BleBoatSession, chunk: string): void {
 }
 
 
-function uwbLogText(session: BleBoatSession, role: UwbRole): string {
-  return role === "anchor" ? session.uwbAnchorLineLogText : session.uwbTagLineLogText;
-}
-
-function setUwbLogText(session: BleBoatSession, role: UwbRole, text: string): void {
-  if (role === "anchor") {
-    session.uwbAnchorLineLogText = text;
-  } else {
-    session.uwbTagLineLogText = text;
-  }
-}
-
-function defaultUwbRoleForType(type: DeviceType): UwbRole {
-  return deviceTypeHasAnchor(type) && !deviceTypeHasTag(type) ? "anchor" : "tag";
-}
-
-function syncUwbUi(session: BleBoatSession | null): void {
-  const type = session?.deviceTypeDraft ?? session?.deviceType ?? "boat";
-  const showAnchor = deviceTypeHasAnchor(type);
-  const showTag = deviceTypeHasTag(type);
-  const anchorPanel = document.querySelector<HTMLElement>("#uwb-panel-anchor");
-  const tagPanel = document.querySelector<HTMLElement>("#uwb-panel-tag");
-  const hint = document.querySelector("#uwb-routing-hint");
-  if (anchorPanel) {
-    anchorPanel.hidden = !showAnchor;
-  }
-  if (tagPanel) {
-    tagPanel.hidden = !showTag;
-  }
-  if (hint) {
-    hint.textContent = session
-      ? `RYUW122 routing for ${deviceTypeLabel(type)} · UART A = anchor role, UART B = tag role`
-      : "Connect a device — RYUW122 UART panels follow device type anchor/tag roles.";
-  }
-}
-
-function renderUwbLogRole(session: BleBoatSession, role: UwbRole): void {
-  if (session.deviceId !== activeSessionId) {
-    return;
-  }
-  const el = document.querySelector(`#uwb-line-log-${role}`);
-  if (!el) {
-    return;
-  }
-  el.textContent = uwbLogText(session, role);
-  el.scrollTop = el.scrollHeight;
-}
-
-function appendUwbLogRole(session: BleBoatSession, role: UwbRole, chunk: string): void {
-  const field = role === "anchor" ? "uwbAnchorLineLogText" : "uwbTagLineLogText";
-  session[field] += chunk;
-  if (session[field].length > 16000) {
-    session[field] = session[field].slice(-12000);
-  }
-  renderUwbLogRole(session, role);
-}
-
-function ingestUwbUartChunk(session: BleBoatSession, chunk: string, gen: number): void {
-  if (gen !== 0 && gen !== session.activeUwbGen) {
-    return;
-  }
-  const line = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
-  const parsed = parseUwbNotifyLine(line.trimEnd());
-  const role = parsed?.role ?? defaultUwbRoleForType(session.deviceTypeDraft);
-  const body = parsed?.line ?? line;
-  const display = body.endsWith("\n") ? body : `${body}\n`;
-  const current = uwbLogText(session, role);
-  if (current.endsWith(display)) {
-    return;
-  }
-  appendUwbLogRole(session, role, display);
-}
-
-function appendUwbLineIfNew(session: BleBoatSession, chunk: string, gen: number): void {
-  ingestUwbUartChunk(session, chunk, gen);
-}
-
 async function activateSession(session: BleBoatSession): Promise<boolean> {
   session.parked = false;
   try {
@@ -1305,7 +1153,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
         return false;
       }
     }
-    if (!session.charImu || !session.charUwbAt || !session.charMeshtasticStats) {
+    if (!session.charImu || !session.charMeshtasticStats) {
       await bindSessionCharacteristics(session);
     }
     await setCommsNotifications(session, true);
@@ -1345,8 +1193,6 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charMeshtasticRx = null;
   session.charMeshtasticTx = null;
   session.charMeshtasticStats = null;
-  session.charUwbLine = null;
-  session.charUwbAt = null;
   session.charBoatId = null;
   session.charDeviceType = null;
   session.charDwm3000Config = null;
@@ -1365,47 +1211,10 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
 }
 
 async function ensureSessionConnected(session: BleBoatSession): Promise<boolean> {
-  if (session.gatt.connected && session.charImu && session.charUwbAt) {
+  if (session.gatt.connected && session.charImu) {
     return true;
   }
   return activateSession(session);
-}
-
-async function pollUwbResponse(
-  session: BleBoatSession,
-  gen: number,
-  role: UwbRole,
-  baselineLen: number,
-  timeoutMs: number,
-): Promise<boolean> {
-  const deadline = performance.now() + timeoutMs;
-  let nextReadAt = 0;
-  while (performance.now() < deadline) {
-    if (gen !== session.activeUwbGen) {
-      return false;
-    }
-    if (uwbLogText(session, role).length > baselineLen) {
-      return true;
-    }
-    const now = performance.now();
-    if (session.charUwbLine && session.gatt.connected && now >= nextReadAt) {
-      nextReadAt = now + 250;
-      try {
-        const val = await runGattOp(session, () => session.charUwbLine!.readValue());
-        if (val.byteLength > 0) {
-          const chunk = new TextDecoder().decode(val);
-          appendUwbLineIfNew(session, chunk, gen);
-          if (uwbLogText(session, role).length > baselineLen) {
-            return true;
-          }
-        }
-      } catch {
-        /* optional */
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  return uwbLogText(session, role).length > baselineLen;
 }
 
 async function setImuNotifications(session: BleBoatSession, enabled: boolean): Promise<void> {
@@ -1443,7 +1252,6 @@ async function setCommsNotifications(session: BleBoatSession, enabled: boolean):
     return;
   }
   const chars = [
-    session.charUwbLine,
     session.charMeshtasticRx,
     session.charMeshtasticStats,
     session.charGpsLine,
@@ -1478,7 +1286,7 @@ async function setSessionNotifications(session: BleBoatSession, enabled: boolean
   }
 }
 
-type GattWriteTarget = "uwb" | "boatid" | "type" | "meshtastic" | "mtstats" | "dwm3000cfg" | "dwm3000range";
+type GattWriteTarget = "boatid" | "type" | "meshtastic" | "mtstats" | "dwm3000cfg" | "dwm3000range";
 
 function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget): BleGattCharacteristicLike | null {
   if (target === "meshtastic") {
@@ -1486,9 +1294,6 @@ function getWriteCharacteristic(session: BleBoatSession, target: GattWriteTarget
   }
   if (target === "mtstats") {
     return session.charMeshtasticStats;
-  }
-  if (target === "uwb") {
-    return session.charUwbAt;
   }
   if (target === "type") {
     return session.charDeviceType;
@@ -2150,21 +1955,6 @@ function clearMeshtasticLog(session: BleBoatSession | null): void {
 }
 
 
-function clearUwbLogRole(session: BleBoatSession | null, role: UwbRole): void {
-  if (session) {
-    setUwbLogText(session, role, "");
-  }
-  const el = document.querySelector(`#uwb-line-log-${role}`);
-  if (el) {
-    el.textContent = "";
-  }
-}
-
-function renderUwbLogs(session: BleBoatSession): void {
-  renderUwbLogRole(session, "anchor");
-  renderUwbLogRole(session, "tag");
-}
-
 function renderImuDisplay(session: BleBoatSession): void {
   if (session.deviceId !== activeSessionId) {
     return;
@@ -2178,11 +1968,7 @@ function renderImuDisplay(session: BleBoatSession): void {
 }
 
 function saveUiToSession(session: BleBoatSession): void {
-  const uwbAnchorInput = document.querySelector<HTMLInputElement>("#uwb-at-input-anchor");
-  const uwbTagInput = document.querySelector<HTMLInputElement>("#uwb-at-input-tag");
   const mtInput = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
-  session.uwbAnchorAtDraft = uwbAnchorInput?.value ?? "";
-  session.uwbTagAtDraft = uwbTagInput?.value ?? "";
   session.meshtasticTxDraft = mtInput?.value ?? "";
   const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
   session.boatIdDraft = boatIdInput?.value ?? session.boatIdDraft;
@@ -2206,15 +1992,7 @@ function saveUiToSession(session: BleBoatSession): void {
 }
 
 function loadSessionToUi(session: BleBoatSession): void {
-  const uwbAnchorInput = document.querySelector<HTMLInputElement>("#uwb-at-input-anchor");
-  const uwbTagInput = document.querySelector<HTMLInputElement>("#uwb-at-input-tag");
   const mtInput = document.querySelector<HTMLInputElement>("#meshtastic-tx-input");
-  if (uwbAnchorInput) {
-    uwbAnchorInput.value = session.uwbAnchorAtDraft;
-  }
-  if (uwbTagInput) {
-    uwbTagInput.value = session.uwbTagAtDraft;
-  }
   if (mtInput) {
     mtInput.value = session.meshtasticTxDraft;
   }
@@ -2222,8 +2000,6 @@ function loadSessionToUi(session: BleBoatSession): void {
   mergeMeshtasticPeersFromLog(session);
   renderMeshtastic(session);
   renderGpsDisplay(session);
-  renderUwbLogs(session);
-  syncUwbUi(session);
   syncDwm3000Ui(session);
   updateBleToolbar();
   syncActionButtons();
@@ -2237,19 +2013,6 @@ function clearUiPanels(): void {
   setText("imu-temp", imu.temp);
   setText("imu-baro", imu.baro);
   setText("imu-meta", imu.meta);
-  for (const id of ["uwb-at-input-anchor", "uwb-at-input-tag"] as const) {
-    const input = document.querySelector<HTMLInputElement>(`#${id}`);
-    if (input) {
-      input.value = "";
-    }
-  }
-  for (const role of ["anchor", "tag"] as const) {
-    const el = document.querySelector(`#uwb-line-log-${role}`);
-    if (el) {
-      el.textContent = "";
-    }
-  }
-  syncUwbUi(null);
   const mtLog = document.querySelector("#meshtastic-line-log");
   const mtPeers = document.querySelector("#meshtastic-peers-body");
   if (mtLog) {
@@ -2388,21 +2151,6 @@ function createNotifyHandlers(session: BleBoatSession): void {
     ingestGpsLine(session, new TextDecoder().decode(v));
   };
 
-  session.onUwbLineNotify = (ev: Event) => {
-    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
-    const v = ch.value;
-    if (!v || v.byteLength === 0) {
-      return;
-    }
-    const s = new TextDecoder().decode(v);
-    const gen = session.activeUwbGen;
-    if (gen !== 0) {
-      appendUwbLineIfNew(session, s, gen);
-    } else {
-      ingestUwbUartChunk(session, s, 0);
-    }
-  };
-
   session.onDisconnected = () => {
     if (session.parked) {
       return;
@@ -2446,75 +2194,6 @@ function removeSession(deviceId: string, wasManualDisconnect: boolean): void {
 }
 
 
-async function sendUwbAt(role: UwbRole): Promise<void> {
-  const session = getActiveSession();
-  const logEl = document.querySelector(`#uwb-line-log-${role}`);
-  if (!session?.charUwbAt) {
-    if (logEl) {
-      logEl.textContent = session
-        ? "! UWB characteristic 0xFEFA unavailable.\n"
-        : "! Connect a BLE device first.\n";
-    }
-    return;
-  }
-  const type = session.deviceTypeDraft;
-  if (role === "anchor" && !deviceTypeHasAnchor(type)) {
-    return;
-  }
-  if (role === "tag" && !deviceTypeHasTag(type)) {
-    return;
-  }
-  if (session.uwbBusy) {
-    return;
-  }
-  const input = document.querySelector<HTMLInputElement>(`#uwb-at-input-${role}`);
-  const cmd = (input?.value ?? "").trim();
-  if (!cmd) {
-    return;
-  }
-  session.uwbBusy = true;
-  if (role === "anchor") {
-    session.uwbAnchorAtDraft = input?.value ?? "";
-  } else {
-    session.uwbTagAtDraft = input?.value ?? "";
-  }
-  appendUwbLogRole(session, role, `> ${cmd}\n`);
-  const baselineLen = uwbLogText(session, role).length;
-  const gen = ++session.commsGen;
-  session.activeUwbGen = gen;
-  session.activeUwbRole = role;
-  try {
-    const imuWasOn = await pauseImuForComms(session);
-    try {
-      await ensureUwbComms(session);
-      const payload = uwbWriteNeedsRolePrefix(type)
-        ? encodeUwbAtWrite(role, cmd)
-        : new TextEncoder().encode(cmd);
-      await gattWrite(session, "uwb", payload);
-      const gotReply = await pollUwbResponse(session, gen, role, baselineLen, 8000);
-      if (gen === session.activeUwbGen && !gotReply) {
-        appendUwbLogRole(
-          session,
-          role,
-          "! No UWB response — check serial log (power, baud, wiring).\n",
-        );
-      }
-    } finally {
-      await restoreImuAfterComms(session, imuWasOn);
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    appendUwbLogRole(session, role, `! BLE write error: ${msg}\n`);
-  } finally {
-    session.uwbBusy = false;
-    if (gen === session.activeUwbGen) {
-      session.activeUwbGen = 0;
-      session.activeUwbRole = null;
-    }
-    syncActionButtons();
-  }
-}
-
 async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSession> {
   const session: BleBoatSession = {
     deviceId: pick.deviceId,
@@ -2526,8 +2205,6 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     charMeshtasticRx: null,
     charMeshtasticTx: null,
     charMeshtasticStats: null,
-    charUwbLine: null,
-    charUwbAt: null,
     charBoatId: null,
     charDeviceType: null,
     charDwm3000Config: null,
@@ -2540,31 +2217,22 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     dwm3000Config: defaultDwm3000Config(),
     dwm3000ConfigDraft: defaultDwm3000Config(),
     dwm3000PeerDraft: "",
-    uwbAnchorLineLogText: "",
-    uwbTagLineLogText: "",
-    uwbAnchorAtDraft: "",
-    uwbTagAtDraft: "",
-    activeUwbRole: null,
     lastImuWallMs: 0,
     imu: defaultImuDisplay(),
     notificationsOn: false,
     imuNotificationsOn: false,
-    commsGen: 0,
-    activeUwbGen: 0,
     meshtasticStats: defaultMeshtasticStats(),
     meshtasticStatsReceivedWallMs: 0,
     meshtasticStatsNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
     gpsFix: defaultGpsFix(),
-    uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
-    onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
   createNotifyHandlers(session);
@@ -2594,8 +2262,6 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     charMeshtasticRx: null,
     charMeshtasticTx: null,
     charMeshtasticStats: null,
-    charUwbLine: null,
-    charUwbAt: null,
     charBoatId: null,
     charDeviceType: null,
     charDwm3000Config: null,
@@ -2608,31 +2274,22 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     dwm3000Config: defaultDwm3000Config(),
     dwm3000ConfigDraft: defaultDwm3000Config(),
     dwm3000PeerDraft: "",
-    uwbAnchorLineLogText: "",
-    uwbTagLineLogText: "",
-    uwbAnchorAtDraft: "",
-    uwbTagAtDraft: "",
-    activeUwbRole: null,
     lastImuWallMs: 0,
     imu: defaultImuDisplay(),
     notificationsOn: false,
     imuNotificationsOn: false,
-    commsGen: 0,
-    activeUwbGen: 0,
     meshtasticStats: defaultMeshtasticStats(),
     meshtasticStatsReceivedWallMs: 0,
     meshtasticStatsNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
     gpsFix: defaultGpsFix(),
-    uwbBusy: false,
     parked: false,
     gattChain: Promise.resolve(),
     onImuNotify: () => {},
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
-    onUwbLineNotify: () => {},
     onDisconnected: () => {},
   };
   createNotifyHandlers(session);
@@ -2762,22 +2419,6 @@ export function startRegattaApp(): void {
     if (!btn) {
       return;
     }
-    if (btn.id === "uwb-at-send-anchor") {
-      void sendUwbAt("anchor");
-      return;
-    }
-    if (btn.id === "uwb-at-send-tag") {
-      void sendUwbAt("tag");
-      return;
-    }
-    if (btn.id === "uwb-log-clear-anchor") {
-      clearUwbLogRole(getActiveSession(), "anchor");
-      return;
-    }
-    if (btn.id === "uwb-log-clear-tag") {
-      clearUwbLogRole(getActiveSession(), "tag");
-      return;
-    }
     if (btn.id === "meshtastic-roster-refresh") {
       const session = getActiveSession();
       if (session) {
@@ -2829,14 +2470,6 @@ export function startRegattaApp(): void {
       return;
     }
     const target = ev.target;
-    if (target instanceof HTMLInputElement && target.id === "uwb-at-input-anchor") {
-      void sendUwbAt("anchor");
-      return;
-    }
-    if (target instanceof HTMLInputElement && target.id === "uwb-at-input-tag") {
-      void sendUwbAt("tag");
-      return;
-    }
     if (target instanceof HTMLInputElement && target.id === "meshtastic-tx-input") {
       const session = getActiveSession();
       if (session) {
@@ -2852,14 +2485,6 @@ export function startRegattaApp(): void {
     const target = ev.target;
     if (target instanceof HTMLInputElement && target.id === "meshtastic-tx-input") {
       session.meshtasticTxDraft = target.value;
-      return;
-    }
-    if (target instanceof HTMLInputElement && target.id === "uwb-at-input-anchor") {
-      session.uwbAnchorAtDraft = target.value;
-      return;
-    }
-    if (target instanceof HTMLInputElement && target.id === "uwb-at-input-tag") {
-      session.uwbTagAtDraft = target.value;
       return;
     }
     if (target instanceof HTMLInputElement && target.id === "dwm3000-peer-input") {

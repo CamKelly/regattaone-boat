@@ -6,14 +6,13 @@
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 #
 # Unavailable on this build (do not wire): GP14–GP18, GP38–GP42, GP45.
-# IMU (GP10/11 I2C) and UWB (GP17/18) disabled until those pads are usable.
+# IMU (GP10/11 I2C) disabled until those pads are usable.
 # GPS PPS off (GP16 unavailable) — NMEA works; TDMA needs PPS or menuconfig change.
 
 CONFIG_REGATTAONE_S3_BOARD_WAVESHARE_ZERO=y
 # CONFIG_REGATTAONE_S3_BOARD_DEVKIT_MINI is not set
 
 CONFIG_REGATTAONE_SEN0140_ENABLE=n
-CONFIG_REGATTAONE_RYUW122_ENABLE=n
 
 # SX1262 LoRa (SPI2 / FSPI) — GP6–GP10, GP12–GP13 (MISO on GP10, not GP14)
 CONFIG_SX1262_SPI_HOST_NUM=2

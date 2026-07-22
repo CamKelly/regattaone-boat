@@ -315,12 +315,7 @@ void sen0140_i2c_log_full_scan(void)
 static void i2c_log_probe_hints(void)
 {
     static const uint8_t addrs[] = { ADDR_ADXL345, ADDR_ADXL345_ALT, ADDR_ITG3200, ADDR_BMP085,
-                                     ADDR_BMP280_LO
-#if CONFIG_REGATTAONE_SC16IS752_ENABLE
-                                     ,
-                                     CONFIG_SC16IS752_I2C_ADDR
-#endif
-    };
+                                     ADDR_BMP280_LO };
     for (unsigned i = 0; i < sizeof(addrs); i++) {
         esp_err_t e = i2c_master_probe(s_bus, addrs[i], I2C_PROBE_TIMEOUT_MS);
         ESP_LOGI(TAG, "I2C probe 0x%02x → %s", (unsigned)addrs[i], esp_err_to_name(e));

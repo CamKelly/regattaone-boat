@@ -93,7 +93,7 @@ esp_err_t gps_pps_start(void)
         }
     }
 
-    /* SC16IS752 (or LoRa HAL) installs the GPIO ISR service during earlier init. */
+    /* LoRa HAL (or another driver) may already have installed the GPIO ISR service. */
     gpio_config_t io = {
         .pin_bit_mask = 1ULL << pin,
         .mode = GPIO_MODE_INPUT,

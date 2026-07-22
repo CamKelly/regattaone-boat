@@ -104,8 +104,8 @@ Use **3V3(OUT) + GND** for GPS and LoRa modules unless the module datasheet requ
 | **GP40** | 40 | UART, PWM, I2S, I2C, SPI | |
 | **GP39** | 39 | UART, PWM, I2S, I2C, SPI | |
 | **GP38** | 38 | UART, PWM, I2S, I2C, SPI | |
-| **GP18** | 18 | UART, PWM, I2S, ADC, I2C, SPI | UWB UART RX (DevKit plan) |
-| **GP17** | 17 | UART, PWM, I2S, ADC, I2C, SPI | UWB UART TX (DevKit plan) |
+| **GP18** | 18 | UART, PWM, I2S, ADC, I2C, SPI | Unused on default Zero plan (available) |
+| **GP17** | 17 | UART, PWM, I2S, ADC, I2C, SPI | Unused on default Zero plan (available) |
 
 **GP33–GP37** are not broken out on this board.
 

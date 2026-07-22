@@ -1,6 +1,8 @@
-# Wiring: ESP32-S3 ↔ SX1262 LoRa ↔ GPS ↔ REYAX RYUW122 ↔ SEN0140 IMU
+# Wiring: ESP32-S3 ↔ SX1262 LoRa ↔ GPS ↔ SEN0140 IMU
 
-This document describes pin plans for **two ESP32-S3 carriers** supported by firmware:
+**UWB (DWM3000 SPI):** see **[WIRING-DWM3000.md](WIRING-DWM3000.md)** (Freenove map).
+
+This document describes pin plans for **ESP32-S3 carriers** supported by firmware:
 
 | Board | Module | Flash | Select in build |
 | ----- | ------ | ----- | ---------------- |
@@ -8,7 +10,7 @@ This document describes pin plans for **two ESP32-S3 carriers** supported by fir
 | **Freenove ESP32-S3 WROOM Lite** | **ESP32-S3-WROOM-1** | **8 MB** | `scripts/idf-s3.sh freenove …` — pinout: **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)** |
 | **Waveshare ESP32-S3-Zero** | **ESP32-S3FH4R2** | **4 MB** (+ 2 MB PSRAM) | `scripts/idf-s3.sh waveshare-zero …` — pinout: **[WAVESHARE-ESP32S3-ZERO-PINOUT.md](WAVESHARE-ESP32S3-ZERO-PINOUT.md)** |
 
-The Blues **Notecard** is replaced by an **SX1262** LoRa module over **SPI** (RadioLib). **GPS** uses **NMEA 0183** on UART plus **PPS**. **REYAX RYUW122** UWB stays on UART. **SEN0140** IMU stays on I2C.
+The Blues **Notecard** is replaced by an **SX1262** LoRa module over **SPI** (RadioLib). **GPS** uses **NMEA 0183** on UART plus **PPS**. **UWB** uses **DWM3000** over SPI (not on this pin plan by default — see [WIRING-DWM3000.md](WIRING-DWM3000.md)). **SEN0140** IMU stays on I2C.
 
 **Logic level:** 3.3 V only on all module I/O.
 
@@ -59,8 +61,8 @@ If boot fails with `Detected size(4096k) smaller than … (8192k)`, you built fo
 | **GPS UART** | ESP TX → GPS RX | **4** | IO4 | UART2 |
 | | ESP RX ← GPS TX | **5** | IO5 | NMEA 0183 |
 | **GPS PPS** | 1 Hz pulse in | **21** | IO21 | Optional; `-1` if unwired |
-| **UWB UART** | ESP TX → module RX | **17** | IO17 | UART1, RYUW122 |
-| | ESP RX ← module TX | **18** | IO18 | |
+
+GPIO **17** / **18** are unused on this plan (available for remapping).
 
 ---
 
@@ -77,7 +79,7 @@ If boot fails with `Detected size(4096k) smaller than … (8192k)`, you built fo
 | **IMU I2C SDA** *(optional)* | header **10** | **10** | I2C |
 | **IMU I2C SCL** *(optional)* | header **11** | **11** | I2C |
 
-**RYUW122 / UWB:** not on native UART — add **SC16IS752** on I2C ([WIRING-SC16IS752-I2C.md](WIRING-SC16IS752-I2C.md), e.g. SDA/SCL on GPIO **8**/**9**).
+**UWB (DWM3000):** SPI on free GPIOs — see **[WIRING-DWM3000.md](WIRING-DWM3000.md)**.
 
 Do **not** set `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG` as the only console on this board unless you know idf monitor is attached correctly; the prior “blank monitor” symptom was from moving console off UART0 while Meshtastic took UART0.
 
@@ -100,9 +102,9 @@ Default firmware for **`waveshare-zero`** is **GPS + LoRa only** on **castellate
 | | DIO1 | **7** | GP7 | |
 | | BUSY | **6** | GP6 | |
 | **IMU I2C** | — | — | — | Disabled (`REGATTAONE_SEN0140_ENABLE=n`) |
-| **UWB UART** | — | — | — | Disabled (`REGATTAONE_RYUW122_ENABLE=n`) |
+| **UWB** | — | — | — | Not on this plan; use DWM3000 if needed ([WIRING-DWM3000.md](WIRING-DWM3000.md)) |
 
-**Zero-specific:** **GP21** = onboard **WS2812** (do not use). **TX** / **RX** silkscreen = GPIO **43** / **44** (USB console). Enable IMU/UWB or PPS later in **menuconfig** only if you wire pads outside this plan.
+**Zero-specific:** **GP21** = onboard **WS2812** (do not use). **TX** / **RX** silkscreen = GPIO **43** / **44** (USB console). Enable IMU, UWB, or PPS later in **menuconfig** only if you wire pads outside this plan.
 
 **Solder checklist (GPS + LoRa):** GP4, GP5, GP6, GP7, GP8, GP9, GP10, GP12, GP13, plus **3.3 V** and **GND** to each module.
 
@@ -140,29 +142,13 @@ Firmware uses **[RadioLib](https://github.com/jgromes/RadioLib)** in `components
 | **TX** → ESP RX | IO5 | 5 |
 | **PPS** (if present) | IO21 | 21 |
 
-- UART: **UART2** (`GPS_UART_PORT_NUM=2`) so **UART1** remains free for RYUW122.
+- UART: **UART2** on DevKit / Zero (`GPS_UART_PORT_NUM=2`); **UART1** on Freenove when Meshtastic uses UART2. Unused UART controllers remain free for other peripherals.
 - Baud: **9600** default (common NMEA rate). Many modules ship at **115200** — match `GPS_UART_BAUD` to your module or reconfigure the GPS.
-- **PPS:** rising edge ~1 Hz when locked. See **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)** for UTC timebase and TDMA slots. **LoRa TX** uses **CAD/CSMA** by default; **UWB** can use the same slot schedule (`TDMA_ENFORCE_UWB`). BLE `$PREGPPS,...` on 0xFEFD. NMEA not logged to serial.
+- **PPS:** rising edge ~1 Hz when locked. See **[TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)** for UTC timebase and TDMA slots. **LoRa TX** uses **CAD/CSMA** by default. BLE `$PREGPPS,...` on 0xFEFD. NMEA not logged to serial.
 
 Configure TDMA: **menuconfig → RegattaOne — TDMA** (or see [TDMA-GPS-PPS.md](TDMA-GPS-PPS.md)).
 
 Pin macros: `main/gps_nmea.h`. Set `GPS_PPS_GPIO=-1` only if PPS is unwired (TDMA will not sync).
-
----
-
-## REYAX RYUW122 Lite (UWB UART)
-
-Unchanged from the prior design — still **UART1** on GPIO **17/18**:
-
-| RYUW122 pin | ESP32-S3 Mini | GPIO |
-| ----------- | ------------- | ---- |
-| **VCC** | 3.3 V | — |
-| **GND** | GND | — |
-| **RX** ← ESP TX | IO17 | 17 |
-| **TX** → ESP RX | IO18 | 18 |
-| **NRST** ← ESP GPIO (optional) | IO12 | 12 |
-
-Cross-connect TX/RX. Wire **GPIO12 → NRST** (pin 2) for firmware hardware reset at boot (active low). UART is fixed at **115200** baud.
 
 ---
 

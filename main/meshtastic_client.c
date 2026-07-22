@@ -6,9 +6,6 @@
 
 #include "ble_sen0140.h"
 #include "meshtastic_uart.h"
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-#include "ryuw122_uart.h"
-#endif
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -855,9 +852,6 @@ static void handle_from_radio(const uint8_t *data, size_t len)
                     s_have_my_num = true;
                     ESP_LOGI(TAG, "my_node_num=0x%08lx", (unsigned long)s_my_num);
                     mt_touch_self_node();
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-                    ryuw122_provision_try();
-#endif
                 }
             }
             continue;
@@ -877,9 +871,6 @@ static void handle_from_radio(const uint8_t *data, size_t len)
                 mt_notify_line("! config ready\n");
                 mt_touch_self_node();
                 s_stats_dirty = true;
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-                ryuw122_provision_try();
-#endif
             }
             continue;
         }

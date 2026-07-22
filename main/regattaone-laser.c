@@ -24,15 +24,11 @@
 #endif
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
-#include "ryuw122_uart.h"
 #if CONFIG_REGATTAONE_DW3000_ENABLE
 #include "dw3000_probe.h"
 #if CONFIG_DW3000_RANGING_ENABLE
 #include "dw3000_ranging.h"
 #endif
-#endif
-#if CONFIG_REGATTAONE_SC16IS752_ENABLE
-#include "sc16is752.h"
 #endif
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 #include "meshtastic_uart.h"
@@ -100,12 +96,8 @@ void app_main(void)
 #else
         "off",
 #endif
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-        "on",
-#elif CONFIG_REGATTAONE_DW3000_ENABLE
+#if CONFIG_REGATTAONE_DW3000_ENABLE
         "DW3000",
-#elif CONFIG_REGATTAONE_SC16IS752_ENABLE
-        "bridge",
 #else
         "off",
 #endif
@@ -122,10 +114,6 @@ void app_main(void)
     );
 
     i2c_bus_mux_init();
-
-#if CONFIG_REGATTAONE_SC16IS752_ENABLE
-    sc16is752_prepare_reset();
-#endif
 
     esp_err_t err;
 #if CONFIG_REGATTAONE_SEN0140_ENABLE
@@ -145,20 +133,6 @@ void app_main(void)
         ESP_LOGE(TAG, "BLE init failed: %s", esp_err_to_name(err));
         return;
     }
-
-#if CONFIG_REGATTAONE_SC16IS752_ENABLE && !CONFIG_REGATTAONE_RYUW122_ENABLE
-    err = sc16is752_init();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "SC16IS752: %s", esp_err_to_name(err));
-    }
-#endif
-
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-    err = ryuw122_uart_start();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "RYUW122 UART: %s", esp_err_to_name(err));
-    }
-#endif
 
 #if CONFIG_REGATTAONE_DW3000_ENABLE
 #if CONFIG_DW3000_RANGING_ENABLE

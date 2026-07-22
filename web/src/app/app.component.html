@@ -112,64 +112,6 @@
             </div>
           </nz-tab>
 
-          <nz-tab nzTitle="UWB · 0xFEFA">
-            <p id="uwb-routing-hint" class="tab-hint">
-              REYAX RYUW122 on SC16IS752: UART A (TXA/RXA) = anchor role, UART B (TXB/RXB) = tag role.
-              Device type selects which roles are active. Lines are prefixed <code>[ANCHOR]</code> /
-              <code>[TAG]</code>.
-            </p>
-            <div id="uwb-panel-anchor" class="uwb-role-panel" hidden>
-              <h3 class="field-label">Anchor · UART A</h3>
-              <div nz-row [nzGutter]="8" class="uwb-input-row">
-                <div nz-col [nzFlex]="'auto'">
-                  <input
-                    nz-input
-                    id="uwb-at-input-anchor"
-                    type="text"
-                    spellcheck="false"
-                    autocomplete="off"
-                    placeholder="AT"
-                  />
-                </div>
-                <div nz-col [nzFlex]="'none'">
-                  <button nz-button nzType="primary" type="button" id="uwb-at-send-anchor">Send</button>
-                </div>
-              </div>
-              <div class="log-header">
-                <label class="field-label" for="uwb-line-log-anchor">Anchor UART log</label>
-                <button nz-button nzType="default" nzSize="small" type="button" id="uwb-log-clear-anchor">
-                  Clear
-                </button>
-              </div>
-              <pre id="uwb-line-log-anchor" class="ble-log uwb-line-log" aria-live="polite"></pre>
-            </div>
-            <div id="uwb-panel-tag" class="uwb-role-panel" hidden>
-              <h3 class="field-label">Tag · UART B</h3>
-              <div nz-row [nzGutter]="8" class="uwb-input-row">
-                <div nz-col [nzFlex]="'auto'">
-                  <input
-                    nz-input
-                    id="uwb-at-input-tag"
-                    type="text"
-                    spellcheck="false"
-                    autocomplete="off"
-                    placeholder="AT"
-                  />
-                </div>
-                <div nz-col [nzFlex]="'none'">
-                  <button nz-button nzType="primary" type="button" id="uwb-at-send-tag">Send</button>
-                </div>
-              </div>
-              <div class="log-header">
-                <label class="field-label" for="uwb-line-log-tag">Tag UART log</label>
-                <button nz-button nzType="default" nzSize="small" type="button" id="uwb-log-clear-tag">
-                  Clear
-                </button>
-              </div>
-              <pre id="uwb-line-log-tag" class="ble-log uwb-line-log" aria-live="polite"></pre>
-            </div>
-          </nz-tab>
-
           <nz-tab nzTitle="DWM3000 · 0xFEF2" id="dwm3000-tab" hidden>
             <p class="tab-hint">
               Qorvo DWM3000 SPI UWB settings (<code>0xFEF2</code>) and two-way ranging

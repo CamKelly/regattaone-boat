@@ -9,7 +9,7 @@
  * Regatta device classification (persisted in NVS, BLE 0xFEFC).
  *
  * Describes where the device sits in the course / fleet, independent of radio hardware.
- * Ranging stacks (REYAX RYUW122, DWM3000, …) map these types to anchor/tag roles as needed.
+ * Ranging stacks (DWM3000, …) map these types to anchor/tag roles as needed.
  *
  *   Port / Starboard / Waypoint     — mark or mobile node with tag role
  *   *_anchor variants               — same mark + anchor role (dual-role)

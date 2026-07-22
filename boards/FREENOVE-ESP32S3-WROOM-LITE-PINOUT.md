@@ -67,8 +67,8 @@ EN                       RX
 | **7** | 7 | ADC1_CH6, Touch7, PWM | Available (was LoRa DIO1) |
 | **15** | 15 | ADC2_CH4, U0RTS, PWM | RegattaOne: **Meshtastic UART RX** ← module TX |
 | **16** | 16 | ADC2_CH5, U0CTS, PWM | RegattaOne: **Meshtastic UART TX** → module RX |
-| **17** | 17 | ADC2_CH6, **U1TXD**, PWM | RegattaOne: **UWB UART TX** |
-| **18** | 18 | ADC2_CH7, **U1RXD**, PWM | RegattaOne: **UWB UART RX** |
+| **17** | 17 | ADC2_CH6, **U1TXD**, PWM | RegattaOne: **DWM3000 WAKEUP** (when UWB wired) |
+| **18** | 18 | ADC2_CH7, **U1RXD**, PWM | RegattaOne: **DWM3000 IRQ** (when UWB wired) |
 | **8** | 8 | ADC1_CH7, Touch8, PWM | Available (was LoRa RESET) |
 | **3** | 3 | ADC1_CH2, Touch3, JTAG EN | Strapping — use with care |
 | **46** | 46 | Strapping (LOG) | Avoid if possible |
@@ -122,13 +122,13 @@ LoRa is via a **companion ESP32 running Meshtastic** (UART), not a direct SX1262
 | **GPS PPS** | 21 | **21** (right) |
 | **Meshtastic UART TX → module RX** | 16 | **16** (left) |
 | **Meshtastic UART RX ← module TX** | 15 | **15** (left) |
-| **DWM3000 SPI** *(optional eval)* | 6, 8, 9, 13, 14, 17, 18 | See **[WIRING-DWM3000.md](WIRING-DWM3000.md)** |
+| **DWM3000 SPI** *(optional)* | 6, 8, 9, 13, 14, 17, 18 | See **[WIRING-DWM3000.md](WIRING-DWM3000.md)** |
 
-UART: **GPS = UART1**, **Meshtastic = UART2**, **console = UART0** (USB, GPIO 43/44). **UWB:** use SC16IS752 on I2C — see [WIRING-SC16IS752-I2C.md](WIRING-SC16IS752-I2C.md).
+UART: **GPS = UART1**, **Meshtastic = UART2**, **console = UART0** (USB, GPIO 43/44). **UWB:** DWM3000 over SPI — see **[WIRING-DWM3000.md](WIRING-DWM3000.md)**.
 
 **Meshtastic companion:** enable the serial module in **PROTO** mode and match baud (default **921600** in firmware).
 
-**Wire checklist (PCB labels):** left **4–5**, **10–11**, **15–16**, right **21**, plus **3V3** and **GND** on each module.
+**Wire checklist (PCB labels):** left **4–5**, **10–11**, **15–16**, right **21**, plus **3V3** and **GND** on each module. Add DWM3000 pins when UWB is enabled.
 
 ### Waveshare ESP32-S3-Zero companion (**GP8** / **GP9** serial)
 
@@ -146,9 +146,7 @@ Meshtastic serial module: **PROTO**, **921600**, **TX = 8**, **RX = 9**.
 
 Alternative without that clash: **GP14** (TX) / **GP15** (RX) on the Zero → Freenove **15/16**.
 
-REYAX UWB via SC16IS752 I2C (not native UART on Freenove 17/18 in current firmware defaults).
-
-**DWM3000 (SPI UWB evaluation):** optional on GPIO **6, 8, 9, 13, 14, 17, 18** — see **[WIRING-DWM3000.md](WIRING-DWM3000.md)**.
+**DWM3000 (SPI UWB):** optional on GPIO **6, 8, 9, 13, 14, 17, 18** — see **[WIRING-DWM3000.md](WIRING-DWM3000.md)**.
 
 ---
 

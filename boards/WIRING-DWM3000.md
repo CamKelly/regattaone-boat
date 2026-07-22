@@ -6,7 +6,7 @@ Firmware driver: vendored [br101/dw3000-decadriver-source](../components/dw3000-
 
 **Logic level:** 3.3 V only. Do not connect 5 V to module I/O.
 
-This path is **independent** of REYAX RYUW122 (UART via SC16IS752). You can evaluate DWM3000 on the same board while RYUW122 stays on I2C UART.
+This is the RegattaOne **UWB** path (SPI two-way ranging via libdeca / decadriver).
 
 ---
 
@@ -37,7 +37,7 @@ This path is **independent** of REYAX RYUW122 (UART via SC16IS752). You can eval
 
 ## Freenove ESP32-S3 WROOM Lite — recommended map
 
-Uses GPIOs that were reserved for direct SX1262 LoRa but are **free** on the Freenove build (LoRa via Meshtastic UART; RYUW122 via SC16IS752 I2C).
+Uses GPIOs that were reserved for direct SX1262 LoRa but are **free** on the Freenove build (LoRa via Meshtastic UART).
 
 | DWM3000 pin | DWM3000 signal | → | ESP32-S3 | Freenove PCB label | menuconfig (`Decadriver`) |
 | ----------- | -------------- | - | -------- | ------------------ | ------------------------- |
@@ -59,12 +59,12 @@ Uses GPIOs that were reserved for direct SX1262 LoRa but are **free** on the Fre
 | GPIO | PCB label | Function |
 | ---- | --------- | -------- |
 | 4, 5 | 4, 5 | GPS UART |
-| 7 | 7 | SC16IS752 IRQ |
-| 10, 11 | 10, 11 | IMU + SC16IS752 I2C |
-| 12 | 12 | SC16IS752 RESET |
+| 10, 11 | 10, 11 | IMU I2C |
 | 15, 16 | 15, 16 | Meshtastic UART |
 | 21 | 21 | GPS PPS |
 | 43, 44 | TX, RX | USB console |
+
+GPIO **7** and **12** are free on the current Freenove map (not used by GPS, Meshtastic, IMU, or DWM3000).
 
 See **[FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)**.
 
@@ -112,7 +112,7 @@ Keep leads short; SPI at 2 MHz during init (driver default), up to ~22 MHz in me
    dw3000_rng: ready: addr 0x0001, pan 0xdeca, ant 16368, proc 2000 us
    ```
 
-If DEVID is wrong: check 3.3 V, GND, CS/RST wiring, and that **GPIO 12** is not used for SPI CLK (it is SC16IS752 reset on this board).
+If DEVID is wrong: check 3.3 V, GND, CS/RST/IRQ wiring, and that SPI CLK is on **GPIO 9** (not GPIO 12).
 
 ---
 
@@ -165,5 +165,5 @@ Antenna delay (`DW3000_ANTENNA_DELAY`) affects absolute accuracy; calibrate agai
 - [components/libdeca/VENDOR.md](../components/libdeca/VENDOR.md) — vendored libdeca notes
 
 - [FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md](FREENOVE-ESP32S3-WROOM-LITE-PINOUT.md)
-- [WIRING-SC16IS752-I2C.md](WIRING-SC16IS752-I2C.md) — RYUW122 UART path
+- [WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md) — GPS / LoRa / IMU pin plans
 - [components/dw3000-decadriver-source/VENDOR.md](../components/dw3000-decadriver-source/VENDOR.md) — vendored driver notes

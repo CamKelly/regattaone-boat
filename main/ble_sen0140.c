@@ -26,9 +26,6 @@
 #include "ble_sen0140.h"
 #include "boat_id.h"
 #include "device_type.h"
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-#include "ryuw122_uart.h"
-#endif
 #if CONFIG_DW3000_RANGING_ENABLE
 #include "dw3000_config.h"
 #include "dw3000_ranging.h"
@@ -53,9 +50,6 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_DW3000_RANGE_UUID   0xfef3
 #define SEN0140_GATT_LORA_TX_UUID        0xfef7
 #define SEN0140_GATT_LORA_LINE_UUID      0xfef8
-#define SEN0140_GATT_UWB_LINE_UUID      0xfef9
-/** Write: UTF-8 AT command (CRLF appended if missing); response lines on FEF9 notify. */
-#define SEN0140_GATT_UWB_AT_UUID        0xfefa
 /** Read/write: user-assigned boat id (UTF-8, max 32 chars, persisted in NVS). */
 #define SEN0140_GATT_BOAT_ID_UUID       0xfefb
 /** Read/write: device type — port | port_anchor | starboard | … | boat (BLE 0xFEFC). */
@@ -99,7 +93,6 @@ static uint16_t s_chr_val_handle;
 static uint16_t s_lora_line_chr_val_handle;
 static uint16_t s_lora_stats_chr_val_handle;
 static bool s_lora_stats_notify_enabled;
-static uint16_t s_uwb_line_chr_val_handle;
 #if CONFIG_REGATTAONE_GPS_ENABLE
 static uint16_t s_gps_line_chr_val_handle;
 static bool s_gps_line_notify_enabled;
@@ -115,33 +108,12 @@ static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 static bool s_notify_enabled;
 static bool s_lora_line_notify_enabled;
 static char s_lora_stats_json[8192];
-static bool s_uwb_line_notify_enabled;
 static uint16_t s_seq;
 
 #if CONFIG_DW3000_RANGING_ENABLE
 static char s_dw3000_range_json[96];
 #endif
 
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-#define UWB_LINE_BUF_MAX 384U
-static char s_uwb_line_buf[UWB_LINE_BUF_MAX];
-static size_t s_uwb_line_len;
-
-static void uwb_line_store(const uint8_t *data, size_t len)
-{
-    if (!data || len == 0U) {
-        return;
-    }
-    if (s_uwb_line_len > 0U && s_uwb_line_len < (UWB_LINE_BUF_MAX - 1U)) {
-        s_uwb_line_buf[s_uwb_line_len++] = '\n';
-    }
-    size_t room = UWB_LINE_BUF_MAX - 1U - s_uwb_line_len;
-    size_t n = len < room ? len : room;
-    memcpy(s_uwb_line_buf + s_uwb_line_len, data, n);
-    s_uwb_line_len += n;
-    s_uwb_line_buf[s_uwb_line_len] = '\0';
-}
-#endif
 
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 #define LORA_LINE_BUF_MAX 384U
@@ -285,17 +257,9 @@ static int gatt_svr_access_device_type(uint16_t conn_handle, uint16_t attr_handl
         if (!device_type_from_string(buf, om_len, &type)) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-        const device_type_t prev = device_type_get();
-#endif
         if (device_type_set(type) != ESP_OK) {
             return BLE_ATT_ERR_UNLIKELY;
         }
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-        if (prev != type) {
-            ryuw122_provision_on_device_type_changed();
-        }
-#endif
         return 0;
     }
     return BLE_ATT_ERR_UNLIKELY;
@@ -433,24 +397,6 @@ static int gatt_svr_access_lora_line(uint16_t conn_handle, uint16_t attr_handle,
     return BLE_ATT_ERR_UNLIKELY;
 }
 #endif
-
-static int gatt_svr_access_uwb_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
-                                    void *arg)
-{
-    (void)conn_handle;
-    (void)attr_handle;
-    (void)arg;
-    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-        if (s_uwb_line_len > 0U) {
-            return os_mbuf_append(ctxt->om, s_uwb_line_buf, (uint16_t)s_uwb_line_len) == 0 ? 0
-                                                                                             : BLE_ATT_ERR_INSUFFICIENT_RES;
-        }
-#endif
-        return 0;
-    }
-    return BLE_ATT_ERR_UNLIKELY;
-}
 
 #if CONFIG_REGATTAONE_GPS_ENABLE
 static int gatt_svr_access_gps_line(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
@@ -664,48 +610,6 @@ static int gatt_svr_access_dw3000_range(uint16_t conn_handle, uint16_t attr_hand
 }
 #endif
 
-static int gatt_svr_access_uwb_at(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
-                                  void *arg)
-{
-    (void)conn_handle;
-    (void)attr_handle;
-    (void)arg;
-
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
-        return BLE_ATT_ERR_READ_NOT_PERMITTED;
-    }
-    uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
-    if (om_len == 0U || om_len > 256U) {
-        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-    }
-    uint8_t buf[260];
-    if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
-        return BLE_ATT_ERR_UNLIKELY;
-    }
-    size_t n = om_len;
-    if (n < 2U || buf[n - 2U] != '\r' || buf[n - 1U] != '\n') {
-        if (n >= sizeof(buf) - 2U) {
-            return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
-        }
-        if (n > 0U && buf[n - 1U] == '\n') {
-            buf[n - 1U] = '\r';
-            buf[n++] = '\n';
-        } else {
-            buf[n++] = '\r';
-            buf[n++] = '\n';
-        }
-    }
-    s_uwb_line_len = 0U;
-    s_uwb_line_buf[0] = '\0';
-    esp_err_t err = ryuw122_uart_write(buf, n);
-    return (err == ESP_OK) ? 0 : BLE_ATT_ERR_UNLIKELY;
-#else
-    (void)ctxt;
-    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
-#endif
-}
-
 static const struct ble_gatt_svc_def s_gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -749,17 +653,6 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                     .val_handle = &s_lora_stats_chr_val_handle,
                 },
 #endif
-                {
-                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_UWB_LINE_UUID),
-                    .access_cb = gatt_svr_access_uwb_line,
-                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
-                    .val_handle = &s_uwb_line_chr_val_handle,
-                },
-                {
-                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_UWB_AT_UUID),
-                    .access_cb = gatt_svr_access_uwb_at,
-                    .flags = BLE_GATT_CHR_F_WRITE,
-                },
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
                 {
                     .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_MESHTASTIC_RX_UUID),
@@ -862,7 +755,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_notify_enabled = false;
         s_lora_line_notify_enabled = false;
         s_lora_stats_notify_enabled = false;
-        s_uwb_line_notify_enabled = false;
 #if CONFIG_REGATTAONE_GPS_ENABLE
         s_gps_line_notify_enabled = false;
 #endif
@@ -905,10 +797,6 @@ static int gap_event(struct ble_gap_event *event, void *arg)
                 }
             }
 #endif
-        }
-        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_uwb_line_chr_val_handle)) {
-            s_uwb_line_notify_enabled = event->subscribe.cur_notify;
-            ESP_LOGI(TAG, "uwb line notify=%d", (int)s_uwb_line_notify_enabled);
         }
 #if CONFIG_REGATTAONE_GPS_ENABLE
         if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_gps_line_chr_val_handle)) {
@@ -1036,10 +924,9 @@ esp_err_t ble_sen0140_init(void)
 
     ESP_LOGI(TAG, "NimBLE host task started — watch for \"stack sync\" then \"GAP advertising\"");
     ESP_LOGI(TAG,
-             "NimBLE GATT (svc %04x imu %04x lora_tx %04x lora_rx %04x lora_stats %04x uwb %04x uwb_at %04x)",
+             "NimBLE GATT (svc %04x imu %04x lora_tx %04x lora_rx %04x lora_stats %04x)",
              SEN0140_GATT_SVC_UUID, SEN0140_GATT_CHR_UUID, SEN0140_GATT_LORA_TX_UUID,
-             SEN0140_GATT_LORA_LINE_UUID, SEN0140_GATT_LORA_STATS_UUID,
-             SEN0140_GATT_UWB_LINE_UUID, SEN0140_GATT_UWB_AT_UUID);
+             SEN0140_GATT_LORA_LINE_UUID, SEN0140_GATT_LORA_STATS_UUID);
     return ESP_OK;
 }
 
@@ -1051,7 +938,7 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
 
     /* Comms responses share the NimBLE mbuf pool — throttle IMU while line notifies are on. */
     static TickType_t s_last_imu_notify;
-    if (s_uwb_line_notify_enabled || s_lora_line_notify_enabled
+    if (s_lora_line_notify_enabled
 #if CONFIG_REGATTAONE_GPS_ENABLE
         || s_gps_line_notify_enabled
 #endif
@@ -1183,36 +1070,6 @@ void ble_sen0140_lora_stats_notify(const uint8_t *data, size_t len)
         return;
     }
     ble_line_notify_paced(s_lora_stats_chr_val_handle, s_lora_stats_notify_enabled, data, len);
-}
-
-void ble_sen0140_uwb_line_notify(const uint8_t *data, size_t len)
-{
-    if (!data || len == 0U) {
-        return;
-    }
-#if CONFIG_REGATTAONE_RYUW122_ENABLE
-    uwb_line_store(data, len);
-#endif
-    if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !s_uwb_line_notify_enabled) {
-        return;
-    }
-    ble_notify_take();
-    const uint8_t *p = data;
-    while (len > 0U) {
-        size_t chunk = len > SEN0140_BLE_UART_CHUNK_MAX ? SEN0140_BLE_UART_CHUNK_MAX : len;
-        struct os_mbuf *om = ble_hs_mbuf_from_flat(p, (uint16_t)chunk);
-        if (!om) {
-            ESP_LOGW(TAG, "uwb mbuf alloc failed");
-            break;
-        }
-        int nrc = ble_gatts_notify_custom(s_conn_handle, s_uwb_line_chr_val_handle, om);
-        if (nrc != 0) {
-            ESP_LOGW(TAG, "uwb notify rc=%d", nrc);
-        }
-        p += chunk;
-        len -= chunk;
-    }
-    ble_notify_give();
 }
 
 void ble_sen0140_gps_line_notify(const uint8_t *data, size_t len)

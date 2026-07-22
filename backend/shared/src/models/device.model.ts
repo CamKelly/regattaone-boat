@@ -5,7 +5,6 @@ export type DeviceKind = 'anchor' | 'tag';
 
 /**
  * BLE / firmware device type (0xFEFC) — course / fleet role.
- * RYUW122 maps anchor/tag roles to SC16IS752 UART A/B when the bridge is enabled.
  */
 export type DeviceType =
   | 'port'

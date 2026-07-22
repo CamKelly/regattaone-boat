@@ -10,10 +10,6 @@ export const BLE_DWM3000_CONFIG_CHAR_UUID = "0000fef2-0000-1000-8000-00805f9b34f
 /** Read/write: DWM3000 ranging — write peer address, read JSON distance result. */
 export const BLE_DWM3000_RANGE_CHAR_UUID = "0000fef3-0000-1000-8000-00805f9b34fb";
 
-/** Notify: UTF-8 lines from RYUW122 UART. */
-export const BLE_UWB_LINE_CHAR_UUID = "0000fef9-0000-1000-8000-00805f9b34fb";
-/** Write UTF-8 AT command to RYUW122 (firmware appends CRLF if missing). */
-export const BLE_UWB_AT_CHAR_UUID = "0000fefa-0000-1000-8000-00805f9b34fb";
 /** Read/write user-assigned boat id (UTF-8, max 32 chars, stored in device NVS). */
 export const BLE_BOAT_ID_CHAR_UUID = "0000fefb-0000-1000-8000-00805f9b34fb";
 /** Read/write device type (stored in device NVS). */
@@ -36,8 +32,6 @@ export const BLE_MESHTASTIC_STATS_CHAR_UUID = "0000fee7-0000-1000-8000-00805f9b3
 /**
  * Device type (BLE 0xFEFC) — course / fleet role (port, starboard, waypoint, boat, …).
  * Stored in NVS; used by mesh, backend, and ranging stacks.
- *
- * RYUW122 (when enabled) maps anchor/tag roles from device type to SC16IS752 UART A/B.
  */
 export type DeviceType =
   | "port"
@@ -58,9 +52,7 @@ export const DEVICE_TYPES: DeviceType[] = [
   "boat",
 ];
 
-export type UwbRole = "anchor" | "tag";
-
-/** Anchor role implied by device type (used by RYUW122 UART routing and similar). */
+/** Anchor role implied by device type (used by ranging and device-role UI). */
 export function deviceTypeHasAnchorRole(type: DeviceType): boolean {
   return (
     type === "port_anchor" ||
@@ -70,7 +62,7 @@ export function deviceTypeHasAnchorRole(type: DeviceType): boolean {
   );
 }
 
-/** Tag role implied by device type (used by RYUW122 UART routing and similar). */
+/** Tag role implied by device type (used by ranging and device-role UI). */
 export function deviceTypeHasTagRole(type: DeviceType): boolean {
   return type !== "boat";
 }
@@ -109,32 +101,6 @@ export function parseDeviceType(raw: string): DeviceType | null {
     return s as DeviceType;
   }
   return null;
-}
-
-/** Prefix AT writes for dual-UART SC16IS752 routing (firmware strips prefix). */
-export function encodeUwbAtWrite(role: UwbRole, cmd: string): Uint8Array {
-  const prefix = role === "anchor" ? "@ANCHOR\n" : "@TAG\n";
-  const body = new TextEncoder().encode(cmd);
-  const head = new TextEncoder().encode(prefix);
-  const out = new Uint8Array(head.length + body.length);
-  out.set(head);
-  out.set(body, head.length);
-  return out;
-}
-
-/** Split firmware notify line into role + payload (after optional prefix). */
-export function parseUwbNotifyLine(raw: string): { role: UwbRole; line: string } | null {
-  if (raw.startsWith("[ANCHOR]")) {
-    return { role: "anchor", line: raw.slice("[ANCHOR]".length).replace(/^\s*/, "") };
-  }
-  if (raw.startsWith("[TAG]")) {
-    return { role: "tag", line: raw.slice("[TAG]".length).replace(/^\s*/, "") };
-  }
-  return null;
-}
-
-export function uwbWriteNeedsRolePrefix(type: DeviceType): boolean {
-  return deviceTypeHasAnchor(type) && deviceTypeHasTag(type);
 }
 
 /** DWM3000 SPI UWB settings (BLE 0xFEF2), persisted in device NVS. */

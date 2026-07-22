@@ -1,8 +1,8 @@
 # GPS PPS, UTC timebase, and TDMA
 
-How firmware turns GPS **PPS** + **NMEA UTC** into a shared **microsecond clock** and **TDMA** schedule. **LoRa** defaults to **CAD/CSMA only**; **REYAX UWB** can use the same slot schedule when enabled.
+How firmware turns GPS **PPS** + **NMEA UTC** into a shared **microsecond clock** and **TDMA** schedule. **LoRa** defaults to **CAD/CSMA only**; optional TDMA can gate LoRa TX when enabled. UWB (DWM3000) ranging is not TDMA-gated in current firmware.
 
-Wiring and GPIO pins: **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** (GPS UART + PPS).
+Wiring and GPIO pins: **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)** (GPS UART + PPS). UWB: **[WIRING-DWM3000.md](WIRING-DWM3000.md)**.
 
 ---
 
@@ -17,7 +17,6 @@ Wiring and GPIO pins: **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)
 | **TDMA math** | `main/tdma.c` | UTC-aligned slot index / guards |
 | **TDMA alarms** | `main/tdma_scheduler.c` | GPTimer one-shot open/close window |
 | **LoRa TX** | `main/sx1262_lora.cpp` | CAD/CSMA queue (`scanChannel` + backoff); optional TDMA gate |
-| **UWB gate** | `main/ryuw122_uart.c` | `ryuw122_tdma_can_use_now()` when `TDMA_ENFORCE_UWB` |
 
 **ESP32-S3 default (v2):** PPS → **MCPWM capture** (hardware timestamp) → **GPTimer** synced each second → UTC extrapolation + optional **GPTimer slot alarms**.
 
@@ -33,7 +32,7 @@ Wiring and GPIO pins: **[WIRING-ESP32S3-LORA-GPS.md](WIRING-ESP32S3-LORA-GPS.md)
 4. **`CONFIG_REGATTAONE_TDMA_ENABLE=y`**
 5. **ESP32-S3** for hardware capture (default on S3 builds).
 
-Until **PPS + RMC** sync: `gps_timebase_utc_valid()` is false. **UWB** TDMA (if enforced) is blocked; **LoRa** still transmits via CAD/CSMA unless you enable `TDMA_ENFORCE_LORA_TX`.
+Until **PPS + RMC** sync: `gps_timebase_utc_valid()` is false. **LoRa** still transmits via CAD/CSMA unless you enable `TDMA_ENFORCE_LORA_TX`.
 
 ---
 
@@ -56,7 +55,6 @@ Until **PPS + RMC** sync: `gps_timebase_utc_valid()` is false. **UWB** TDMA (if 
 | `TDMA_GUARD_US` | 2000 | Guard band (µs) |
 | `TDMA_GPTIMER_SCHEDULER` | y | Hardware alarms for slot open/close |
 | `TDMA_ENFORCE_LORA_TX` | n | Block LoRa outside slot (off = CSMA/CAD only) |
-| `TDMA_ENFORCE_UWB` | y | Gate UWB on slot |
 
 ---
 
@@ -152,8 +150,8 @@ $PREGPPS,<mono_us>,<pulse_count>,,<cap_ticks>,<cap_delta_us>
 | ----- | ------------- | --------------------- |
 | PPS edge timestamp | ISR + `esp_timer` | Hardware latch |
 | Slot open | Task polling | GPTimer alarm + flag |
-| UWB UART → RF | Still ~ms variable | Still ~ms variable |
+| Radio TX window | Software / CAD | Same; optional TDMA gate for LoRa |
 
-LoRa (100 ms slots): either path is fine. UWB with ms slots: use v2 + measure `cap_delta_us` and guard bands.
+LoRa (100 ms slots): either path is fine. Measure `cap_delta_us` and guard bands when tightening slot timing.
 
 Disable **`REGATTAONE_GPS_HW_CAPTURE`** to revert to v1 without removing TDMA.
