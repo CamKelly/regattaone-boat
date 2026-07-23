@@ -65,7 +65,7 @@ static const char *TAG = "ble_sen0140";
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 244U
-/** Delay between multi-chunk stats notifies so Web Bluetooth delivers every chunk. */
+/** Delay between multi-chunk line/stats notifies so Web Bluetooth delivers every chunk. */
 #define SEN0140_BLE_STATS_CHUNK_DELAY_MS 30U
 #define SEN0140_BLE_FLAG_ADXL       0x01U
 #define SEN0140_BLE_FLAG_ITG        0x02U
@@ -105,6 +105,8 @@ static bool s_meshtastic_stats_notify_enabled;
 static char s_meshtastic_stats_json[4096];
 #endif
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+/** Negotiated ATT MTU; notify payload max is mtu - 3. */
+static uint16_t s_att_mtu = 23;
 static bool s_notify_enabled;
 static bool s_lora_line_notify_enabled;
 static char s_lora_stats_json[8192];
@@ -752,6 +754,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnect reason=%d", event->disconnect.reason);
         s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+        s_att_mtu = 23;
         s_notify_enabled = false;
         s_lora_line_notify_enabled = false;
         s_lora_stats_notify_enabled = false;
@@ -820,7 +823,9 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_MTU:
-        ESP_LOGI(TAG, "mtu=%d", event->mtu.value);
+        s_att_mtu = event->mtu.value > 23 ? event->mtu.value : 23;
+        ESP_LOGI(TAG, "mtu=%d (notify chunk max %u)", (int)s_att_mtu,
+                 (unsigned)(s_att_mtu > 3U ? (s_att_mtu - 3U) : 20U));
         return 0;
 
     default:
@@ -1002,6 +1007,17 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
     }
 }
 
+static size_t ble_notify_chunk_max(void)
+{
+    /* ATT notify payload = MTU - 3 (opcode + handle). Cap at UART chunk max. */
+    const uint16_t mtu = s_att_mtu >= 23U ? s_att_mtu : 23U;
+    size_t max = (size_t)mtu > 3U ? (size_t)mtu - 3U : 20U;
+    if (max > SEN0140_BLE_UART_CHUNK_MAX) {
+        max = SEN0140_BLE_UART_CHUNK_MAX;
+    }
+    return max;
+}
+
 static void ble_line_notify(uint16_t chr_val_handle, bool notify_enabled, const uint8_t *data, size_t len)
 {
     if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !notify_enabled) {
@@ -1009,8 +1025,9 @@ static void ble_line_notify(uint16_t chr_val_handle, bool notify_enabled, const 
     }
     ble_notify_take();
     const uint8_t *p = data;
+    const size_t chunk_max = ble_notify_chunk_max();
     while (len > 0U) {
-        size_t chunk = len > SEN0140_BLE_UART_CHUNK_MAX ? SEN0140_BLE_UART_CHUNK_MAX : len;
+        size_t chunk = len > chunk_max ? chunk_max : len;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(p, (uint16_t)chunk);
         if (!om) {
             break;
@@ -1025,16 +1042,17 @@ static void ble_line_notify(uint16_t chr_val_handle, bool notify_enabled, const 
     ble_notify_give();
 }
 
-/** Stats JSON may span several notifies; pace chunks for reliable Web Bluetooth delivery. */
+/** Stats JSON / long lines may span several notifies; pace chunks for reliable Web Bluetooth delivery. */
 static void ble_line_notify_paced(uint16_t chr_val_handle, bool notify_enabled, const uint8_t *data, size_t len)
 {
     if (s_conn_handle == BLE_HS_CONN_HANDLE_NONE || !notify_enabled) {
         return;
     }
     const uint8_t *p = data;
+    const size_t chunk_max = ble_notify_chunk_max();
     while (len > 0U) {
         ble_notify_take();
-        size_t chunk = len > SEN0140_BLE_UART_CHUNK_MAX ? SEN0140_BLE_UART_CHUNK_MAX : len;
+        size_t chunk = len > chunk_max ? chunk_max : len;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(p, (uint16_t)chunk);
         if (!om) {
             ble_notify_give();
@@ -1091,7 +1109,8 @@ void ble_sen0140_meshtastic_rx_notify(const uint8_t *data, size_t len)
         return;
     }
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
-    ble_line_notify(s_meshtastic_rx_chr_val_handle, s_meshtastic_rx_notify_enabled, data, len);
+    /* Pace RX lines: $PREGMARK and long text can exceed ATT MTU and need reliable multi-chunk delivery. */
+    ble_line_notify_paced(s_meshtastic_rx_chr_val_handle, s_meshtastic_rx_notify_enabled, data, len);
 #else
     (void)data;
     (void)len;

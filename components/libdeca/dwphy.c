@@ -44,19 +44,27 @@ static dwt_config_t config = {
 	.pdoaMode = DWT_PDOA_M0 /* off */
 };
 #else
-// default config
+/* Default PHY: longest practical range (CH5 + 850 kbps + long preamble).
+ *
+ * Tradeoffs vs the old short-packet defaults (CH9 / 6.8 Mbps / PLEN 64 / PAC 8):
+ * - CH5 (~6.5 GHz) propagates farther than CH9 (~8 GHz)
+ * - 850 kbps + PLEN 1024 / PAC 32 improves link budget; airtime is much longer
+ * - All ranging peers must use the same PHY or ranging will fail
+ *
+ * Set TEST_EXAMPLE_CONFIG to 1 for a short-packet CH5 profile if needed.
+ */
 static dwt_config_t config = {
-	.chan = 9,
-	.txPreambLength = DWT_PLEN_64,
-	.rxPAC = DWT_PAC8,
-	.txCode = 11,
-	.rxCode = 11,
-	.sfdType = DWT_SFD_IEEE_4Z,
-	.dataRate = DWT_BR_6M8,
+	.chan = 5,
+	.txPreambLength = DWT_PLEN_1024,
+	.rxPAC = DWT_PAC32, /* recommended for PLEN 512/1024 */
+	.txCode = 9, /* common CH5 preamble code */
+	.rxCode = 9,
+	.sfdType = DWT_SFD_DW_16, /* longer SFD aids detection at range */
+	.dataRate = DWT_BR_850K,
 	.phrMode = DWT_PHRMODE_STD,
 	.phrRate = DWT_PHRRATE_STD,
-	.sfdTO = (64 + 1 + 8 - 8),	 /* (plen + 1 + SFD length - PAC size) */
-	.stsMode = DWT_STS_MODE_OFF, // DWT_STS_MODE_1 | DWT_STS_MODE_SDC,
+	.sfdTO = 0, /* dwphy_config() computes plen + 1 + sfd_len - pac */
+	.stsMode = DWT_STS_MODE_OFF,
 	.stsLength = DWT_STS_LEN_64,
 	.pdoaMode = DWT_PDOA_M0, /* off */
 };

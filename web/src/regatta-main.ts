@@ -57,7 +57,7 @@ import {
 } from "./lib/ble-transport";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-06-25b";
+const WEB_BLE_REV = "2026-07-22a";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -208,6 +208,8 @@ interface BleBoatSession {
   meshtasticStats: MeshtasticStatsSnapshot;
   meshtasticStatsReceivedWallMs: number;
   meshtasticStatsNotifyBuf: string;
+  /** Incomplete 0xFEE5 line fragment across BLE notify chunks. */
+  meshtasticLineNotifyBuf: string;
   meshtasticLineLogText: string;
   meshtasticTxDraft: string;
   markPort: MarkBroadcastSnapshot | null;
@@ -1627,10 +1629,22 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
   if (!chunk) {
     return;
   }
-  const lines = chunk.split(/\r?\n/);
+  // Reassemble across BLE notify chunks (PREGMARK / long text can span packets).
+  session.meshtasticLineNotifyBuf += chunk;
+  if (session.meshtasticLineNotifyBuf.length > 8192) {
+    const cut = session.meshtasticLineNotifyBuf.lastIndexOf("\n");
+    session.meshtasticLineNotifyBuf =
+      cut >= 0 ? session.meshtasticLineNotifyBuf.slice(cut + 1) : session.meshtasticLineNotifyBuf.slice(-1024);
+  }
+
+  const endedWithNewline = /[\r\n]$/.test(session.meshtasticLineNotifyBuf);
+  const parts = session.meshtasticLineNotifyBuf.split(/\r?\n/);
+  const complete = endedWithNewline ? parts : parts.slice(0, -1);
+  session.meshtasticLineNotifyBuf = endedWithNewline ? "" : (parts[parts.length - 1] ?? "");
+
   let hadMark = false;
   let other = "";
-  for (const raw of lines) {
+  for (const raw of complete) {
     const line = raw.trim();
     if (!line) {
       continue;
@@ -1638,6 +1652,8 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
     if (line.startsWith("$PREGMARK,")) {
       if (applyMarkBroadcastLine(session, line)) {
         hadMark = true;
+      } else {
+        console.warn("Ignored malformed $PREGMARK line", line.slice(0, 120));
       }
       continue;
     }
@@ -1650,8 +1666,10 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
   if (hadMark) {
     renderMarkBroadcasts(session);
   }
-  renderMeshtastic(session);
-  syncMeshtasticUiRefresh(session);
+  if (hadMark || other.length > 0) {
+    renderMeshtastic(session);
+    syncMeshtasticUiRefresh(session);
+  }
 }
 
 function applyMarkBroadcastLine(session: BleBoatSession, line: string): boolean {
@@ -2004,6 +2022,7 @@ function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
       return;
     }
     renderMeshtastic(active);
+    renderMarkBroadcasts(active);
     renderGpsDisplay(active);
   }, 1000);
 }
@@ -2081,6 +2100,7 @@ async function sendMeshtasticBroadcast(session: BleBoatSession): Promise<void> {
 function clearMeshtasticLog(session: BleBoatSession | null): void {
   if (session) {
     session.meshtasticLineLogText = "";
+    session.meshtasticLineNotifyBuf = "";
   }
   const el = document.querySelector("#meshtastic-line-log");
   if (el) {
@@ -2359,6 +2379,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     meshtasticStats: defaultMeshtasticStats(),
     meshtasticStatsReceivedWallMs: 0,
     meshtasticStatsNotifyBuf: "",
+    meshtasticLineNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
     markPort: null,
@@ -2418,6 +2439,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     meshtasticStats: defaultMeshtasticStats(),
     meshtasticStatsReceivedWallMs: 0,
     meshtasticStatsNotifyBuf: "",
+    meshtasticLineNotifyBuf: "",
     meshtasticLineLogText: "",
     meshtasticTxDraft: "",
     markPort: null,
@@ -2696,6 +2718,14 @@ export function startRegattaApp(): void {
     }
     const label = tab.textContent ?? "";
     const wantImu = label.includes("IMU");
+    if (label.includes("Meshtastic")) {
+      const session = getActiveSession();
+      if (session?.gatt.connected) {
+        // ng-zorro may remount the pane; push session state into the DOM again.
+        renderMeshtastic(session);
+        renderMarkBroadcasts(session);
+      }
+    }
     if (label.includes("GPS")) {
       requestAnimationFrame(() => invalidateGpsLeafletMapSize());
       const session = getActiveSession();
