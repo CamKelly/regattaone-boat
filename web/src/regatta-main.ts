@@ -57,7 +57,7 @@ import {
 } from "./lib/ble-transport";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-07-22a";
+const WEB_BLE_REV = "2026-07-24a";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -111,6 +111,17 @@ interface MarkBroadcastSnapshot {
   dist_cm: number | null;
   gps_valid: boolean;
   from: number;
+  updatedAtMs: number;
+}
+
+/** Boat geometry snapshot from $PREGGEOM (current values only). */
+interface BoatGeomSnapshot {
+  boat_port_cm: number | null;
+  boat_starboard_cm: number | null;
+  port_starboard_cm: number | null;
+  starboard_port_cm: number | null;
+  port_uwb: number;
+  starboard_uwb: number;
   updatedAtMs: number;
 }
 
@@ -214,6 +225,7 @@ interface BleBoatSession {
   meshtasticTxDraft: string;
   markPort: MarkBroadcastSnapshot | null;
   markStarboard: MarkBroadcastSnapshot | null;
+  boatGeom: BoatGeomSnapshot | null;
   gpsFix: GpsFix;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -1643,6 +1655,7 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
   session.meshtasticLineNotifyBuf = endedWithNewline ? "" : (parts[parts.length - 1] ?? "");
 
   let hadMark = false;
+  let hadGeom = false;
   let other = "";
   for (const raw of complete) {
     const line = raw.trim();
@@ -1657,6 +1670,14 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
       }
       continue;
     }
+    if (line.startsWith("$PREGGEOM,")) {
+      if (applyBoatGeomLine(session, line)) {
+        hadGeom = true;
+      } else {
+        console.warn("Ignored malformed $PREGGEOM line", line.slice(0, 120));
+      }
+      continue;
+    }
     other += `${line}\n`;
   }
   if (other.length > 0) {
@@ -1666,7 +1687,10 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
   if (hadMark) {
     renderMarkBroadcasts(session);
   }
-  if (hadMark || other.length > 0) {
+  if (hadGeom) {
+    renderBoatGeom(session);
+  }
+  if (hadMark || hadGeom || other.length > 0) {
     renderMeshtastic(session);
     syncMeshtasticUiRefresh(session);
   }
@@ -1729,6 +1753,81 @@ function formatMarkDist(cm: number | null, oppositeLabel: string): string {
     return `${(cm / 100).toFixed(2)} m to ${oppositeLabel}`;
   }
   return `${cm} cm to ${oppositeLabel}`;
+}
+
+function formatGeomDist(cm: number | null): string {
+  if (cm === null) {
+    return "—";
+  }
+  if (cm >= 100) {
+    return `${(cm / 100).toFixed(2)} m`;
+  }
+  return `${cm} cm`;
+}
+
+function parseGeomCm(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  if (value >= 65535) {
+    return null;
+  }
+  return Math.round(value);
+}
+
+function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
+  const jsonPart = line.slice("$PREGGEOM,".length).trim();
+  try {
+    const o = JSON.parse(jsonPart) as {
+      boat_port_cm?: number | null;
+      boat_starboard_cm?: number | null;
+      port_starboard_cm?: number | null;
+      starboard_port_cm?: number | null;
+      port_uwb?: number;
+      starboard_uwb?: number;
+    };
+    session.boatGeom = {
+      boat_port_cm: parseGeomCm(o.boat_port_cm),
+      boat_starboard_cm: parseGeomCm(o.boat_starboard_cm),
+      port_starboard_cm: parseGeomCm(o.port_starboard_cm),
+      starboard_port_cm: parseGeomCm(o.starboard_port_cm),
+      port_uwb: typeof o.port_uwb === "number" ? o.port_uwb & 0xffff : 0,
+      starboard_uwb: typeof o.starboard_uwb === "number" ? o.starboard_uwb & 0xffff : 0,
+      updatedAtMs: Date.now(),
+    };
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function renderBoatGeom(session: BleBoatSession | null): void {
+  if (session && session.deviceId !== activeSessionId) {
+    return;
+  }
+  const set = (id: string, value: string) => {
+    const el = document.querySelector(`#${id}`);
+    if (el) {
+      el.textContent = value;
+    }
+  };
+  const g = session?.boatGeom ?? null;
+  if (!g) {
+    set("boat-geom-boat-port", "—");
+    set("boat-geom-boat-starboard", "—");
+    set("boat-geom-port-starboard", "—");
+    set("boat-geom-starboard-port", "—");
+    set("boat-geom-updated", "Waiting for boat…");
+    return;
+  }
+  set("boat-geom-boat-port", formatGeomDist(g.boat_port_cm));
+  set("boat-geom-boat-starboard", formatGeomDist(g.boat_starboard_cm));
+  set("boat-geom-port-starboard", formatGeomDist(g.port_starboard_cm));
+  set("boat-geom-starboard-port", formatGeomDist(g.starboard_port_cm));
+  set("boat-geom-updated", new Date(g.updatedAtMs).toLocaleTimeString());
 }
 
 function renderMarkBroadcastPanel(
@@ -1967,6 +2066,7 @@ function renderMeshtastic(session: BleBoatSession): void {
     statsEl.textContent = `TX ok: ${m.tx_ok}, fail: ${m.tx_fail}, RX: ${m.rx}, GPS: ${m.gps_rx} (api ${m.gps_api_rx}) · nodes: ${m.nodes.length}`;
   }
   renderMarkBroadcasts(session);
+  renderBoatGeom(session);
   if (!tbody) {
     return;
   }
@@ -2023,6 +2123,7 @@ function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
     }
     renderMeshtastic(active);
     renderMarkBroadcasts(active);
+    renderBoatGeom(active);
     renderGpsDisplay(active);
   }, 1000);
 }
@@ -2179,6 +2280,7 @@ function clearUiPanels(): void {
   setText("meshtastic-self", "This device: waiting…");
   setText("meshtastic-stats", "TX ok: 0 · fail: 0 · RX: 0");
   renderMarkBroadcasts(null);
+  renderBoatGeom(null);
   syncMeshtasticTabVisibility(null);
   syncMeshtasticUiRefresh(null);
   syncDwm3000TabVisibility(null);
@@ -2384,6 +2486,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     meshtasticTxDraft: "",
     markPort: null,
     markStarboard: null,
+    boatGeom: null,
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),
@@ -2444,6 +2547,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     meshtasticTxDraft: "",
     markPort: null,
     markStarboard: null,
+    boatGeom: null,
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),
@@ -2724,6 +2828,7 @@ export function startRegattaApp(): void {
         // ng-zorro may remount the pane; push session state into the DOM again.
         renderMeshtastic(session);
         renderMarkBroadcasts(session);
+        renderBoatGeom(session);
       }
     }
     if (label.includes("GPS")) {

@@ -44,6 +44,12 @@ static bool s_peer_uwb_known;
 static uint16_t s_last_dist_cm = MARK_BROADCAST_DIST_UNKNOWN;
 static bool s_last_dist_ok;
 
+/** Boat-only: live distance to each mark (UNKNOWN until a successful range this cycle). */
+static uint16_t s_boat_to_port_cm = MARK_BROADCAST_DIST_UNKNOWN;
+static uint16_t s_boat_to_starboard_cm = MARK_BROADCAST_DIST_UNKNOWN;
+static uint16_t s_boat_port_uwb;
+static uint16_t s_boat_starboard_uwb;
+
 static uint16_t self_uwb_addr(void)
 {
 #if CONFIG_DW3000_RANGING_ENABLE
@@ -265,6 +271,138 @@ static void maybe_range_peer(void)
 #endif
 }
 
+/** Format cm for JSON: 65535 means unknown → null. */
+static void fmt_dist_json(char *buf, size_t buflen, uint16_t cm)
+{
+    if (cm == MARK_BROADCAST_DIST_UNKNOWN) {
+        snprintf(buf, buflen, "null");
+    } else {
+        snprintf(buf, buflen, "%u", (unsigned)cm);
+    }
+}
+
+/**
+ * Boat → UI: current boat↔port, boat↔starboard, and the opposite-mark distances
+ * last heard on Meshtastic. No history — whatever is known right now.
+ */
+static void boat_geom_ble_notify(void)
+{
+    if (device_type_get() != DEVICE_TYPE_BOAT) {
+        return;
+    }
+
+    uint16_t port_uwb = 0;
+    uint16_t stb_uwb = 0;
+    uint16_t port_to_stb = MARK_BROADCAST_DIST_UNKNOWN;
+    uint16_t stb_to_port = MARK_BROADCAST_DIST_UNKNOWN;
+    uint16_t boat_port = MARK_BROADCAST_DIST_UNKNOWN;
+    uint16_t boat_stb = MARK_BROADCAST_DIST_UNKNOWN;
+
+    if (s_store_mtx != NULL && xSemaphoreTake(s_store_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
+        if (s_have_port) {
+            port_uwb = s_port.uwb_addr;
+            port_to_stb = s_port.dist_cm;
+        }
+        if (s_have_starboard) {
+            stb_uwb = s_starboard.uwb_addr;
+            stb_to_port = s_starboard.dist_cm;
+        }
+        boat_port = s_boat_to_port_cm;
+        boat_stb = s_boat_to_starboard_cm;
+        xSemaphoreGive(s_store_mtx);
+    }
+
+    char bp[12], bs[12], ps[12], sp[12];
+    fmt_dist_json(bp, sizeof(bp), boat_port);
+    fmt_dist_json(bs, sizeof(bs), boat_stb);
+    fmt_dist_json(ps, sizeof(ps), port_to_stb);
+    fmt_dist_json(sp, sizeof(sp), stb_to_port);
+
+    char line[256];
+    const int n = snprintf(
+        line, sizeof(line),
+        "$PREGGEOM,{\"boat_port_cm\":%s,\"boat_starboard_cm\":%s,"
+        "\"port_starboard_cm\":%s,\"starboard_port_cm\":%s,"
+        "\"port_uwb\":%u,\"starboard_uwb\":%u}\n",
+        bp, bs, ps, sp, (unsigned)port_uwb, (unsigned)stb_uwb);
+    if (n > 0 && (size_t)n < sizeof(line)) {
+        ble_sen0140_meshtastic_rx_notify((const uint8_t *)line, (size_t)n);
+    }
+}
+
+#if CONFIG_DW3000_RANGING_ENABLE
+static uint16_t boat_range_one(uint16_t peer, const char *label)
+{
+    if (peer == 0U || peer == self_uwb_addr()) {
+        return MARK_BROADCAST_DIST_UNKNOWN;
+    }
+    uint16_t cm = 0;
+    /* Long-preamble PHY needs more than the mark TX 500 ms budget. */
+    const esp_err_t err = dw3000_range_to(peer, &cm, 1500U);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "boat → %s 0x%04X = %u cm", label, peer, (unsigned)cm);
+        return cm;
+    }
+    ESP_LOGD(TAG, "boat → %s 0x%04X failed: %s", label, peer, esp_err_to_name(err));
+    return MARK_BROADCAST_DIST_UNKNOWN;
+}
+
+static void boat_range_once(void)
+{
+    uint16_t port_uwb = 0;
+    uint16_t stb_uwb = 0;
+    bool have_port = false;
+    bool have_stb = false;
+
+    if (s_store_mtx != NULL && xSemaphoreTake(s_store_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
+        have_port = s_have_port && s_port.uwb_addr != 0U;
+        have_stb = s_have_starboard && s_starboard.uwb_addr != 0U;
+        if (have_port) {
+            port_uwb = s_port.uwb_addr;
+            if (s_boat_port_uwb != port_uwb) {
+                s_boat_port_uwb = port_uwb;
+                s_boat_to_port_cm = MARK_BROADCAST_DIST_UNKNOWN;
+            }
+        }
+        if (have_stb) {
+            stb_uwb = s_starboard.uwb_addr;
+            if (s_boat_starboard_uwb != stb_uwb) {
+                s_boat_starboard_uwb = stb_uwb;
+                s_boat_to_starboard_cm = MARK_BROADCAST_DIST_UNKNOWN;
+            }
+        }
+        xSemaphoreGive(s_store_mtx);
+    }
+
+    if (!have_port && !have_stb) {
+        /* Wait until Meshtastic mark broadcasts teach us UWB addresses. */
+        return;
+    }
+
+    uint16_t to_port = MARK_BROADCAST_DIST_UNKNOWN;
+    uint16_t to_stb = MARK_BROADCAST_DIST_UNKNOWN;
+    if (have_port) {
+        to_port = boat_range_one(port_uwb, "port");
+    }
+    if (have_stb) {
+        to_stb = boat_range_one(stb_uwb, "starboard");
+    }
+
+    if (s_store_mtx != NULL && xSemaphoreTake(s_store_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
+        /* Current only — failed ranges clear the previous value. */
+        if (have_port) {
+            s_boat_to_port_cm = to_port;
+        }
+        if (have_stb) {
+            s_boat_to_starboard_cm = to_stb;
+        }
+        xSemaphoreGive(s_store_mtx);
+    }
+
+    boat_geom_ble_notify();
+}
+#endif /* CONFIG_DW3000_RANGING_ENABLE */
+
 static void mark_tx_once(void)
 {
     const mark_role_t role = local_role();
@@ -302,7 +440,10 @@ static void mark_tx_once(void)
 static void mark_task(void *arg)
 {
     (void)arg;
-    const uint32_t interval_ms = (uint32_t)CONFIG_MARK_BROADCAST_INTERVAL_MS;
+    const uint32_t mark_interval_ms = (uint32_t)CONFIG_MARK_BROADCAST_INTERVAL_MS;
+#if CONFIG_DW3000_RANGING_ENABLE
+    const uint32_t boat_interval_ms = (uint32_t)CONFIG_BOAT_RANGE_INTERVAL_MS;
+#endif
 
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
     /* Wait for Meshtastic want_config before first TX (can take several seconds). */
@@ -310,7 +451,7 @@ static void mark_task(void *arg)
     while (!meshtastic_client_is_config_ready()) {
         vTaskDelay(pdMS_TO_TICKS(250));
     }
-    ESP_LOGI(TAG, "Meshtastic config ready — starting broadcasts");
+    ESP_LOGI(TAG, "Meshtastic config ready — starting broadcasts / boat ranging");
 #endif
 
     /* Stagger first TX slightly so peers don't collide after simultaneous boot. */
@@ -320,8 +461,17 @@ static void mark_task(void *arg)
         const device_type_t t = device_type_get();
         if (t == DEVICE_TYPE_PORT || t == DEVICE_TYPE_STARBOARD) {
             mark_tx_once();
+            vTaskDelay(pdMS_TO_TICKS(mark_interval_ms));
+        } else if (t == DEVICE_TYPE_BOAT) {
+#if CONFIG_DW3000_RANGING_ENABLE
+            boat_range_once();
+            vTaskDelay(pdMS_TO_TICKS(boat_interval_ms));
+#else
+            vTaskDelay(pdMS_TO_TICKS(1000));
+#endif
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
-        vTaskDelay(pdMS_TO_TICKS(interval_ms));
     }
 }
 
@@ -361,6 +511,10 @@ void mark_broadcast_on_rx(const uint8_t *data, size_t len, uint32_t from_node)
             rec.gps_valid ? "true" : "false", (unsigned long)from_node);
         if (n > 0 && (size_t)n < sizeof(line)) {
             ble_sen0140_meshtastic_rx_notify((const uint8_t *)line, (size_t)n);
+        }
+        if (me == DEVICE_TYPE_BOAT) {
+            /* Push updated port↔starboard distances (and current boat ranges) to the UI. */
+            boat_geom_ble_notify();
         }
     }
 }
@@ -415,8 +569,14 @@ esp_err_t mark_broadcast_start(void)
         ESP_LOGE(TAG, "task create failed");
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "started (interval=%d ms, peer_uwb=%s0x%04X)", CONFIG_MARK_BROADCAST_INTERVAL_MS,
+#if CONFIG_DW3000_RANGING_ENABLE
+    ESP_LOGI(TAG, "started (mark_interval=%d ms, boat_range_interval=%d ms, peer_uwb=%s0x%04X)",
+             CONFIG_MARK_BROADCAST_INTERVAL_MS, CONFIG_BOAT_RANGE_INTERVAL_MS,
              s_peer_uwb_known ? "" : "auto/", s_peer_uwb_known ? s_peer_uwb : 0U);
+#else
+    ESP_LOGI(TAG, "started (mark_interval=%d ms, peer_uwb=%s0x%04X)", CONFIG_MARK_BROADCAST_INTERVAL_MS,
+             s_peer_uwb_known ? "" : "auto/", s_peer_uwb_known ? s_peer_uwb : 0U);
+#endif
     return ESP_OK;
 }
 

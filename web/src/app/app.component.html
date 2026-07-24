@@ -294,6 +294,37 @@
               </section>
             </div>
 
+            <h3 class="field-label">Boat geometry</h3>
+            <p class="tab-hint">
+              On a Boat device: live UWB ranges to Port and Starboard, plus opposite-mark distances
+              from Meshtastic. Current values only.
+            </p>
+            <section class="mark-bcast-panel boat-geom-panel" aria-labelledby="boat-geom-title" aria-live="polite">
+              <h4 id="boat-geom-title" class="mark-bcast-title">Distances</h4>
+              <dl class="mark-bcast-fields">
+                <div class="mark-bcast-row">
+                  <dt>Boat → Port</dt>
+                  <dd id="boat-geom-boat-port">—</dd>
+                </div>
+                <div class="mark-bcast-row">
+                  <dt>Boat → Starboard</dt>
+                  <dd id="boat-geom-boat-starboard">—</dd>
+                </div>
+                <div class="mark-bcast-row">
+                  <dt>Port → Starboard</dt>
+                  <dd id="boat-geom-port-starboard">—</dd>
+                </div>
+                <div class="mark-bcast-row">
+                  <dt>Starboard → Port</dt>
+                  <dd id="boat-geom-starboard-port">—</dd>
+                </div>
+                <div class="mark-bcast-row">
+                  <dt>Last update</dt>
+                  <dd id="boat-geom-updated">Waiting for boat…</dd>
+                </div>
+              </dl>
+            </section>
+
             <div nz-row [nzGutter]="8" class="lora-stream-row">
               <div nz-col [nzFlex]="'none'">
                 <button nz-button nzType="default" type="button" id="meshtastic-roster-refresh">

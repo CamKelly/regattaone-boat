@@ -271,6 +271,16 @@ menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
             Optional fixed peer address for DWM3000 ranging before the first
             opposite-mark broadcast is heard. 0 means auto-learn from RX.
 
+    config BOAT_RANGE_INTERVAL_MS
+        int "Boat ranging interval (ms)"
+        range 500 60000
+        default 1000
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            How often a Boat device ranges to known Port and Starboard UWB
+            addresses (learned from Meshtastic mark broadcasts). Results are
+            reported over BLE only (not broadcast). Default 1 second.
+
 endmenu
 
 menu "RegattaOne — GPS (NMEA 0183 UART + PPS)"
