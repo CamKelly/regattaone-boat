@@ -14,6 +14,7 @@
 
 #include "ble_sen0140.h"
 #include "boat_id.h"
+#include "console_ble.h"
 #include "device_type.h"
 #include "dw3000_config.h"
 #if CONFIG_DW3000_RANGING_ENABLE
@@ -133,6 +134,11 @@ void app_main(void)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "BLE init failed: %s", esp_err_to_name(err));
         return;
+    }
+
+    err = console_ble_start();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "console BLE mirror: %s", esp_err_to_name(err));
     }
 
 #if CONFIG_REGATTAONE_DW3000_ENABLE

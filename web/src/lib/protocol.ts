@@ -28,6 +28,8 @@ export const BLE_MESHTASTIC_TX_CHAR_UUID = "0000fee6-0000-1000-8000-00805f9b34fb
  * Write `stats=1` to refresh notify.
  */
 export const BLE_MESHTASTIC_STATS_CHAR_UUID = "0000fee7-0000-1000-8000-00805f9b34fb";
+/** Notify: ESP32 console / ESP_LOG mirror (same stream as idf.py monitor). */
+export const BLE_CONSOLE_LOG_CHAR_UUID = "0000fee8-0000-1000-8000-00805f9b34fb";
 
 /**
  * Device type (BLE 0xFEFC) — course / fleet role (port, starboard, boat).

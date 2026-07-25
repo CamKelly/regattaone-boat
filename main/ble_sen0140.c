@@ -62,6 +62,7 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_MESHTASTIC_RX_UUID    0xfee5
 #define SEN0140_GATT_MESHTASTIC_TX_UUID    0xfee6
 #define SEN0140_GATT_MESHTASTIC_STATS_UUID 0xfee7
+#define SEN0140_GATT_CONSOLE_LOG_UUID      0xfee8
 
 /** Max payload per notify (ATT MTU typically 23–247 after negotiation). */
 #define SEN0140_BLE_UART_CHUNK_MAX 244U
@@ -104,6 +105,8 @@ static bool s_meshtastic_rx_notify_enabled;
 static bool s_meshtastic_stats_notify_enabled;
 static char s_meshtastic_stats_json[4096];
 #endif
+static uint16_t s_console_log_chr_val_handle;
+static bool s_console_log_notify_enabled;
 static uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 /** Negotiated ATT MTU; notify payload max is mtu - 3. */
 static uint16_t s_att_mtu = 23;
@@ -414,6 +417,18 @@ static int gatt_svr_access_gps_line(uint16_t conn_handle, uint16_t attr_handle, 
 }
 #endif
 
+static int gatt_svr_access_console_log(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
+                                       void *arg)
+{
+    (void)conn_handle;
+    (void)attr_handle;
+    (void)arg;
+    if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        return 0;
+    }
+    return BLE_ATT_ERR_UNLIKELY;
+}
+
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 static int gatt_svr_access_meshtastic_rx(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                          void *arg)
@@ -693,6 +708,12 @@ static const struct ble_gatt_svc_def s_gatt_svcs[] = {
                 },
 #endif
                 {
+                    .uuid = BLE_UUID16_DECLARE(SEN0140_GATT_CONSOLE_LOG_UUID),
+                    .access_cb = gatt_svr_access_console_log,
+                    .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_NOTIFY,
+                    .val_handle = &s_console_log_chr_val_handle,
+                },
+                {
                     0,
                 },
             },
@@ -765,6 +786,7 @@ static int gap_event(struct ble_gap_event *event, void *arg)
         s_meshtastic_rx_notify_enabled = false;
         s_meshtastic_stats_notify_enabled = false;
 #endif
+        s_console_log_notify_enabled = false;
         ble_advertise();
         return 0;
 
@@ -820,6 +842,10 @@ static int gap_event(struct ble_gap_event *event, void *arg)
             }
         }
 #endif
+        if (subscribe_attr_matches_chr(event->subscribe.attr_handle, s_console_log_chr_val_handle)) {
+            s_console_log_notify_enabled = event->subscribe.cur_notify;
+            ESP_LOGI(TAG, "console log notify=%d", (int)s_console_log_notify_enabled);
+        }
         return 0;
 
     case BLE_GAP_EVENT_MTU:
@@ -947,6 +973,7 @@ void ble_sen0140_notify_if_active(const sen0140_sample_t *sample)
 #if CONFIG_REGATTAONE_GPS_ENABLE
         || s_gps_line_notify_enabled
 #endif
+        || s_console_log_notify_enabled
         ) {
         const TickType_t now = xTaskGetTickCount();
         if (now - s_last_imu_notify < pdMS_TO_TICKS(200)) {
@@ -1128,4 +1155,17 @@ void ble_sen0140_meshtastic_stats_notify(const uint8_t *data, size_t len)
     (void)data;
     (void)len;
 #endif
+}
+
+void ble_sen0140_console_line_notify(const uint8_t *data, size_t len)
+{
+    if (!data || len == 0U) {
+        return;
+    }
+    ble_line_notify_paced(s_console_log_chr_val_handle, s_console_log_notify_enabled, data, len);
+}
+
+bool ble_sen0140_console_line_notify_enabled(void)
+{
+    return s_console_log_notify_enabled && s_conn_handle != BLE_HS_CONN_HANDLE_NONE;
 }

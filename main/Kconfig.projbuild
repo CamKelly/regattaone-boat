@@ -274,12 +274,13 @@ menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
     config BOAT_RANGE_INTERVAL_MS
         int "Boat ranging interval (ms)"
         range 500 60000
-        default 1000
+        default 10000
         depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
         help
             How often a Boat device ranges to known Port and Starboard UWB
-            addresses (learned from Meshtastic mark broadcasts). Results are
-            reported over BLE only (not broadcast). Default 1 second.
+            addresses (learned from Meshtastic mark broadcasts). The default is
+            10 seconds. Results are reported over BLE only (not broadcast);
+            last good values are kept across failed ranges.
 
 endmenu
 

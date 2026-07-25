@@ -29,6 +29,7 @@
     "@capacitor/ios": "^8.4.0",
     "@types/leaflet": "^1.9.21",
     "@types/web-bluetooth": "^0.0.21",
+    "date-fns": "^4.4.0",
     "leaflet": "^1.9.4",
     "ng-zorro-antd": "^19.3.1",
     "rxjs": "~7.8.0",

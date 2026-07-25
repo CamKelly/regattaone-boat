@@ -25,7 +25,8 @@ extern "C" {
  * Boat devices do not broadcast. They learn Port/Starboard UWB addresses from
  * mark RX, periodically range to each known address, and notify the UI over
  * BLE ($PREGGEOM) with boat↔mark distances plus the port↔starboard distances
- * carried in the mark frames. Current values only (no history).
+ * carried in the mark frames. Boat↔mark distances keep the last successful
+ * range (failed attempts do not clear a prior value).
  */
 
 #define MARK_BROADCAST_PKT_LEN 18U

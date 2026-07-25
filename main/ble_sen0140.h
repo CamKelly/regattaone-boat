@@ -5,10 +5,12 @@
  * DWM3000 config 0xFEF2 / ranging 0xFEF3 (when enabled);
  * GPS NMEA line notify 0xFEFD;
  * Meshtastic line notify 0xFEE5 / command write 0xFEE6 / stats JSON 0xFEE7;
+ * ESP console log notify 0xFEE8;
  * boat id read/write 0xFEFB (NVS); device type 0xFEFC (NVS).
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -32,6 +34,10 @@ void ble_sen0140_gps_line_notify(const uint8_t *data, size_t len);
 void ble_sen0140_meshtastic_rx_notify(const uint8_t *data, size_t len);
 /** Meshtastic roster/stats JSON (0xFEE7 notify; read returns same snapshot). */
 void ble_sen0140_meshtastic_stats_notify(const uint8_t *data, size_t len);
+/** ESP_LOG console mirror line (0xFEE8 notify). */
+void ble_sen0140_console_line_notify(const uint8_t *data, size_t len);
+/** True when a central is subscribed to console log notifies. */
+bool ble_sen0140_console_line_notify_enabled(void);
 
 #ifdef __cplusplus
 }

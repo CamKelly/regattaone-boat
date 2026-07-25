@@ -24,6 +24,7 @@ import {
 } from "./lib/nmea-parse";
 import {
   BLE_BOAT_ID_CHAR_UUID,
+  BLE_CONSOLE_LOG_CHAR_UUID,
   BLE_DEVICE_TYPE_CHAR_UUID,
   BLE_DWM3000_CONFIG_CHAR_UUID,
   BLE_DWM3000_RANGE_CHAR_UUID,
@@ -55,9 +56,10 @@ import {
   type BleGattCharacteristicLike,
   type BleGattServerLike,
 } from "./lib/ble-transport";
+import { formatDistanceToNow } from "date-fns";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-07-24a";
+const WEB_BLE_REV = "2026-07-25d";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
@@ -72,6 +74,8 @@ interface ImuDisplay {
   temp: string;
   baro: string;
   meta: string;
+  /** Wall-clock ms when the latest IMU packet arrived (0 = none). */
+  updatedAtMs: number;
 }
 
 interface MeshtasticNode {
@@ -114,12 +118,16 @@ interface MarkBroadcastSnapshot {
   updatedAtMs: number;
 }
 
-/** Boat geometry snapshot from $PREGGEOM (current values only). */
+/** Boat geometry snapshot from $PREGGEOM (per-distance last-good timestamps). */
 interface BoatGeomSnapshot {
   boat_port_cm: number | null;
   boat_starboard_cm: number | null;
   port_starboard_cm: number | null;
   starboard_port_cm: number | null;
+  boat_port_at_ms: number;
+  boat_starboard_at_ms: number;
+  port_starboard_at_ms: number;
+  starboard_port_at_ms: number;
   port_uwb: number;
   starboard_uwb: number;
   updatedAtMs: number;
@@ -162,19 +170,50 @@ function hasDwm3000(session: BleBoatSession | null): boolean {
 }
 
 
-function formatAgo(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) {
+/** Format an elapsed age as a relative string (e.g. "3s ago", "2 minutes ago"). */
+function formatAgoFromAgeMs(ageMs: number): string {
+  if (!Number.isFinite(ageMs) || ageMs < 0) {
     return "—";
   }
-  if (ms < 1000) {
-    return `${Math.round(ms)} ms ago`;
+  if (ageMs < 60_000) {
+    return `${Math.max(0, Math.floor(ageMs / 1000))}s ago`;
   }
-  if (ms < 60_000) {
-    return `${Math.round(ms / 1000)}s ago`;
+  return formatDistanceToNow(Date.now() - ageMs, { addSuffix: true });
+}
+
+/** Relative age from an elapsed millisecond count (e.g. performance.now() delta). */
+function formatAgo(ms: number): string {
+  return formatAgoFromAgeMs(ms);
+}
+
+/** Relative age from a wall-clock epoch (Date.now()-style timestamp). */
+function formatAgoAt(epochMs: number): string {
+  if (!Number.isFinite(epochMs) || epochMs <= 0) {
+    return "—";
   }
-  const min = Math.floor(ms / 60_000);
-  const sec = Math.round((ms % 60_000) / 1000);
-  return sec > 0 ? `${min}m ${sec}s ago` : `${min}m ago`;
+  return formatAgoFromAgeMs(Math.max(0, Date.now() - epochMs));
+}
+
+/** Append a date-fns ago suffix to a metric value (leaves "—" alone). */
+function withMetricAgo(value: string, epochMs: number | null | undefined): string {
+  if (!value || value === "—") {
+    return value || "—";
+  }
+  if (epochMs == null || !Number.isFinite(epochMs) || epochMs <= 0) {
+    return value;
+  }
+  return `${value} · ${formatAgoAt(epochMs)}`;
+}
+
+/** Append ago from an age-in-ms (performance.now delta). */
+function withMetricAgoAge(value: string, ageMs: number): string {
+  if (!value || value === "—") {
+    return value || "—";
+  }
+  if (!Number.isFinite(ageMs) || ageMs < 0 || !Number.isFinite(Date.now() - ageMs)) {
+    return value;
+  }
+  return `${value} · ${formatAgo(ageMs)}`;
 }
 
 const BLE_OPTIONAL_SERVICES = [
@@ -188,6 +227,7 @@ const BLE_OPTIONAL_SERVICES = [
   BLE_MESHTASTIC_RX_CHAR_UUID,
   BLE_MESHTASTIC_TX_CHAR_UUID,
   BLE_MESHTASTIC_STATS_CHAR_UUID,
+  BLE_CONSOLE_LOG_CHAR_UUID,
 ];
 
 interface BleBoatSession {
@@ -205,6 +245,7 @@ interface BleBoatSession {
   charDwm3000Config: BleGattCharacteristicLike | null;
   charDwm3000Range: BleGattCharacteristicLike | null;
   charGpsLine: BleGattCharacteristicLike | null;
+  charConsoleLog: BleGattCharacteristicLike | null;
   boatId: string;
   boatIdDraft: string;
   deviceType: DeviceType;
@@ -222,6 +263,9 @@ interface BleBoatSession {
   /** Incomplete 0xFEE5 line fragment across BLE notify chunks. */
   meshtasticLineNotifyBuf: string;
   meshtasticLineLogText: string;
+  /** Incomplete console log fragment across BLE notify chunks. */
+  consoleLineNotifyBuf: string;
+  consoleLineLogText: string;
   meshtasticTxDraft: string;
   markPort: MarkBroadcastSnapshot | null;
   markStarboard: MarkBroadcastSnapshot | null;
@@ -234,6 +278,7 @@ interface BleBoatSession {
   onMeshtasticLineNotify: (ev: Event) => void;
   onMeshtasticStatsNotify: (ev: Event) => void;
   onGpsLineNotify: (ev: Event) => void;
+  onConsoleLogNotify: (ev: Event) => void;
   onDisconnected: () => void;
 }
 
@@ -257,6 +302,7 @@ function defaultImuDisplay(): ImuDisplay {
     temp: "—",
     baro: "—",
     meta: DEFAULT_IMU_META,
+    updatedAtMs: 0,
   };
 }
 
@@ -759,6 +805,7 @@ function detachCharacteristicListeners(session: BleBoatSession): void {
   session.charMeshtasticRx?.removeEventListener("characteristicvaluechanged", session.onMeshtasticLineNotify);
   session.charMeshtasticStats?.removeEventListener("characteristicvaluechanged", session.onMeshtasticStatsNotify);
   session.charGpsLine?.removeEventListener("characteristicvaluechanged", session.onGpsLineNotify);
+  session.charConsoleLog?.removeEventListener("characteristicvaluechanged", session.onConsoleLogNotify);
 }
 
 async function bindSessionCharacteristics(session: BleBoatSession): Promise<void> {
@@ -773,6 +820,7 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
   session.charDwm3000Config = null;
   session.charDwm3000Range = null;
   session.charGpsLine = null;
+  session.charConsoleLog = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
 
@@ -828,6 +876,12 @@ async function bindSessionCharacteristics(session: BleBoatSession): Promise<void
     session.charGpsLine.addEventListener("characteristicvaluechanged", session.onGpsLineNotify);
   } catch {
     session.charGpsLine = null;
+  }
+  try {
+    session.charConsoleLog = await svc.getCharacteristic(BLE_CONSOLE_LOG_CHAR_UUID);
+    session.charConsoleLog.addEventListener("characteristicvaluechanged", session.onConsoleLogNotify);
+  } catch {
+    session.charConsoleLog = null;
   }
 
   markMeshtasticBleReady(session);
@@ -906,9 +960,9 @@ function renderGpsDisplay(session: BleBoatSession): void {
 function renderGpsPpsFields(fix: GpsFix): void {
   const ppsAgeMs =
     fix.ppsUpdatedAtMs > 0 ? Math.max(0, performance.now() - fix.ppsUpdatedAtMs) : Number.POSITIVE_INFINITY;
-  setText("gps-pps-count", formatPpsCount(fix.ppsCount));
+  setText("gps-pps-count", withMetricAgoAge(formatPpsCount(fix.ppsCount), ppsAgeMs));
   setText("gps-pps-last", fix.ppsUpdatedAtMs > 0 ? formatAgo(ppsAgeMs) : "—");
-  setText("gps-pps-interval", formatPpsIntervalUs(fix.ppsCapDeltaUs));
+  setText("gps-pps-interval", withMetricAgoAge(formatPpsIntervalUs(fix.ppsCapDeltaUs), ppsAgeMs));
 }
 
 function renderGpsDisplayFromNmea(session: BleBoatSession): void {
@@ -968,7 +1022,10 @@ function renderGpsDisplayFromNmea(session: BleBoatSession): void {
   if (hasCoords) {
     setText(
       "gps-position",
-      `${formatCoordDeg(fix.lat, true)}\n${formatCoordDeg(fix.lon, false)}`,
+      withMetricAgoAge(
+        `${formatCoordDeg(fix.lat, true)}\n${formatCoordDeg(fix.lon, false)}`,
+        ageMs,
+      ),
     );
     updateGpsMap(fix.lat, fix.lon);
   } else {
@@ -977,21 +1034,24 @@ function renderGpsDisplayFromNmea(session: BleBoatSession): void {
   }
 
   setText("gps-last-heard", formatAgo(ageMs));
-  setText("gps-fix", fixLabel);
-  setText("gps-fix-type", fixTypeLabel(fix.fixType));
+  setText("gps-fix", withMetricAgoAge(fixLabel, ageMs));
+  setText("gps-fix-type", withMetricAgoAge(fixTypeLabel(fix.fixType), ageMs));
   setText(
     "gps-sats",
-    fix.satsInView !== null
-      ? String(fix.satsInView)
-      : fix.satsUsed !== null
-        ? String(fix.satsUsed)
-        : "—",
+    withMetricAgoAge(
+      fix.satsInView !== null
+        ? String(fix.satsInView)
+        : fix.satsUsed !== null
+          ? String(fix.satsUsed)
+          : "—",
+      ageMs,
+    ),
   );
   setText("gps-seq", "—");
-  setText("gps-utc", formatUtc(fix.utcTime, fix.utcDate));
-  setText("gps-sog", formatSpeedKnots(fix.sogKnots));
-  setText("gps-cog", formatCourseDeg(fix.cogDeg));
-  setText("gps-altitude", formatAltitudeM(fix.altitudeM, fix.geoidSepM));
+  setText("gps-utc", withMetricAgoAge(formatUtc(fix.utcTime, fix.utcDate), ageMs));
+  setText("gps-sog", withMetricAgoAge(formatSpeedKnots(fix.sogKnots), ageMs));
+  setText("gps-cog", withMetricAgoAge(formatCourseDeg(fix.cogDeg), ageMs));
+  setText("gps-altitude", withMetricAgoAge(formatAltitudeM(fix.altitudeM, fix.geoidSepM), ageMs));
   renderGpsPpsFields(fix);
 }
 
@@ -1049,7 +1109,10 @@ function renderGpsDisplayFromMeshtastic(session: BleBoatSession): void {
   if (node.lat !== null && node.lon !== null) {
     setText(
       "gps-position",
-      `${formatCoordDeg(node.lat, true)}\n${formatCoordDeg(node.lon, false)}`,
+      withMetricAgoAge(
+        `${formatCoordDeg(node.lat, true)}\n${formatCoordDeg(node.lon, false)}`,
+        ageMs,
+      ),
     );
     updateGpsMap(node.lat, node.lon);
   } else {
@@ -1059,21 +1122,27 @@ function renderGpsDisplayFromMeshtastic(session: BleBoatSession): void {
 
   setText("gps-source", `${label} · node ${node.num}`);
   setText("gps-last-heard", formatAgo(ageMs));
-  setText("gps-fix", fixLabel);
-  setText("gps-fix-type", fixTypeLabel(node.fix_type));
-  setText("gps-sats", node.sats_in_view !== null ? String(node.sats_in_view) : "—");
-  setText("gps-seq", node.seq_number !== null ? String(node.seq_number) : "—");
+  setText("gps-fix", withMetricAgoAge(fixLabel, ageMs));
+  setText("gps-fix-type", withMetricAgoAge(fixTypeLabel(node.fix_type), ageMs));
+  setText(
+    "gps-sats",
+    withMetricAgoAge(node.sats_in_view !== null ? String(node.sats_in_view) : "—", ageMs),
+  );
+  setText("gps-seq", withMetricAgoAge(node.seq_number !== null ? String(node.seq_number) : "—", ageMs));
   setText(
     "gps-utc",
-    node.timestamp_sec !== null && node.timestamp_sec > 0
-      ? formatMeshtasticUtc(node.timestamp_sec)
-      : formatMeshtasticUtc(node.time_sec),
+    withMetricAgoAge(
+      node.timestamp_sec !== null && node.timestamp_sec > 0
+        ? formatMeshtasticUtc(node.timestamp_sec)
+        : formatMeshtasticUtc(node.time_sec),
+      ageMs,
+    ),
   );
-  setText("gps-sog", formatMeshtasticSpeed(node));
-  setText("gps-cog", formatMeshtasticHeading(node));
+  setText("gps-sog", withMetricAgoAge(formatMeshtasticSpeed(node), ageMs));
+  setText("gps-cog", withMetricAgoAge(formatMeshtasticHeading(node), ageMs));
   setText(
     "gps-altitude",
-    node.alt_m !== null ? `${node.alt_m} m MSL` : "—",
+    withMetricAgoAge(node.alt_m !== null ? `${node.alt_m} m MSL` : "—", ageMs),
   );
 }
 
@@ -1205,6 +1274,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
     syncBoatIdUi(session);
     syncDeviceTypeUi(session);
     syncDwm3000Ui(session);
+    syncMeshtasticUiRefresh(session);
     return session.gatt.connected;
   } catch (e) {
     console.error("BLE activate failed", session.name, e);
@@ -1227,6 +1297,7 @@ async function deactivateSession(session: BleBoatSession): Promise<void> {
   session.charDwm3000Config = null;
   session.charDwm3000Range = null;
   session.charGpsLine = null;
+  session.charConsoleLog = null;
   session.notificationsOn = false;
   session.imuNotificationsOn = false;
   syncMeshtasticUiRefresh(null);
@@ -1284,6 +1355,7 @@ async function setCommsNotifications(session: BleBoatSession, enabled: boolean):
     session.charMeshtasticRx,
     session.charMeshtasticStats,
     session.charGpsLine,
+    session.charConsoleLog,
   ].filter((c): c is BleGattCharacteristicLike => c !== null);
   const results: PromiseSettledResult<unknown>[] = [];
   for (const chr of chars) {
@@ -1778,6 +1850,18 @@ function parseGeomCm(value: unknown): number | null {
   return Math.round(value);
 }
 
+function mergeGeomCm(
+  incoming: number | null,
+  prevCm: number | null,
+  prevAt: number,
+  now: number,
+): { cm: number | null; at: number } {
+  if (incoming != null) {
+    return { cm: incoming, at: now };
+  }
+  return { cm: prevCm, at: prevAt };
+}
+
 function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
   const jsonPart = line.slice("$PREGGEOM,".length).trim();
   try {
@@ -1789,14 +1873,39 @@ function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
       port_uwb?: number;
       starboard_uwb?: number;
     };
+    const now = Date.now();
+    const prev = session.boatGeom;
+    const boatPort = mergeGeomCm(parseGeomCm(o.boat_port_cm), prev?.boat_port_cm ?? null, prev?.boat_port_at_ms ?? 0, now);
+    const boatStb = mergeGeomCm(
+      parseGeomCm(o.boat_starboard_cm),
+      prev?.boat_starboard_cm ?? null,
+      prev?.boat_starboard_at_ms ?? 0,
+      now,
+    );
+    const portStb = mergeGeomCm(
+      parseGeomCm(o.port_starboard_cm),
+      prev?.port_starboard_cm ?? null,
+      prev?.port_starboard_at_ms ?? 0,
+      now,
+    );
+    const stbPort = mergeGeomCm(
+      parseGeomCm(o.starboard_port_cm),
+      prev?.starboard_port_cm ?? null,
+      prev?.starboard_port_at_ms ?? 0,
+      now,
+    );
     session.boatGeom = {
-      boat_port_cm: parseGeomCm(o.boat_port_cm),
-      boat_starboard_cm: parseGeomCm(o.boat_starboard_cm),
-      port_starboard_cm: parseGeomCm(o.port_starboard_cm),
-      starboard_port_cm: parseGeomCm(o.starboard_port_cm),
-      port_uwb: typeof o.port_uwb === "number" ? o.port_uwb & 0xffff : 0,
-      starboard_uwb: typeof o.starboard_uwb === "number" ? o.starboard_uwb & 0xffff : 0,
-      updatedAtMs: Date.now(),
+      boat_port_cm: boatPort.cm,
+      boat_starboard_cm: boatStb.cm,
+      port_starboard_cm: portStb.cm,
+      starboard_port_cm: stbPort.cm,
+      boat_port_at_ms: boatPort.at,
+      boat_starboard_at_ms: boatStb.at,
+      port_starboard_at_ms: portStb.at,
+      starboard_port_at_ms: stbPort.at,
+      port_uwb: typeof o.port_uwb === "number" ? o.port_uwb & 0xffff : prev?.port_uwb ?? 0,
+      starboard_uwb: typeof o.starboard_uwb === "number" ? o.starboard_uwb & 0xffff : prev?.starboard_uwb ?? 0,
+      updatedAtMs: now,
     };
     return true;
   } catch {
@@ -1820,14 +1929,12 @@ function renderBoatGeom(session: BleBoatSession | null): void {
     set("boat-geom-boat-starboard", "—");
     set("boat-geom-port-starboard", "—");
     set("boat-geom-starboard-port", "—");
-    set("boat-geom-updated", "Waiting for boat…");
     return;
   }
-  set("boat-geom-boat-port", formatGeomDist(g.boat_port_cm));
-  set("boat-geom-boat-starboard", formatGeomDist(g.boat_starboard_cm));
-  set("boat-geom-port-starboard", formatGeomDist(g.port_starboard_cm));
-  set("boat-geom-starboard-port", formatGeomDist(g.starboard_port_cm));
-  set("boat-geom-updated", new Date(g.updatedAtMs).toLocaleTimeString());
+  set("boat-geom-boat-port", withMetricAgo(formatGeomDist(g.boat_port_cm), g.boat_port_at_ms));
+  set("boat-geom-boat-starboard", withMetricAgo(formatGeomDist(g.boat_starboard_cm), g.boat_starboard_at_ms));
+  set("boat-geom-port-starboard", withMetricAgo(formatGeomDist(g.port_starboard_cm), g.port_starboard_at_ms));
+  set("boat-geom-starboard-port", withMetricAgo(formatGeomDist(g.starboard_port_cm), g.starboard_port_at_ms));
 }
 
 function renderMarkBroadcastPanel(
@@ -1848,16 +1955,18 @@ function renderMarkBroadcastPanel(
     set("acc", "—");
     set("dist", "—");
     set("from", "—");
-    set("updated", "Waiting for broadcast…");
     return;
   }
-  set("uwb", `0x${snap.uwb.toString(16).toUpperCase().padStart(4, "0")}`);
-  set("lat", formatMarkCoord(snap.lat_e7, snap.gps_valid));
-  set("lon", formatMarkCoord(snap.lon_e7, snap.gps_valid));
-  set("acc", snap.acc_cm > 0 ? `${snap.acc_cm} cm` : "—");
-  set("dist", formatMarkDist(snap.dist_cm, oppositeLabel));
-  set("from", snap.from ? `0x${snap.from.toString(16).toUpperCase().padStart(8, "0")}` : "—");
-  set("updated", new Date(snap.updatedAtMs).toLocaleTimeString());
+  const at = snap.updatedAtMs;
+  set("uwb", withMetricAgo(`0x${snap.uwb.toString(16).toUpperCase().padStart(4, "0")}`, at));
+  set("lat", withMetricAgo(formatMarkCoord(snap.lat_e7, snap.gps_valid), at));
+  set("lon", withMetricAgo(formatMarkCoord(snap.lon_e7, snap.gps_valid), at));
+  set("acc", withMetricAgo(snap.acc_cm > 0 ? `${snap.acc_cm} cm` : "—", at));
+  set("dist", withMetricAgo(formatMarkDist(snap.dist_cm, oppositeLabel), at));
+  set(
+    "from",
+    withMetricAgo(snap.from ? `0x${snap.from.toString(16).toUpperCase().padStart(8, "0")}` : "—", at),
+  );
 }
 
 function renderMarkBroadcasts(session: BleBoatSession | null): void {
@@ -2016,6 +2125,62 @@ function renderMeshtasticLog(session: BleBoatSession): void {
   }
 }
 
+function renderConsoleLog(session: BleBoatSession | null): void {
+  if (session && session.deviceId !== activeSessionId) {
+    return;
+  }
+  const el = document.querySelector<HTMLPreElement>("#console-line-log");
+  if (el) {
+    el.textContent = session?.consoleLineLogText ?? "";
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+function clearConsoleLog(session: BleBoatSession | null): void {
+  if (session) {
+    session.consoleLineLogText = "";
+    session.consoleLineNotifyBuf = "";
+  }
+  const el = document.querySelector("#console-line-log");
+  if (el) {
+    el.textContent = "";
+  }
+}
+
+function ingestConsoleLogChunk(session: BleBoatSession, chunk: string): void {
+  if (!chunk) {
+    return;
+  }
+  session.consoleLineNotifyBuf += chunk;
+  if (session.consoleLineNotifyBuf.length > 8192) {
+    const cut = session.consoleLineNotifyBuf.lastIndexOf("\n");
+    session.consoleLineNotifyBuf =
+      cut >= 0 ? session.consoleLineNotifyBuf.slice(cut + 1) : session.consoleLineNotifyBuf.slice(-1024);
+  }
+
+  const endedWithNewline = /[\r\n]$/.test(session.consoleLineNotifyBuf);
+  const parts = session.consoleLineNotifyBuf.split(/\r?\n/);
+  const complete = endedWithNewline ? parts : parts.slice(0, -1);
+  session.consoleLineNotifyBuf = endedWithNewline ? "" : (parts[parts.length - 1] ?? "");
+
+  let added = false;
+  for (const raw of complete) {
+    const line = raw.replace(/\r$/, "");
+    if (!line) {
+      continue;
+    }
+    session.consoleLineLogText += `${line}\n`;
+    added = true;
+  }
+  if (!added) {
+    return;
+  }
+  if (session.consoleLineLogText.length > 96000) {
+    session.consoleLineLogText = session.consoleLineLogText.slice(-72000);
+  }
+  renderConsoleLog(session);
+}
+
 function meshtasticSelfLabel(session: BleBoatSession): string {
   if (!hasMeshtastic(session)) {
     return "This device: Meshtastic unavailable";
@@ -2113,18 +2278,21 @@ function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
     clearInterval(meshtasticUiRefreshTimer);
     meshtasticUiRefreshTimer = null;
   }
-  if (!session || session.deviceId !== activeSessionId || !hasMeshtastic(session)) {
+  if (!session || session.deviceId !== activeSessionId || !session.gatt.connected) {
     return;
   }
   meshtasticUiRefreshTimer = setInterval(() => {
     const active = getActiveSession();
-    if (!active || active.deviceId !== activeSessionId) {
+    if (!active || active.deviceId !== activeSessionId || !active.gatt.connected) {
       return;
     }
-    renderMeshtastic(active);
-    renderMarkBroadcasts(active);
-    renderBoatGeom(active);
+    if (hasMeshtastic(active)) {
+      renderMeshtastic(active);
+      renderMarkBroadcasts(active);
+      renderBoatGeom(active);
+    }
     renderGpsDisplay(active);
+    renderImuDisplay(active);
   }, 1000);
 }
 
@@ -2214,11 +2382,12 @@ function renderImuDisplay(session: BleBoatSession): void {
   if (session.deviceId !== activeSessionId) {
     return;
   }
-  setText("imu-accel", session.imu.accel);
-  setText("imu-gyro", session.imu.gyro);
-  setText("imu-mag", session.imu.mag);
-  setText("imu-temp", session.imu.temp);
-  setText("imu-baro", session.imu.baro);
+  const at = session.imu.updatedAtMs;
+  setText("imu-accel", withMetricAgo(session.imu.accel, at));
+  setText("imu-gyro", withMetricAgo(session.imu.gyro, at));
+  setText("imu-mag", withMetricAgo(session.imu.mag, at));
+  setText("imu-temp", withMetricAgo(session.imu.temp, at));
+  setText("imu-baro", withMetricAgo(session.imu.baro, at));
   setText("imu-meta", session.imu.meta);
 }
 
@@ -2254,6 +2423,7 @@ function loadSessionToUi(session: BleBoatSession): void {
   renderImuDisplay(session);
   mergeMeshtasticPeersFromLog(session);
   renderMeshtastic(session);
+  renderConsoleLog(session);
   renderGpsDisplay(session);
   syncDwm3000Ui(session);
   updateBleToolbar();
@@ -2281,6 +2451,7 @@ function clearUiPanels(): void {
   setText("meshtastic-stats", "TX ok: 0 · fail: 0 · RX: 0");
   renderMarkBroadcasts(null);
   renderBoatGeom(null);
+  clearConsoleLog(null);
   syncMeshtasticTabVisibility(null);
   syncMeshtasticUiRefresh(null);
   syncDwm3000TabVisibility(null);
@@ -2377,6 +2548,7 @@ function createNotifyHandlers(session: BleBoatSession): void {
       temp: f.temp,
       baro: f.baro,
       meta: `${f.meta}${dtMs > 0 ? ` · ${dtMs.toFixed(0)} ms` : ""}`,
+      updatedAtMs: Date.now(),
     };
     renderImuDisplay(session);
   };
@@ -2406,6 +2578,15 @@ function createNotifyHandlers(session: BleBoatSession): void {
       return;
     }
     ingestGpsLine(session, new TextDecoder().decode(v));
+  };
+
+  session.onConsoleLogNotify = (ev: Event) => {
+    const ch = ev.target as BluetoothRemoteGATTCharacteristic;
+    const v = ch.value;
+    if (!v || v.byteLength === 0) {
+      return;
+    }
+    ingestConsoleLogChunk(session, new TextDecoder().decode(v));
   };
 
   session.onDisconnected = () => {
@@ -2467,6 +2648,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     charDwm3000Config: null,
     charDwm3000Range: null,
     charGpsLine: null,
+    charConsoleLog: null,
     boatId: "",
     boatIdDraft: "",
     deviceType: "boat",
@@ -2483,6 +2665,8 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     meshtasticStatsNotifyBuf: "",
     meshtasticLineNotifyBuf: "",
     meshtasticLineLogText: "",
+    consoleLineNotifyBuf: "",
+    consoleLineLogText: "",
     meshtasticTxDraft: "",
     markPort: null,
     markStarboard: null,
@@ -2494,6 +2678,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
+    onConsoleLogNotify: () => {},
     onDisconnected: () => {},
   };
   createNotifyHandlers(session);
@@ -2528,6 +2713,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     charDwm3000Config: null,
     charDwm3000Range: null,
     charGpsLine: null,
+    charConsoleLog: null,
     boatId: "",
     boatIdDraft: "",
     deviceType: "boat",
@@ -2544,6 +2730,8 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     meshtasticStatsNotifyBuf: "",
     meshtasticLineNotifyBuf: "",
     meshtasticLineLogText: "",
+    consoleLineNotifyBuf: "",
+    consoleLineLogText: "",
     meshtasticTxDraft: "",
     markPort: null,
     markStarboard: null,
@@ -2555,6 +2743,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     onMeshtasticLineNotify: () => {},
     onMeshtasticStatsNotify: () => {},
     onGpsLineNotify: () => {},
+    onConsoleLogNotify: () => {},
     onDisconnected: () => {},
   };
   createNotifyHandlers(session);
@@ -2700,6 +2889,10 @@ export function startRegattaApp(): void {
     }
     if (btn.id === "meshtastic-log-clear") {
       clearMeshtasticLog(getActiveSession());
+      return;
+    }
+    if (btn.id === "console-log-clear") {
+      clearConsoleLog(getActiveSession());
       return;
     }
     if (btn.id === "device-type-save" || btn.id === "dwm3000-device-type-save") {

@@ -253,10 +253,6 @@
                     <dt>From node</dt>
                     <dd id="mark-port-from">—</dd>
                   </div>
-                  <div class="mark-bcast-row">
-                    <dt>Last update</dt>
-                    <dd id="mark-port-updated">—</dd>
-                  </div>
                 </dl>
               </section>
               <section class="mark-bcast-panel" aria-labelledby="mark-starboard-title">
@@ -286,18 +282,14 @@
                     <dt>From node</dt>
                     <dd id="mark-starboard-from">—</dd>
                   </div>
-                  <div class="mark-bcast-row">
-                    <dt>Last update</dt>
-                    <dd id="mark-starboard-updated">—</dd>
-                  </div>
                 </dl>
               </section>
             </div>
 
             <h3 class="field-label">Boat geometry</h3>
             <p class="tab-hint">
-              On a Boat device: live UWB ranges to Port and Starboard, plus opposite-mark distances
-              from Meshtastic. Current values only.
+              On a Boat device: live UWB ranges to Port and Starboard (last good held across
+              failed attempts), plus opposite-mark distances from Meshtastic.
             </p>
             <section class="mark-bcast-panel boat-geom-panel" aria-labelledby="boat-geom-title" aria-live="polite">
               <h4 id="boat-geom-title" class="mark-bcast-title">Distances</h4>
@@ -317,10 +309,6 @@
                 <div class="mark-bcast-row">
                   <dt>Starboard → Port</dt>
                   <dd id="boat-geom-starboard-port">—</dd>
-                </div>
-                <div class="mark-bcast-row">
-                  <dt>Last update</dt>
-                  <dd id="boat-geom-updated">Waiting for boat…</dd>
                 </div>
               </dl>
             </section>
@@ -469,6 +457,20 @@
                 </div>
               </div>
             </div>
+          </nz-tab>
+
+          <nz-tab nzTitle="Log · 0xFEE8">
+            <p class="tab-hint">
+              Live ESP32 console output (ESP_LOG), mirrored over BLE — the same stream as
+              <code>idf.py monitor</code>. Lines may drop under BLE backpressure.
+            </p>
+            <div class="log-header">
+              <label class="field-label" for="console-line-log">Device log</label>
+              <button nz-button nzType="default" nzSize="small" type="button" id="console-log-clear">
+                Clear
+              </button>
+            </div>
+            <pre id="console-line-log" class="ble-log lora-line-log" aria-live="polite"></pre>
           </nz-tab>
         </nz-tabset>
       </div>
