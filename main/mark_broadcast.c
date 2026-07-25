@@ -241,6 +241,9 @@ static mark_role_t local_role(void)
 static void maybe_range_peer(void)
 {
 #if CONFIG_DW3000_RANGING_ENABLE
+    const char *role_name = local_role() == MARK_ROLE_PORT ? "port" : "starboard";
+    const char *opp_name = local_role() == MARK_ROLE_PORT ? "starboard" : "port";
+
     bool known = false;
     uint16_t peer = peer_uwb_get(&known);
     if (!known) {
@@ -253,20 +256,27 @@ static void maybe_range_peer(void)
         known = true;
 #else
         /* Wait until the opposite mark's broadcast teaches us its UWB address. */
+        ESP_LOGI(TAG, "%s → %s UWB range skipped: opposite address not learned yet", role_name, opp_name);
         return;
 #endif
     }
     if (peer == 0U || peer == self_uwb_addr()) {
+        ESP_LOGW(TAG, "%s → %s UWB range skipped: peer 0x%04X invalid (self=0x%04X)", role_name, opp_name,
+                 (unsigned)peer, (unsigned)self_uwb_addr());
         return;
     }
     uint16_t cm = 0;
+    ESP_LOGI(TAG, "%s → %s UWB range: measuring to 0x%04X…", role_name, opp_name, (unsigned)peer);
     const esp_err_t err = dw3000_range_to(peer, &cm, 500);
     if (err == ESP_OK) {
         s_last_dist_cm = cm;
         s_last_dist_ok = true;
-        ESP_LOGI(TAG, "range to opposite 0x%04X = %u cm", peer, (unsigned)cm);
+        ESP_LOGI(TAG, "%s → %s UWB range: OK 0x%04X = %u cm (%.2f m)", role_name, opp_name, (unsigned)peer,
+                 (unsigned)cm, (double)cm / 100.0);
     } else {
-        ESP_LOGD(TAG, "range to opposite 0x%04X failed: %s", peer, esp_err_to_name(err));
+        ESP_LOGW(TAG, "%s → %s UWB range: FAILED 0x%04X (%s) — keeping last %s", role_name, opp_name,
+                 (unsigned)peer, esp_err_to_name(err),
+                 s_last_dist_ok ? "value" : "unknown");
     }
 #else
     (void)0;
@@ -347,14 +357,17 @@ static bool boat_range_one(uint16_t peer, const char *label, uint16_t *out_cm)
         return false;
     }
     uint16_t cm = 0;
+    ESP_LOGI(TAG, "boat → %s UWB range: measuring to 0x%04X…", label, (unsigned)peer);
     /* Long-preamble PHY needs more than the mark TX 500 ms budget. */
     const esp_err_t err = dw3000_range_to(peer, &cm, 1500U);
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "boat → %s 0x%04X = %u cm", label, peer, (unsigned)cm);
+        ESP_LOGI(TAG, "boat → %s UWB range: OK 0x%04X = %u cm (%.2f m)", label, (unsigned)peer, (unsigned)cm,
+                 (double)cm / 100.0);
         *out_cm = cm;
         return true;
     }
-    ESP_LOGW(TAG, "boat → %s 0x%04X failed: %s", label, peer, esp_err_to_name(err));
+    ESP_LOGW(TAG, "boat → %s UWB range: FAILED 0x%04X (%s) — keeping last good", label, (unsigned)peer,
+             esp_err_to_name(err));
     return false;
 }
 
@@ -388,12 +401,18 @@ static void boat_range_once(void)
 
     if (!have_port && !have_stb) {
         /* Wait until Meshtastic mark broadcasts teach us UWB addresses. */
+        ESP_LOGI(TAG, "boat ranging cycle skipped: no Port/Starboard UWB addresses learned yet");
         return;
     }
 
     /* Alternate first peer so a slow/failing port range does not starve starboard. */
     const bool stb_first = s_boat_range_starboard_first;
     s_boat_range_starboard_first = !s_boat_range_starboard_first;
+
+    ESP_LOGI(TAG, "boat ranging cycle: port %s (0x%04X), starboard %s (0x%04X), %s first",
+             have_port ? "known" : "unknown", (unsigned)port_uwb,
+             have_stb ? "known" : "unknown", (unsigned)stb_uwb,
+             stb_first ? "starboard" : "port");
 
     uint16_t to_port = MARK_BROADCAST_DIST_UNKNOWN;
     uint16_t to_stb = MARK_BROADCAST_DIST_UNKNOWN;
@@ -427,6 +446,10 @@ static void boat_range_once(void)
         xSemaphoreGive(s_store_mtx);
     }
 
+    ESP_LOGI(TAG, "boat ranging result: port=%s starboard=%s (reporting last good over BLE)",
+             have_port ? (got_port ? "measured" : "failed") : "n/a",
+             have_stb ? (got_stb ? "measured" : "failed") : "n/a");
+
     boat_geom_ble_notify();
 }
 #endif /* CONFIG_DW3000_RANGING_ENABLE */
@@ -454,15 +477,28 @@ static void mark_tx_once(void)
     uint8_t pkt[MARK_BROADCAST_PKT_LEN];
     encode_packet(role, self_uwb_addr(), have_fix ? &fix : NULL, dist, pkt);
 
+    const char *role_name = role == MARK_ROLE_PORT ? "port" : "starboard";
+    const char *opp_name = role == MARK_ROLE_PORT ? "starboard" : "port";
+
     const esp_err_t err = radio_tx(pkt, sizeof(pkt));
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "TX failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "%s broadcast FAILED: %s", role_name, esp_err_to_name(err));
         return;
     }
-    ESP_LOGI(TAG, "TX %c uwb=0x%04X gps=%d acc=%u cm dist=%s%u", (char)role, self_uwb_addr(),
-             (int)have_fix, have_fix ? (unsigned)fix.accuracy_cm : 0U,
-             dist == MARK_BROADCAST_DIST_UNKNOWN ? "?" : "",
-             dist == MARK_BROADCAST_DIST_UNKNOWN ? 0U : (unsigned)dist);
+    if (have_fix) {
+        ESP_LOGI(TAG,
+                 "%s broadcast TX (%u B): role=%c uwb=0x%04X lat=%.6f lon=%.6f acc=%u cm dist→%s=%s%u cm",
+                 role_name, (unsigned)MARK_BROADCAST_PKT_LEN, (char)role, self_uwb_addr(),
+                 fix.lat_deg, fix.lon_deg, (unsigned)fix.accuracy_cm, opp_name,
+                 dist == MARK_BROADCAST_DIST_UNKNOWN ? "?" : "",
+                 dist == MARK_BROADCAST_DIST_UNKNOWN ? 0U : (unsigned)dist);
+    } else {
+        ESP_LOGI(TAG,
+                 "%s broadcast TX (%u B): role=%c uwb=0x%04X gps=none dist→%s=%s%u cm",
+                 role_name, (unsigned)MARK_BROADCAST_PKT_LEN, (char)role, self_uwb_addr(), opp_name,
+                 dist == MARK_BROADCAST_DIST_UNKNOWN ? "?" : "",
+                 dist == MARK_BROADCAST_DIST_UNKNOWN ? 0U : (unsigned)dist);
+    }
 }
 
 static void mark_task(void *arg)
@@ -521,9 +557,11 @@ void mark_broadcast_on_rx(const uint8_t *data, size_t len, uint32_t from_node)
     /* Boats store both sides; marks also keep a snapshot of the opposite side. */
     if (me == DEVICE_TYPE_BOAT || me == DEVICE_TYPE_PORT || me == DEVICE_TYPE_STARBOARD) {
         store_record(&rec);
-        ESP_LOGI(TAG, "RX %c uwb=0x%04X lat=%.6f lon=%.6f acc=%u dist=%u from=0x%08lx",
-                 (char)rec.role, rec.uwb_addr, rec.lat_e7 / 1e7, rec.lon_e7 / 1e7,
+        ESP_LOGI(TAG,
+                 "%s RX broadcast: role=%c uwb=0x%04X lat=%.6f lon=%.6f acc=%u cm dist=%s%u cm from=0x%08lx",
+                 device_type_to_string(me), (char)rec.role, rec.uwb_addr, rec.lat_e7 / 1e7, rec.lon_e7 / 1e7,
                  (unsigned)rec.accuracy_cm,
+                 rec.dist_cm == MARK_BROADCAST_DIST_UNKNOWN ? "?" : "",
                  rec.dist_cm == MARK_BROADCAST_DIST_UNKNOWN ? 0U : (unsigned)rec.dist_cm,
                  (unsigned long)from_node);
 
