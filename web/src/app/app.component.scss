@@ -356,6 +356,13 @@
   margin: 0;
 }
 
+.log-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .lora-stats-table-wrap {
   overflow-x: auto;
   margin: 4px 0 8px;

@@ -73,7 +73,7 @@
                 </div>
               </div>
               <p id="device-type-status" class="field-hint">
-                Course / fleet role for mesh and ranging. Saved on device NVS.
+                Port / Starboard / Boat role for mark broadcast and ranging. Saved on device NVS.
               </p>
             </div>
           </div>
@@ -113,6 +113,8 @@
               Qorvo DWM3000 SPI UWB settings (<code>0xFEF2</code>) and two-way ranging
               (<code>0xFEF3</code>). Values are saved to device NVS and survive power-off.
               All devices must share the same PAN id and TWR processing delay.
+              Port / Starboard / Boat role is set under Device → Device type
+              (<code>0xFEFC</code>).
             </p>
             <div nz-row [nzGutter]="[12, 12]">
               <div nz-col [nzXs]="24" [nzMd]="12">
@@ -168,24 +170,6 @@
                   </div>
                 </div>
                 <p id="dwm3000-config-status" class="field-hint">Connect a DWM3000 device to edit settings.</p>
-              </div>
-              <div nz-col [nzSpan]="24">
-                <label class="field-label" for="dwm3000-device-type-select">Device type <code>0xFEFC</code></label>
-                <div nz-row [nzGutter]="8">
-                  <div nz-col [nzXs]="24" [nzSm]="16" [nzMd]="12" [nzLg]="8">
-                    <select id="dwm3000-device-type-select" class="native-select">
-                      <option value="port">Port</option>
-                      <option value="starboard">Starboard</option>
-                      <option value="boat">Boat</option>
-                    </select>
-                  </div>
-                  <div nz-col [nzFlex]="'none'">
-                    <button nz-button nzType="default" type="button" id="dwm3000-device-type-save">Save</button>
-                  </div>
-                </div>
-                <p id="dwm3000-device-type-status" class="field-hint">
-                  Course / fleet role for mesh and ranging. Saved on device NVS.
-                </p>
               </div>
               <div nz-col [nzSpan]="24">
                 <label class="field-label" for="dwm3000-peer-input">Measure distance to peer UWB address</label>
@@ -466,9 +450,14 @@
             </p>
             <div class="log-header">
               <label class="field-label" for="console-line-log">Device log</label>
-              <button nz-button nzType="default" nzSize="small" type="button" id="console-log-clear">
-                Clear
-              </button>
+              <div class="log-header-actions">
+                <button nz-button nzType="default" nzSize="small" type="button" id="console-log-pause">
+                  Pause
+                </button>
+                <button nz-button nzType="default" nzSize="small" type="button" id="console-log-clear">
+                  Clear
+                </button>
+              </div>
             </div>
             <pre id="console-line-log" class="ble-log lora-line-log" aria-live="polite"></pre>
           </nz-tab>

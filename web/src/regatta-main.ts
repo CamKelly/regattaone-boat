@@ -59,13 +59,15 @@ import {
 import { formatDistanceToNow } from "date-fns";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
-const WEB_BLE_REV = "2026-07-25d";
+const WEB_BLE_REV = "2026-07-28a";
 
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
 
 let imuTabActive = true;
 let regattaAppStarted = false;
+/** When true, console log text still accumulates but the UI is frozen. */
+let consoleLogPaused = false;
 
 interface ImuDisplay {
   accel: string;
@@ -338,14 +340,9 @@ async function readDeviceTypeFromDevice(session: BleBoatSession): Promise<void> 
 async function saveDeviceTypeToDevice(): Promise<void> {
   const session = getActiveSession();
   const statusEl = document.querySelector("#device-type-status");
-  const dwmStatusEl = document.querySelector("#dwm3000-device-type-status");
   if (!session?.charDeviceType) {
-    const msg = "Device type requires firmware with characteristic 0xFEFC.";
     if (statusEl) {
-      statusEl.textContent = msg;
-    }
-    if (dwmStatusEl) {
-      dwmStatusEl.textContent = msg;
+      statusEl.textContent = "Device type requires firmware with characteristic 0xFEFC.";
     }
     return;
   }
@@ -354,21 +351,13 @@ async function saveDeviceTypeToDevice(): Promise<void> {
     await gattWrite(session, "type", new TextEncoder().encode(type));
     session.deviceType = type;
     syncDeviceTypeUi(session);
-    const saved = `Saved: ${deviceTypeLabel(type)}`;
     if (statusEl) {
-      statusEl.textContent = saved;
-    }
-    if (dwmStatusEl) {
-      dwmStatusEl.textContent = saved;
+      statusEl.textContent = `Saved: ${deviceTypeLabel(type)}`;
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const err = `Save failed: ${msg}`;
     if (statusEl) {
-      statusEl.textContent = err;
-    }
-    if (dwmStatusEl) {
-      dwmStatusEl.textContent = err;
+      statusEl.textContent = `Save failed: ${msg}`;
     }
   }
 }
@@ -386,35 +375,23 @@ function setFieldEnabled(el: HTMLInputElement | HTMLSelectElement | HTMLButtonEl
 }
 
 function syncDeviceTypeUi(session: BleBoatSession | null): void {
-  const selects = [
-    document.querySelector<HTMLSelectElement>("#device-type-select"),
-    document.querySelector<HTMLSelectElement>("#dwm3000-device-type-select"),
-  ];
+  const select = document.querySelector<HTMLSelectElement>("#device-type-select");
   const saveBtn = document.querySelector<HTMLButtonElement>("#device-type-save");
-  const dwmSaveBtn = document.querySelector<HTMLButtonElement>("#dwm3000-device-type-save");
   const statusEl = document.querySelector("#device-type-status");
-  const dwmStatusEl = document.querySelector("#dwm3000-device-type-status");
   const canEdit = session !== null && session.gatt.connected && session.charDeviceType !== null;
-  for (const select of selects) {
-    if (select) {
-      setFieldEnabled(select, canEdit);
-      select.value = session?.deviceTypeDraft ?? "boat";
-    }
+  if (select) {
+    setFieldEnabled(select, canEdit);
+    select.value = session?.deviceTypeDraft ?? "boat";
   }
   setFieldEnabled(saveBtn, canEdit);
-  setFieldEnabled(dwmSaveBtn, canEdit);
-  const statusText = !session
-    ? "Connect a device to set its type."
-    : !session.charDeviceType
-      ? "Flash firmware with device type support (0xFEFC) to enable."
-      : !session.gatt.connected
-        ? `Stored on device: ${deviceTypeLabel(session.deviceType)}. Reconnect to edit.`
-        : `Stored on device: ${deviceTypeLabel(session.deviceType)}`;
   if (statusEl) {
-    statusEl.textContent = statusText;
-  }
-  if (dwmStatusEl) {
-    dwmStatusEl.textContent = statusText;
+    statusEl.textContent = !session
+      ? "Connect a device to set its type (port / starboard / boat)."
+      : !session.charDeviceType
+        ? "Flash firmware with device type support (0xFEFC) to enable."
+        : !session.gatt.connected
+          ? `Stored on device: ${deviceTypeLabel(session.deviceType)}. Reconnect to edit.`
+          : `Stored on device: ${deviceTypeLabel(session.deviceType)} — controls mark / boat radio behaviour.`;
   }
 }
 
@@ -2129,10 +2106,29 @@ function renderConsoleLog(session: BleBoatSession | null): void {
   if (session && session.deviceId !== activeSessionId) {
     return;
   }
+  if (consoleLogPaused) {
+    return;
+  }
   const el = document.querySelector<HTMLPreElement>("#console-line-log");
   if (el) {
     el.textContent = session?.consoleLineLogText ?? "";
     el.scrollTop = el.scrollHeight;
+  }
+}
+
+function syncConsoleLogPauseUi(): void {
+  const btn = document.querySelector<HTMLButtonElement>("#console-log-pause");
+  if (btn) {
+    btn.textContent = consoleLogPaused ? "Resume" : "Pause";
+    btn.setAttribute("aria-pressed", consoleLogPaused ? "true" : "false");
+  }
+}
+
+function toggleConsoleLogPaused(): void {
+  consoleLogPaused = !consoleLogPaused;
+  syncConsoleLogPauseUi();
+  if (!consoleLogPaused) {
+    renderConsoleLog(getActiveSession());
   }
 }
 
@@ -2397,15 +2393,9 @@ function saveUiToSession(session: BleBoatSession): void {
   const boatIdInput = document.querySelector<HTMLInputElement>("#boat-id-input");
   session.boatIdDraft = boatIdInput?.value ?? session.boatIdDraft;
   const typeSelect = document.querySelector<HTMLSelectElement>("#device-type-select");
-  const dwmTypeSelect = document.querySelector<HTMLSelectElement>("#dwm3000-device-type-select");
   const typeParsed = typeSelect ? parseDeviceType(typeSelect.value) : null;
   if (typeParsed) {
     session.deviceTypeDraft = typeParsed;
-  } else if (dwmTypeSelect) {
-    const dwmParsed = parseDeviceType(dwmTypeSelect.value);
-    if (dwmParsed) {
-      session.deviceTypeDraft = dwmParsed;
-    }
   }
   const cfgDraft = dwm3000ConfigFromDraft();
   if (cfgDraft) {
@@ -2895,7 +2885,11 @@ export function startRegattaApp(): void {
       clearConsoleLog(getActiveSession());
       return;
     }
-    if (btn.id === "device-type-save" || btn.id === "dwm3000-device-type-save") {
+    if (btn.id === "console-log-pause") {
+      toggleConsoleLogPaused();
+      return;
+    }
+    if (btn.id === "device-type-save") {
       void saveDeviceTypeToDevice();
       return;
     }
@@ -2993,16 +2987,6 @@ export function startRegattaApp(): void {
       }
     }
   });
-  document.querySelector<HTMLSelectElement>("#dwm3000-device-type-select")?.addEventListener("change", (ev) => {
-    const session = getActiveSession();
-    if (session && ev.target instanceof HTMLSelectElement) {
-      const type = parseDeviceType(ev.target.value);
-      if (type) {
-        session.deviceTypeDraft = type;
-        syncDeviceTypeUi(session);
-      }
-    }
-  });
 
   connectBtn.addEventListener("click", () => void connectBle());
 
@@ -3047,6 +3031,7 @@ export function startRegattaApp(): void {
   });
 
   console.info(`RegattaOne Boat web BLE ${WEB_BLE_REV}`);
+  syncConsoleLogPauseUi();
   if (isNativeBle()) {
     void ensureBleInitialized().catch((e) => {
       console.error("Native BLE init failed", e);
