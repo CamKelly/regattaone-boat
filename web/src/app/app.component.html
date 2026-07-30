@@ -451,6 +451,15 @@
             <div class="log-header">
               <label class="field-label" for="console-line-log">Device log</label>
               <div class="log-header-actions">
+                <input
+                  nz-input
+                  id="console-log-filter"
+                  type="search"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="Filter (substring)"
+                  aria-label="Filter log by substring"
+                />
                 <button nz-button nzType="default" nzSize="small" type="button" id="console-log-pause">
                   Pause
                 </button>

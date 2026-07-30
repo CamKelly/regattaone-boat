@@ -68,6 +68,8 @@ let imuTabActive = true;
 let regattaAppStarted = false;
 /** When true, console log text still accumulates but the UI is frozen. */
 let consoleLogPaused = false;
+/** Case-insensitive substring; empty = show all lines. */
+let consoleLogFilter = "";
 
 interface ImuDisplay {
   accel: string;
@@ -2102,18 +2104,34 @@ function renderMeshtasticLog(session: BleBoatSession): void {
   }
 }
 
-function renderConsoleLog(session: BleBoatSession | null): void {
-  if (session && session.deviceId !== activeSessionId) {
-    return;
+function filteredConsoleLogText(full: string): string {
+  const needle = consoleLogFilter.trim().toLowerCase();
+  if (!needle) {
+    return full;
   }
-  if (consoleLogPaused) {
+  return full
+    .split("\n")
+    .filter((line) => line.length > 0 && line.toLowerCase().includes(needle))
+    .map((line) => `${line}\n`)
+    .join("");
+}
+
+function paintConsoleLog(session: BleBoatSession | null): void {
+  if (session && session.deviceId !== activeSessionId) {
     return;
   }
   const el = document.querySelector<HTMLPreElement>("#console-line-log");
   if (el) {
-    el.textContent = session?.consoleLineLogText ?? "";
+    el.textContent = filteredConsoleLogText(session?.consoleLineLogText ?? "");
     el.scrollTop = el.scrollHeight;
   }
+}
+
+function renderConsoleLog(session: BleBoatSession | null): void {
+  if (consoleLogPaused) {
+    return;
+  }
+  paintConsoleLog(session);
 }
 
 function syncConsoleLogPauseUi(): void {
@@ -2128,7 +2146,7 @@ function toggleConsoleLogPaused(): void {
   consoleLogPaused = !consoleLogPaused;
   syncConsoleLogPauseUi();
   if (!consoleLogPaused) {
-    renderConsoleLog(getActiveSession());
+    paintConsoleLog(getActiveSession());
   }
 }
 
@@ -2930,11 +2948,16 @@ export function startRegattaApp(): void {
     }
   });
   document.addEventListener("input", (ev) => {
+    const target = ev.target;
+    if (target instanceof HTMLInputElement && target.id === "console-log-filter") {
+      consoleLogFilter = target.value;
+      paintConsoleLog(getActiveSession());
+      return;
+    }
     const session = getActiveSession();
     if (!session) {
       return;
     }
-    const target = ev.target;
     if (target instanceof HTMLInputElement && target.id === "meshtastic-tx-input") {
       session.meshtasticTxDraft = target.value;
       return;

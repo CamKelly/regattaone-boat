@@ -361,6 +361,13 @@
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.log-header-actions #console-log-filter {
+  width: min(220px, 42vw);
+  min-width: 120px;
 }
 
 .lora-stats-table-wrap {
