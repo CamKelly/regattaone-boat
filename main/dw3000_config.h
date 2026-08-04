@@ -15,6 +15,8 @@ typedef struct {
     uint16_t panid;
     uint16_t antenna_delay;
     uint32_t twr_delay_us;
+    /** Periodic Port/Starboard/Reference TWR for beacon geometry (default off). */
+    bool anchor_twr;
 } dw3000_config_t;
 
 /** Load from NVS (Kconfig defaults when unset). Call before dw3000_ranging_init(). */
@@ -25,7 +27,7 @@ const dw3000_config_t *dw3000_config_get(void);
 /** Validate, persist to NVS, update in-memory copy. Does not apply to radio. */
 esp_err_t dw3000_config_set(const dw3000_config_t *cfg);
 
-/** Parse JSON object {"addr":1,"pan":57050,"ant":16368,"twr":2000}. */
+/** Parse JSON object {"addr":1,"pan":57050,"ant":16368,"twr":2000,"anchor_twr":0}. */
 bool dw3000_config_from_json(const char *json, size_t len, dw3000_config_t *out);
 
 /** Format current config as JSON (no trailing newline). Returns bytes written or 0. */

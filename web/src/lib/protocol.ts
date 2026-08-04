@@ -35,18 +35,18 @@ export const BLE_CONSOLE_LOG_CHAR_UUID = "0000fee8-0000-1000-8000-00805f9b34fb";
  * Device type (BLE 0xFEFC) — course / fleet role (port, starboard, boat).
  * Stored in NVS; used by mesh, backend, and ranging stacks.
  */
-export type DeviceType = "port" | "starboard" | "boat";
+export type DeviceType = "port" | "starboard" | "boat" | "reference";
 
-export const DEVICE_TYPES: DeviceType[] = ["port", "starboard", "boat"];
+export const DEVICE_TYPES: DeviceType[] = ["port", "starboard", "boat", "reference"];
 
 /** Anchor role implied by device type (boat). */
 export function deviceTypeHasAnchorRole(type: DeviceType): boolean {
   return type === "boat";
 }
 
-/** Tag role implied by device type (port, starboard). */
+/** Tag role implied by device type (port, starboard, reference). */
 export function deviceTypeHasTagRole(type: DeviceType): boolean {
-  return type === "port" || type === "starboard";
+  return type === "port" || type === "starboard" || type === "reference";
 }
 
 /** @deprecated Use deviceTypeHasAnchorRole */
@@ -61,6 +61,8 @@ export function deviceTypeLabel(type: DeviceType): string {
       return "Port";
     case "starboard":
       return "Starboard";
+    case "reference":
+      return "Reference";
     case "boat":
       return "Boat";
   }
@@ -73,6 +75,9 @@ export function parseDeviceType(raw: string): DeviceType | null {
   }
   if (s === "starboard_anchor") {
     return "starboard";
+  }
+  if (s === "reference_anchor" || s === "ref") {
+    return "reference";
   }
   if (s === "waypoint" || s === "waypoint_anchor" || s === "fixed_dgps_mark") {
     return "boat";
@@ -89,6 +94,8 @@ export interface Dwm3000Config {
   pan: number;
   ant: number;
   twr: number;
+  /** Periodic anchor↔anchor TWR for beacon geometry (default off). */
+  anchor_twr: boolean;
 }
 
 export const DWM3000_DEFAULTS: Dwm3000Config = {
@@ -96,25 +103,38 @@ export const DWM3000_DEFAULTS: Dwm3000Config = {
   pan: 0xdeca,
   ant: 16368,
   twr: 2000,
+  anchor_twr: false,
 };
 
 export function parseDwm3000ConfigJson(raw: string): Dwm3000Config | null {
   try {
-    const o = JSON.parse(raw) as Partial<Dwm3000Config>;
+    const o = JSON.parse(raw) as Partial<Dwm3000Config> & { anchor_twr?: number | boolean };
     if (typeof o.addr !== "number" || typeof o.pan !== "number" || typeof o.ant !== "number" || typeof o.twr !== "number") {
       return null;
     }
     if (o.addr <= 0 || o.addr >= 0xffff || o.ant < 0 || o.ant > 65535 || o.twr < 300 || o.twr > 20000) {
       return null;
     }
-    return { addr: o.addr, pan: o.pan, ant: o.ant, twr: o.twr };
+    let anchor_twr = false;
+    if (typeof o.anchor_twr === "boolean") {
+      anchor_twr = o.anchor_twr;
+    } else if (typeof o.anchor_twr === "number") {
+      anchor_twr = o.anchor_twr !== 0;
+    }
+    return { addr: o.addr, pan: o.pan, ant: o.ant, twr: o.twr, anchor_twr };
   } catch {
     return null;
   }
 }
 
 export function formatDwm3000ConfigJson(cfg: Dwm3000Config): string {
-  return JSON.stringify({ addr: cfg.addr, pan: cfg.pan, ant: cfg.ant, twr: cfg.twr });
+  return JSON.stringify({
+    addr: cfg.addr,
+    pan: cfg.pan,
+    ant: cfg.ant,
+    twr: cfg.twr,
+    anchor_twr: cfg.anchor_twr ? 1 : 0,
+  });
 }
 
 export interface Dwm3000RangeResult {

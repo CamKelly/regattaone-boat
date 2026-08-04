@@ -11,13 +11,14 @@
  * Describes where the device sits in the course / fleet, independent of radio hardware.
  * Ranging stacks (DWM3000, …) map these types to anchor/tag roles as needed.
  *
- *   Port / Starboard — course marks (tag role)
- *   Boat             — primary vessel (anchor role)
+ *   Port / Starboard / Reference — course anchors (tag role in libdeca TWR)
+ *   Boat                         — vessel (anchor role; UWB RX-only for TDoA)
  */
 typedef enum {
     DEVICE_TYPE_PORT = 0,
     DEVICE_TYPE_STARBOARD = 1,
     DEVICE_TYPE_BOAT = 2,
+    DEVICE_TYPE_REFERENCE = 3,
 } device_type_t;
 
 #define DEVICE_TYPE_STR_MAX 24U
@@ -28,7 +29,7 @@ device_type_t device_type_get(void);
 
 const char *device_type_to_string(device_type_t type);
 
-/** Parse port | starboard | boat (legacy *_anchor / waypoint / fixed_dgps_mark mapped). */
+/** Parse port | starboard | boat | reference (legacy aliases mapped). */
 bool device_type_from_string(const char *s, size_t len, device_type_t *out);
 
 esp_err_t device_type_set(device_type_t type);
@@ -36,5 +37,8 @@ esp_err_t device_type_set(device_type_t type);
 /** True when this device acts as an anchor in a range network (boat). */
 bool device_type_has_anchor_role(device_type_t type);
 
-/** True when this device acts as a tag in a range network (port, starboard). */
+/** True when this device acts as a tag in a range network (port, starboard, reference). */
 bool device_type_has_tag_role(device_type_t type);
+
+/** True for Port / Starboard / Reference (UWB positioning anchors). */
+bool device_type_is_course_mark(device_type_t type);

@@ -182,6 +182,8 @@ menu "RegattaOne — Device type"
             bool "Port"
         config DEVICE_DEFAULT_TYPE_STARBOARD
             bool "Starboard"
+        config DEVICE_DEFAULT_TYPE_REFERENCE
+            bool "Reference"
         config DEVICE_DEFAULT_TYPE_BOAT
             bool "Boat"
     endchoice
@@ -272,24 +274,50 @@ menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
             opposite-mark broadcast is heard. 0 means auto-learn from RX.
 
     config MARK_BLINK_INTERVAL_MS
-        int "Port UWB blink interval (ms)"
+        int "Port master beacon interval (ms)"
         range 200 10000
         default 1000
         depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
         help
-            How often the Port mark transmits a UWB blink for passive boat ToA
-            sniffing. Starboard replies after Fixed_Delay when it hears Port.
+            How often Port transmits the UWB sync+positioning beacon (master
+            timeline). Starboard and Reference schedule their beacons from it.
             Default 1000 ms (1 Hz).
 
+    config MARK_BLINK_PORT_PREP_MS
+        int "Port delayed-TX prep slack (ms)"
+        range 1 20
+        default 2
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            How far ahead Port schedules its delayed TX so the TX timestamp can
+            be embedded in the beacon. Default 2 ms.
+
+    config MARK_BLINK_SLOT_STARBOARD_US
+        int "Starboard beacon slot after Port TX (us)"
+        range 1000 50000
+        default 5000
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            Master-timeline offset for Starboard positioning beacon after Port
+            TX. Default 5000 us for long-preamble PHY.
+
+    config MARK_BLINK_SLOT_REFERENCE_US
+        int "Reference beacon slot after Port TX (us)"
+        range 2000 60000
+        default 10000
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            Master-timeline offset for Reference positioning beacon after Port
+            TX. Must be after the Starboard slot. Default 10000 us.
+
     config MARK_BLINK_FIXED_DELAY_US
-        int "Starboard blink Fixed_Delay (us)"
+        int "Legacy Starboard Fixed_Delay (us) [unused]"
         range 500 20000
         default 5000
         depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
         help
-            Hardware-scheduled delay from Port blink RX ToA to Starboard blink
-            TX. Carried in the blink payload. Default 5000 us suits the long-
-            preamble PHY; raise further (e.g. 8000) if Starboard delayed TX fails.
+            Kept so existing sdkconfig values still parse. Slots above replace
+            the old RX-triggered Fixed_Delay chain.
 
     config BOAT_RANGE_INTERVAL_MS
         int "Boat ranging interval (ms) [deprecated — boats are UWB-passive]"

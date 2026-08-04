@@ -6,9 +6,9 @@ export type DeviceKind = 'anchor' | 'tag';
 /**
  * BLE / firmware device type (0xFEFC) — course / fleet role.
  */
-export type DeviceType = 'port' | 'starboard' | 'boat';
+export type DeviceType = 'port' | 'starboard' | 'boat' | 'reference';
 
-export const DEVICE_TYPES: readonly DeviceType[] = ['port', 'starboard', 'boat'] as const;
+export const DEVICE_TYPES: readonly DeviceType[] = ['port', 'starboard', 'boat', 'reference'] as const;
 
 export interface DeviceTimestamps {
   createdAt: string;
@@ -36,7 +36,7 @@ export interface AnchorDevice extends DeviceBase {
 export type Device = TagDevice | AnchorDevice;
 
 /** Valid `anchorType` values for AnchorDevice records. */
-export const ANCHOR_TYPES: readonly DeviceType[] = ['port', 'starboard', 'boat'] as const;
+export const ANCHOR_TYPES: readonly DeviceType[] = ['port', 'starboard', 'boat', 'reference'] as const;
 
 export const DEVICE_KINDS: readonly DeviceKind[] = ['anchor', 'tag'] as const;
 

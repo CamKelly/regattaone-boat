@@ -20,6 +20,7 @@
 
 #if CONFIG_DW3000_RANGING_ENABLE
 #include "dw3000_ranging.h"
+#include "mark_blink.h"
 #endif
 
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
@@ -237,6 +238,11 @@ static mark_role_t local_role(void)
 static void maybe_range_peer(void)
 {
 #if CONFIG_DW3000_RANGING_ENABLE
+    const dw3000_config_t *cfg = dw3000_config_get();
+    if (cfg == NULL || !cfg->anchor_twr) {
+        return;
+    }
+
     const char *role_name = local_role() == MARK_ROLE_PORT ? "port" : "starboard";
     const char *opp_name = local_role() == MARK_ROLE_PORT ? "starboard" : "port";
 
@@ -269,6 +275,10 @@ static void maybe_range_peer(void)
         s_last_dist_ok = true;
         ESP_LOGI(TAG, "%s → %s UWB range: OK 0x%04X = %u cm (%.2f m)", role_name, opp_name, (unsigned)peer,
                  (unsigned)cm, (double)cm / 100.0);
+#if CONFIG_DW3000_RANGING_ENABLE
+        /* Feed Port↔Starboard baseline into UWB beacon geometry. */
+        mark_blink_set_geometry_cm(cm, ANCHOR_DIST_UNKNOWN, ANCHOR_DIST_UNKNOWN);
+#endif
     } else {
         ESP_LOGW(TAG, "%s → %s UWB range: FAILED 0x%04X (%s) — keeping last %s", role_name, opp_name,
                  (unsigned)peer, esp_err_to_name(err),

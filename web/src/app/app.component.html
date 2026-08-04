@@ -65,6 +65,7 @@
                   <select id="device-type-select" class="native-select">
                     <option value="port">Port</option>
                     <option value="starboard">Starboard</option>
+                    <option value="reference">Reference</option>
                     <option value="boat">Boat</option>
                   </select>
                 </div>
@@ -73,7 +74,7 @@
                 </div>
               </div>
               <p id="device-type-status" class="field-hint">
-                Port / Starboard / Boat role for mark broadcast and ranging. Saved on device NVS.
+                Port / Starboard / Reference / Boat role for mark broadcast and ranging. Saved on device NVS.
               </p>
             </div>
           </div>
@@ -113,7 +114,7 @@
               Qorvo DWM3000 SPI UWB settings (<code>0xFEF2</code>) and two-way ranging
               (<code>0xFEF3</code>). Values are saved to device NVS and survive power-off.
               All devices must share the same PAN id and TWR processing delay.
-              Port / Starboard / Boat role is set under Device → Device type
+              Port / Starboard / Reference / Boat role is set under Device → Device type
               (<code>0xFEFC</code>).
             </p>
             <div nz-row [nzGutter]="[12, 12]">
@@ -162,6 +163,17 @@
                   step="1"
                   placeholder="2000"
                 />
+              </div>
+              <div nz-col [nzSpan]="24">
+                <label class="field-label" for="dwm3000-anchor-twr">
+                  <input id="dwm3000-anchor-twr" type="checkbox" />
+                  Periodic anchor TWR (Port ↔ Starboard ↔ Reference)
+                </label>
+                <p class="field-hint">
+                  Off by default so beacon sync is not interrupted. Turn on when you need live
+                  triangle baselines in UWB beacons. Manual Measure below still works when off.
+                  LoRa mark broadcasts keep using their last good distance.
+                </p>
               </div>
               <div nz-col [nzSpan]="24">
                 <div nz-row [nzGutter]="8">

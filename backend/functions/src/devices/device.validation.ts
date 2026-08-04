@@ -15,7 +15,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isAnchorType(value: unknown): value is DeviceType {
-  return value === 'port' || value === 'starboard' || value === 'boat';
+  return value === 'port' || value === 'starboard' || value === 'boat' || value === 'reference';
 }
 
 function isDeviceKind(value: unknown): value is DeviceKind {

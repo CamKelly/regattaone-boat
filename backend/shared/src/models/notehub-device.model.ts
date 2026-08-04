@@ -154,6 +154,9 @@ export function parseDeviceType(value: unknown): DeviceType | null {
   if (normalized === 'starboard_anchor') {
     return 'starboard';
   }
+  if (normalized === 'reference_anchor' || normalized === 'ref') {
+    return 'reference';
+  }
   if (
     normalized === 'waypoint' ||
     normalized === 'waypoint_anchor' ||

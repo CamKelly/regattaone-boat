@@ -426,6 +426,7 @@ function dwm3000ConfigFromDraft(): Dwm3000Config | null {
   const panRaw = document.querySelector<HTMLInputElement>("#dwm3000-pan-input")?.value ?? "";
   const antRaw = document.querySelector<HTMLInputElement>("#dwm3000-ant-input")?.value ?? "";
   const twrRaw = document.querySelector<HTMLInputElement>("#dwm3000-twr-input")?.value ?? "";
+  const anchorTwr = document.querySelector<HTMLInputElement>("#dwm3000-anchor-twr")?.checked ?? false;
   const addr = parseHexU16(addrRaw);
   const pan = parseHexU16(panRaw, true);
   const ant = Number.parseInt(antRaw.trim(), 10);
@@ -436,7 +437,7 @@ function dwm3000ConfigFromDraft(): Dwm3000Config | null {
   if (ant < 0 || ant > 65535 || twr < 300 || twr > 20000) {
     return null;
   }
-  return { addr, pan, ant, twr };
+  return { addr, pan, ant, twr, anchor_twr: anchorTwr };
 }
 
 async function readDwm3000ConfigFromDevice(session: BleBoatSession): Promise<void> {
@@ -559,6 +560,7 @@ function syncDwm3000Ui(session: BleBoatSession | null): void {
   const panInput = document.querySelector<HTMLInputElement>("#dwm3000-pan-input");
   const antInput = document.querySelector<HTMLInputElement>("#dwm3000-ant-input");
   const twrInput = document.querySelector<HTMLInputElement>("#dwm3000-twr-input");
+  const anchorTwrInput = document.querySelector<HTMLInputElement>("#dwm3000-anchor-twr");
   const peerInput = document.querySelector<HTMLInputElement>("#dwm3000-peer-input");
   const saveBtn = document.querySelector<HTMLButtonElement>("#dwm3000-config-save");
   const rangeBtn = document.querySelector<HTMLButtonElement>("#dwm3000-range-btn");
@@ -578,6 +580,9 @@ function syncDwm3000Ui(session: BleBoatSession | null): void {
   if (twrInput && document.activeElement !== twrInput) {
     twrInput.value = String(cfg.twr);
   }
+  if (anchorTwrInput && document.activeElement !== anchorTwrInput) {
+    anchorTwrInput.checked = cfg.anchor_twr === true;
+  }
   if (peerInput && document.activeElement !== peerInput) {
     peerInput.value = session?.dwm3000PeerDraft ?? "";
   }
@@ -585,6 +590,7 @@ function syncDwm3000Ui(session: BleBoatSession | null): void {
   setFieldEnabled(panInput, canEdit);
   setFieldEnabled(antInput, canEdit);
   setFieldEnabled(twrInput, canEdit);
+  setFieldEnabled(anchorTwrInput, canEdit);
   setFieldEnabled(saveBtn, canEdit);
   setFieldEnabled(peerInput, canRange);
   setFieldEnabled(rangeBtn, canRange);
@@ -2971,7 +2977,8 @@ export function startRegattaApp(): void {
       (target.id === "dwm3000-addr-input" ||
         target.id === "dwm3000-pan-input" ||
         target.id === "dwm3000-ant-input" ||
-        target.id === "dwm3000-twr-input")
+        target.id === "dwm3000-twr-input" ||
+        target.id === "dwm3000-anchor-twr")
     ) {
       const cfg = dwm3000ConfigFromDraft();
       if (cfg) {

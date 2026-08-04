@@ -20,6 +20,8 @@ static device_type_t default_type(void)
     return DEVICE_TYPE_PORT;
 #elif CONFIG_DEVICE_DEFAULT_TYPE_STARBOARD
     return DEVICE_TYPE_STARBOARD;
+#elif CONFIG_DEVICE_DEFAULT_TYPE_REFERENCE
+    return DEVICE_TYPE_REFERENCE;
 #else
     return DEVICE_TYPE_BOAT;
 #endif
@@ -32,6 +34,8 @@ const char *device_type_to_string(device_type_t type)
         return "port";
     case DEVICE_TYPE_STARBOARD:
         return "starboard";
+    case DEVICE_TYPE_REFERENCE:
+        return "reference";
     case DEVICE_TYPE_BOAT:
     default:
         return "boat";
@@ -45,7 +49,12 @@ bool device_type_has_anchor_role(device_type_t type)
 
 bool device_type_has_tag_role(device_type_t type)
 {
-    return type == DEVICE_TYPE_PORT || type == DEVICE_TYPE_STARBOARD;
+    return type == DEVICE_TYPE_PORT || type == DEVICE_TYPE_STARBOARD || type == DEVICE_TYPE_REFERENCE;
+}
+
+bool device_type_is_course_mark(device_type_t type)
+{
+    return device_type_has_tag_role(type);
 }
 
 static bool parse_normalized(const char *tmp, device_type_t *out)
@@ -56,6 +65,10 @@ static bool parse_normalized(const char *tmp, device_type_t *out)
     }
     if (strcmp(tmp, "starboard") == 0 || strcmp(tmp, "starboard_anchor") == 0) {
         *out = DEVICE_TYPE_STARBOARD;
+        return true;
+    }
+    if (strcmp(tmp, "reference") == 0 || strcmp(tmp, "ref") == 0 || strcmp(tmp, "reference_anchor") == 0) {
+        *out = DEVICE_TYPE_REFERENCE;
         return true;
     }
     if (strcmp(tmp, "boat") == 0) {
@@ -138,7 +151,7 @@ device_type_t device_type_get(void)
 
 esp_err_t device_type_set(device_type_t type)
 {
-    if (type > DEVICE_TYPE_BOAT) {
+    if (type > DEVICE_TYPE_REFERENCE) {
         return ESP_ERR_INVALID_ARG;
     }
 

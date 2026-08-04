@@ -544,7 +544,7 @@ static int gatt_svr_access_dw3000_config(uint16_t conn_handle, uint16_t attr_han
     (void)arg;
 
     if (ctxt->op == BLE_GATT_ACCESS_OP_READ_CHR) {
-        char json[96];
+        char json[128];
         const size_t n = dw3000_config_format_json(json, sizeof(json));
         if (n == 0U) {
             return BLE_ATT_ERR_UNLIKELY;
@@ -553,10 +553,10 @@ static int gatt_svr_access_dw3000_config(uint16_t conn_handle, uint16_t attr_han
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
         uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (om_len == 0U || om_len > 127U) {
+        if (om_len == 0U || om_len > 159U) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
-        char buf[128];
+        char buf[160];
         if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
             return BLE_ATT_ERR_UNLIKELY;
         }
