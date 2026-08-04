@@ -21,8 +21,8 @@
 #include "ranging.h"
 
 #define DWMAC_TASK_STACK_SIZE 4096 // TODO
-#define DWMAC_TASK_PRIO		  5	   // TODO
-#define DWMAC_QUEUE_LEN		  10
+#define DWMAC_TASK_PRIO		  12   /* above Meshtastic/console (prio 5) so UWB RX isn't starved */
+#define DWMAC_QUEUE_LEN		  32
 
 struct dwmac_event_s {
 	enum dwevent_e type;

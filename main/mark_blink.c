@@ -7,12 +7,16 @@
 #include "device_type.h"
 #include "dw3000_ranging.h"
 
+#include "dwmac.h"
 #include "dwproto.h"
 #include "dwtime.h"
 #include "mac802154.h"
 #include "ranging.h"
 
+#include "deca_device_api.h"
+
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -41,6 +45,16 @@ static bool s_have_port_half;
 static uint32_t s_port_half_seq;
 static uint64_t s_port_half_toa;
 static uint16_t s_port_half_uwb;
+static volatile int64_t s_last_blink_us; /* esp_timer; 0 = never */
+static uint32_t s_boat_rx_recoveries;
+
+#define BOAT_BLINK_STALE_US (2500LL * 1000LL)
+#define BOAT_BLINK_WATCHDOG_MS 1000U
+
+static void note_blink_rx(void)
+{
+    s_last_blink_us = esp_timer_get_time();
+}
 
 static bool tx_blink(uint8_t role, uint32_t seq, uint16_t fixed_delay_us, uint64_t txtime)
 {
@@ -79,6 +93,7 @@ static bool tx_blink(uint8_t role, uint32_t seq, uint16_t fixed_delay_us, uint64
 static void boat_log_blink(uint8_t role, uint16_t uwb, uint32_t seq, uint16_t delay_us,
                            uint64_t toa)
 {
+    note_blink_rx();
     ESP_LOGI(TAG, "blink seq=%lu role=%c uwb=0x%04X ToA=%02x%02x%02x%02x%02x delay_us=%u",
              (unsigned long)seq, (char)role, (unsigned)uwb, (unsigned)((toa >> 32) & 0xff),
              (unsigned)((toa >> 24) & 0xff), (unsigned)((toa >> 16) & 0xff),
@@ -183,6 +198,42 @@ static void port_blink_task(void *arg)
     }
 }
 
+/**
+ * Boat UWB RX can stall after Meshtastic companion UART bursts (RX left off /
+ * error state). Periodically re-arm RX; if blinks go stale, force TRX off→RX.
+ */
+static void boat_blink_watchdog_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(BOAT_BLINK_WATCHDOG_MS));
+        if (device_type_get() != DEVICE_TYPE_BOAT) {
+            continue;
+        }
+        if (twr_in_progress()) {
+            continue;
+        }
+
+        const int64_t now = esp_timer_get_time();
+        const int64_t last = s_last_blink_us;
+        const int64_t age_us = (last > 0) ? (now - last) : now;
+
+        /* Cheap heartbeat — keeps RX on after transient errors. */
+        dwmac_rx_reenable();
+
+        if (age_us < BOAT_BLINK_STALE_US) {
+            continue;
+        }
+
+        s_boat_rx_recoveries++;
+        ESP_LOGW(TAG,
+                 "boat UWB sniff stale (no blink for %lld ms) — forcetrxoff + RX re-arm #%lu",
+                 (long long)(age_us / 1000), (unsigned long)s_boat_rx_recoveries);
+        dwt_forcetrxoff();
+        dwmac_rx_reenable();
+    }
+}
+
 esp_err_t mark_blink_start(void)
 {
     if (s_started) {
@@ -202,7 +253,13 @@ esp_err_t mark_blink_start(void)
         ESP_LOGI(TAG, "Starboard blink reply armed (fixed_delay default %u us)",
                  (unsigned)CONFIG_MARK_BLINK_FIXED_DELAY_US);
     } else if (t == DEVICE_TYPE_BOAT) {
-        ESP_LOGI(TAG, "Boat blink sniff armed (UWB TX suppressed for TWR)");
+        s_last_blink_us = 0;
+        if (xTaskCreate(boat_blink_watchdog_task, "blink_wd", 3072, NULL, 6, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "boat blink watchdog create failed");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "Boat blink sniff armed (UWB TX suppressed; RX watchdog %u ms)",
+                 (unsigned)BOAT_BLINK_WATCHDOG_MS);
     } else {
         ESP_LOGI(TAG, "mark blink idle (device type %d)", (int)t);
     }
