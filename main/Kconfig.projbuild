@@ -271,16 +271,34 @@ menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
             Optional fixed peer address for DWM3000 ranging before the first
             opposite-mark broadcast is heard. 0 means auto-learn from RX.
 
+    config MARK_BLINK_INTERVAL_MS
+        int "Port UWB blink interval (ms)"
+        range 200 10000
+        default 1000
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            How often the Port mark transmits a UWB blink for passive boat ToA
+            sniffing. Starboard replies after Fixed_Delay when it hears Port.
+            Default 1000 ms (1 Hz).
+
+    config MARK_BLINK_FIXED_DELAY_US
+        int "Starboard blink Fixed_Delay (us)"
+        range 500 20000
+        default 5000
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            Hardware-scheduled delay from Port blink RX ToA to Starboard blink
+            TX. Carried in the blink payload. Default 5000 us suits the long-
+            preamble PHY; raise further (e.g. 8000) if Starboard delayed TX fails.
+
     config BOAT_RANGE_INTERVAL_MS
-        int "Boat ranging interval (ms)"
+        int "Boat ranging interval (ms) [deprecated — boats are UWB-passive]"
         range 500 60000
         default 10000
         depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
         help
-            How often a Boat device ranges to known Port and Starboard UWB
-            addresses (learned from Meshtastic mark broadcasts). The default is
-            10 seconds. Results are reported over BLE only (not broadcast);
-            last good values are kept across failed ranges.
+            Unused: boats no longer actively range to marks. Kept so existing
+            sdkconfig values still parse. Passive ToA sniffing uses mark blinks.
 
 endmenu
 

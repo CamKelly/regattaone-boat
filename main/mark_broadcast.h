@@ -22,11 +22,10 @@ extern "C" {
  * Port and Starboard both TX and RX: each opposing broadcast updates the
  * receiver's peer UWB address used for DWM3000 ranging (address may change).
  *
- * Boat devices do not broadcast. They learn Port/Starboard UWB addresses from
- * mark RX, periodically range to each known address, and notify the UI over
- * BLE ($PREGGEOM) with boat↔mark distances plus the port↔starboard distances
- * carried in the mark frames. Boat↔mark distances keep the last successful
- * range (failed attempts do not clear a prior value).
+ * Boat devices do not broadcast. They learn Port/Starboard UWB addresses and
+ * baseline distances from mark RX, and sniff UWB mark blinks passively for ToA
+ * (see mark_blink). Boat↔mark distances are solved later; $PREGGEOM currently
+ * reports port↔starboard distances from LoRa with boat↔mark as null.
  */
 
 #define MARK_BROADCAST_PKT_LEN 18U

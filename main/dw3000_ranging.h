@@ -10,12 +10,11 @@ extern "C" {
 #endif
 
 /*
- * DW3000 (DWM3000) two-way-ranging API for RegattaOne.
+ * DW3000 (DWM3000) ranging / blink API for RegattaOne.
  *
- * Thin wrapper over the vendored libdeca TWR stack. Each device has a 16-bit
- * UWB address (its "id"). To measure distance to another device, call
- * dw3000_range_to() with that device's address. Every initialized device also
- * automatically answers ranging requests from others (it stays in RX).
+ * Thin wrapper over the vendored libdeca stack. Marks (Port/Starboard) use
+ * dw3000_range_to() for inter-mark DS-TWR. Boats are UWB-passive: they sniff
+ * mark blinks for ToA and do not initiate or answer TWR.
  *
  * Enable with CONFIG_REGATTAONE_DW3000_ENABLE + CONFIG_DW3000_RANGING_ENABLE.
  */

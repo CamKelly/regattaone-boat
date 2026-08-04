@@ -44,13 +44,9 @@ static bool s_peer_uwb_known;
 static uint16_t s_last_dist_cm = MARK_BROADCAST_DIST_UNKNOWN;
 static bool s_last_dist_ok;
 
-/** Boat-only: last successful UWB range to each mark (UNKNOWN until first success). */
+/** Boat-only: boat↔mark distances filled later via passive ToA solve (null for now). */
 static uint16_t s_boat_to_port_cm = MARK_BROADCAST_DIST_UNKNOWN;
 static uint16_t s_boat_to_starboard_cm = MARK_BROADCAST_DIST_UNKNOWN;
-static uint16_t s_boat_port_uwb;
-static uint16_t s_boat_starboard_uwb;
-/** Alternate which mark is ranged first so starboard is not always second. */
-static bool s_boat_range_starboard_first;
 
 static uint16_t self_uwb_addr(void)
 {
@@ -294,8 +290,8 @@ static void fmt_dist_json(char *buf, size_t buflen, uint16_t cm)
 }
 
 /**
- * Boat → UI: last-good boat↔port / boat↔starboard, plus opposite-mark distances
- * last heard on Meshtastic.
+ * Boat → UI: opposite-mark distances from LoRa; boat↔mark left null until
+ * passive ToA solve is added.
  */
 static void boat_geom_ble_notify(void)
 {
@@ -341,118 +337,6 @@ static void boat_geom_ble_notify(void)
         ble_sen0140_meshtastic_rx_notify((const uint8_t *)line, (size_t)n);
     }
 }
-
-#if CONFIG_DW3000_RANGING_ENABLE
-/** Range once; on success writes *out_cm and returns true. Failures leave *out_cm untouched. */
-static bool boat_range_one(uint16_t peer, const char *label, uint16_t *out_cm)
-{
-    if (peer == 0U) {
-        ESP_LOGW(TAG, "boat → %s skipped: mark UWB address is 0", label);
-        return false;
-    }
-    if (peer == self_uwb_addr()) {
-        ESP_LOGW(TAG,
-                 "boat → %s skipped: peer 0x%04X equals this device (give Port/Starboard/Boat unique UWB addresses)",
-                 label, peer);
-        return false;
-    }
-    uint16_t cm = 0;
-    ESP_LOGI(TAG, "boat → %s UWB range: measuring to 0x%04X…", label, (unsigned)peer);
-    /* Long-preamble PHY needs more than the mark TX 500 ms budget. */
-    const esp_err_t err = dw3000_range_to(peer, &cm, 1500U);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "boat → %s UWB range: OK 0x%04X = %u cm (%.2f m)", label, (unsigned)peer, (unsigned)cm,
-                 (double)cm / 100.0);
-        *out_cm = cm;
-        return true;
-    }
-    ESP_LOGW(TAG, "boat → %s UWB range: FAILED 0x%04X (%s) — keeping last good", label, (unsigned)peer,
-             esp_err_to_name(err));
-    return false;
-}
-
-static void boat_range_once(void)
-{
-    uint16_t port_uwb = 0;
-    uint16_t stb_uwb = 0;
-    bool have_port = false;
-    bool have_stb = false;
-
-    if (s_store_mtx == NULL || xSemaphoreTake(s_store_mtx, pdMS_TO_TICKS(50)) != pdTRUE) {
-        return;
-    }
-    have_port = s_have_port && s_port.uwb_addr != 0U;
-    have_stb = s_have_starboard && s_starboard.uwb_addr != 0U;
-    if (have_port) {
-        port_uwb = s_port.uwb_addr;
-        if (s_boat_port_uwb != port_uwb) {
-            s_boat_port_uwb = port_uwb;
-            s_boat_to_port_cm = MARK_BROADCAST_DIST_UNKNOWN;
-        }
-    }
-    if (have_stb) {
-        stb_uwb = s_starboard.uwb_addr;
-        if (s_boat_starboard_uwb != stb_uwb) {
-            s_boat_starboard_uwb = stb_uwb;
-            s_boat_to_starboard_cm = MARK_BROADCAST_DIST_UNKNOWN;
-        }
-    }
-    xSemaphoreGive(s_store_mtx);
-
-    if (!have_port && !have_stb) {
-        /* Wait until Meshtastic mark broadcasts teach us UWB addresses. */
-        ESP_LOGI(TAG, "boat ranging cycle skipped: no Port/Starboard UWB addresses learned yet");
-        return;
-    }
-
-    /* Alternate first peer so a slow/failing port range does not starve starboard. */
-    const bool stb_first = s_boat_range_starboard_first;
-    s_boat_range_starboard_first = !s_boat_range_starboard_first;
-
-    ESP_LOGI(TAG, "boat ranging cycle: port %s (0x%04X), starboard %s (0x%04X), %s first",
-             have_port ? "known" : "unknown", (unsigned)port_uwb,
-             have_stb ? "known" : "unknown", (unsigned)stb_uwb,
-             stb_first ? "starboard" : "port");
-
-    uint16_t to_port = MARK_BROADCAST_DIST_UNKNOWN;
-    uint16_t to_stb = MARK_BROADCAST_DIST_UNKNOWN;
-    bool got_port = false;
-    bool got_stb = false;
-
-    if (stb_first) {
-        if (have_stb) {
-            got_stb = boat_range_one(stb_uwb, "starboard", &to_stb);
-        }
-        if (have_port) {
-            got_port = boat_range_one(port_uwb, "port", &to_port);
-        }
-    } else {
-        if (have_port) {
-            got_port = boat_range_one(port_uwb, "port", &to_port);
-        }
-        if (have_stb) {
-            got_stb = boat_range_one(stb_uwb, "starboard", &to_stb);
-        }
-    }
-
-    if (s_store_mtx != NULL && xSemaphoreTake(s_store_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
-        /* Keep last good — transient UWB failures must not wipe a prior success. */
-        if (got_port) {
-            s_boat_to_port_cm = to_port;
-        }
-        if (got_stb) {
-            s_boat_to_starboard_cm = to_stb;
-        }
-        xSemaphoreGive(s_store_mtx);
-    }
-
-    ESP_LOGI(TAG, "boat ranging result: port=%s starboard=%s (reporting last good over BLE)",
-             have_port ? (got_port ? "measured" : "failed") : "n/a",
-             have_stb ? (got_stb ? "measured" : "failed") : "n/a");
-
-    boat_geom_ble_notify();
-}
-#endif /* CONFIG_DW3000_RANGING_ENABLE */
 
 static void mark_tx_once(void)
 {
@@ -505,9 +389,6 @@ static void mark_task(void *arg)
 {
     (void)arg;
     const uint32_t mark_interval_ms = (uint32_t)CONFIG_MARK_BROADCAST_INTERVAL_MS;
-#if CONFIG_DW3000_RANGING_ENABLE
-    const uint32_t boat_interval_ms = (uint32_t)CONFIG_BOAT_RANGE_INTERVAL_MS;
-#endif
 
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
     /* Wait for Meshtastic want_config before first TX (can take several seconds). */
@@ -515,7 +396,7 @@ static void mark_task(void *arg)
     while (!meshtastic_client_is_config_ready()) {
         vTaskDelay(pdMS_TO_TICKS(250));
     }
-    ESP_LOGI(TAG, "Meshtastic config ready — starting broadcasts / boat ranging");
+    ESP_LOGI(TAG, "Meshtastic config ready — starting broadcasts");
 #endif
 
     /* Stagger first TX slightly so peers don't collide after simultaneous boot. */
@@ -526,14 +407,8 @@ static void mark_task(void *arg)
         if (t == DEVICE_TYPE_PORT || t == DEVICE_TYPE_STARBOARD) {
             mark_tx_once();
             vTaskDelay(pdMS_TO_TICKS(mark_interval_ms));
-        } else if (t == DEVICE_TYPE_BOAT) {
-#if CONFIG_DW3000_RANGING_ENABLE
-            boat_range_once();
-            vTaskDelay(pdMS_TO_TICKS(boat_interval_ms));
-#else
-            vTaskDelay(pdMS_TO_TICKS(1000));
-#endif
         } else {
+            /* Boat: LoRa RX is callback-driven; UWB blink sniff is in mark_blink. */
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
@@ -635,14 +510,8 @@ esp_err_t mark_broadcast_start(void)
         ESP_LOGE(TAG, "task create failed");
         return ESP_FAIL;
     }
-#if CONFIG_DW3000_RANGING_ENABLE
-    ESP_LOGI(TAG, "started (mark_interval=%d ms, boat_range_interval=%d ms, peer_uwb=%s0x%04X)",
-             CONFIG_MARK_BROADCAST_INTERVAL_MS, CONFIG_BOAT_RANGE_INTERVAL_MS,
-             s_peer_uwb_known ? "" : "auto/", s_peer_uwb_known ? s_peer_uwb : 0U);
-#else
     ESP_LOGI(TAG, "started (mark_interval=%d ms, peer_uwb=%s0x%04X)", CONFIG_MARK_BROADCAST_INTERVAL_MS,
              s_peer_uwb_known ? "" : "auto/", s_peer_uwb_known ? s_peer_uwb : 0U);
-#endif
     return ESP_OK;
 }
 
