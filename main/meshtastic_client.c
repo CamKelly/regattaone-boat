@@ -87,8 +87,12 @@ static uint32_t s_want_config_id;
 static bool s_config_complete;
 static bool s_data_flowing;
 static int64_t s_last_want_config_us;
+static int64_t s_last_reboot_want_config_us;
 static uint32_t s_my_num;
 static bool s_have_my_num;
+
+/** Ignore bursty FromRadio.rebooted frames (companion often emits more than one). */
+#define MT_REBOOT_WANT_CONFIG_DEBOUNCE_US 3000000LL
 
 static mt_node_t s_nodes[MT_NODE_MAX];
 static mt_rx_msg_t s_rx_msgs[MT_RX_MSG_MAX];
@@ -958,7 +962,21 @@ static void handle_from_radio(const uint8_t *data, size_t len)
         if (field == 8U && wire == 0U) {
             uint64_t rb = 0;
             if (pb_read_varint(&b, &rb) && rb != 0U) {
-                mt_notify_line("! companion rebooted (not re-sending want_config)\n");
+                /* After reboot the companion drops the serial session; GPS / mesh
+                 * notify resume only after a fresh want_config → config_complete. */
+                const int64_t now = mt_now_us();
+                if (s_last_reboot_want_config_us > 0LL &&
+                    now - s_last_reboot_want_config_us < MT_REBOOT_WANT_CONFIG_DEBOUNCE_US) {
+                    ESP_LOGI(TAG, "companion rebooted (want_config debounced)");
+                    mt_notify_line("! companion rebooted (handshake already in progress)\n");
+                } else {
+                    s_last_reboot_want_config_us = now;
+                    s_data_flowing = false;
+                    s_config_complete = false;
+                    ESP_LOGW(TAG, "companion rebooted — re-sending want_config");
+                    mt_notify_line("! companion rebooted — re-syncing config\n");
+                    (void)send_want_config(true);
+                }
             }
             continue;
         }
