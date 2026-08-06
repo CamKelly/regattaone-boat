@@ -122,7 +122,7 @@ interface MarkBroadcastSnapshot {
   updatedAtMs: number;
 }
 
-/** Boat geometry snapshot from $PREGGEOM (per-distance last-good timestamps). */
+/** Boat geometry snapshot from $PREGGEOM / $PREGTDOA (per-distance last-good timestamps). */
 interface BoatGeomSnapshot {
   boat_port_cm: number | null;
   boat_starboard_cm: number | null;
@@ -134,6 +134,13 @@ interface BoatGeomSnapshot {
   starboard_port_at_ms: number;
   port_uwb: number;
   starboard_uwb: number;
+  /** Local TDoA frame: Port at origin, Starboard +X, Reference +Y. */
+  tdoa_ok?: boolean;
+  tdoa_seq?: number;
+  x_m?: number | null;
+  y_m?: number | null;
+  boat_reference_cm?: number | null;
+  tdoa_at_ms?: number;
   updatedAtMs: number;
 }
 
@@ -1735,6 +1742,14 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
       }
       continue;
     }
+    if (line.startsWith("$PREGTDOA,")) {
+      if (applyBoatTdoaLine(session, line)) {
+        hadGeom = true;
+      } else {
+        console.warn("Ignored malformed $PREGTDOA line", line.slice(0, 120));
+      }
+      continue;
+    }
     other += `${line}\n`;
   }
   if (other.length > 0) {
@@ -1847,6 +1862,53 @@ function mergeGeomCm(
   return { cm: prevCm, at: prevAt };
 }
 
+function applyBoatTdoaLine(session: BleBoatSession, line: string): boolean {
+  const jsonPart = line.slice("$PREGTDOA,".length).trim();
+  try {
+    const o = JSON.parse(jsonPart) as {
+      seq?: number;
+      ok?: number | boolean;
+      x_m?: number;
+      y_m?: number;
+      boat_port_cm?: number | null;
+      boat_starboard_cm?: number | null;
+      boat_reference_cm?: number | null;
+    };
+    const now = Date.now();
+    const prev = session.boatGeom;
+    const ok = o.ok === true || o.ok === 1;
+    const boatPort = mergeGeomCm(parseGeomCm(o.boat_port_cm), prev?.boat_port_cm ?? null, prev?.boat_port_at_ms ?? 0, now);
+    const boatStb = mergeGeomCm(
+      parseGeomCm(o.boat_starboard_cm),
+      prev?.boat_starboard_cm ?? null,
+      prev?.boat_starboard_at_ms ?? 0,
+      now,
+    );
+    session.boatGeom = {
+      boat_port_cm: ok ? boatPort.cm : (prev?.boat_port_cm ?? null),
+      boat_starboard_cm: ok ? boatStb.cm : (prev?.boat_starboard_cm ?? null),
+      port_starboard_cm: prev?.port_starboard_cm ?? null,
+      starboard_port_cm: prev?.starboard_port_cm ?? null,
+      boat_port_at_ms: ok ? boatPort.at : (prev?.boat_port_at_ms ?? 0),
+      boat_starboard_at_ms: ok ? boatStb.at : (prev?.boat_starboard_at_ms ?? 0),
+      port_starboard_at_ms: prev?.port_starboard_at_ms ?? 0,
+      starboard_port_at_ms: prev?.starboard_port_at_ms ?? 0,
+      port_uwb: prev?.port_uwb ?? 0,
+      starboard_uwb: prev?.starboard_uwb ?? 0,
+      tdoa_ok: ok,
+      tdoa_seq: typeof o.seq === "number" ? o.seq : prev?.tdoa_seq,
+      x_m: ok && typeof o.x_m === "number" ? o.x_m : prev?.x_m ?? null,
+      y_m: ok && typeof o.y_m === "number" ? o.y_m : prev?.y_m ?? null,
+      boat_reference_cm: ok ? parseGeomCm(o.boat_reference_cm) : prev?.boat_reference_cm ?? null,
+      tdoa_at_ms: ok ? now : prev?.tdoa_at_ms,
+      updatedAtMs: now,
+    };
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
   const jsonPart = line.slice("$PREGGEOM,".length).trim();
   try {
@@ -1912,14 +1974,30 @@ function renderBoatGeom(session: BleBoatSession | null): void {
   if (!g) {
     set("boat-geom-boat-port", "—");
     set("boat-geom-boat-starboard", "—");
+    set("boat-geom-boat-reference", "—");
     set("boat-geom-port-starboard", "—");
     set("boat-geom-starboard-port", "—");
+    set("boat-geom-xy", "—");
     return;
   }
   set("boat-geom-boat-port", withMetricAgo(formatGeomDist(g.boat_port_cm), g.boat_port_at_ms));
   set("boat-geom-boat-starboard", withMetricAgo(formatGeomDist(g.boat_starboard_cm), g.boat_starboard_at_ms));
+  set(
+    "boat-geom-boat-reference",
+    g.boat_reference_cm != null
+      ? withMetricAgo(formatGeomDist(g.boat_reference_cm), g.tdoa_at_ms ?? g.updatedAtMs)
+      : "—",
+  );
   set("boat-geom-port-starboard", withMetricAgo(formatGeomDist(g.port_starboard_cm), g.port_starboard_at_ms));
   set("boat-geom-starboard-port", withMetricAgo(formatGeomDist(g.starboard_port_cm), g.starboard_port_at_ms));
+  if (g.tdoa_ok && g.x_m != null && g.y_m != null) {
+    set(
+      "boat-geom-xy",
+      withMetricAgo(`x=${g.x_m.toFixed(2)} m  y=${g.y_m.toFixed(2)} m (seq ${g.tdoa_seq ?? "—"})`, g.tdoa_at_ms ?? g.updatedAtMs),
+    );
+  } else {
+    set("boat-geom-xy", "—");
+  }
 }
 
 function renderMarkBroadcastPanel(

@@ -18,7 +18,7 @@ extern "C" {
  * slot offsets for Starboard / Reference.
  * Starboard & Reference: estimate α/β from Port sync (propagation-corrected via
  * TWR baseline), then hardware-delayed positioning beacons on the master timeline.
- * Boat: RX-only sniff/log (position solve is a later step).
+ * Boat: RX-only sniff + TDoA solve (local frame: Port origin, Starboard +X).
  *
  * Frame func MARK_BLINK_MSG (0x31). Payload version 2 (see mark_blink.c).
  */
@@ -38,7 +38,7 @@ bool mark_blink_try_handle(const struct rxbuf *rx);
  * Start role-specific behaviour (requires DW3000 ranging already up).
  * Port: 1 Hz master task. Starboard/Reference: sync from RX + RX watchdog.
  * All course marks: baseline TWR in beacon quiet gaps (ps/pr/sr).
- * Boat: sniff + RX watchdog.
+ * Boat: sniff + RX watchdog + TDoA position solve.
  */
 esp_err_t mark_blink_start(void);
 

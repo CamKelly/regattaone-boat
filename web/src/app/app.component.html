@@ -285,12 +285,17 @@
 
             <h3 class="field-label">Boat geometry</h3>
             <p class="tab-hint">
-              On a Boat device: live UWB ranges to Port and Starboard (last good held across
-              failed attempts), plus opposite-mark distances from Meshtastic.
+              On a Boat device: TDoA position from Port / Starboard / Reference UWB beacons
+              (local frame: Port at origin, Starboard +X), plus opposite-mark distances from
+              Meshtastic.
             </p>
             <section class="mark-bcast-panel boat-geom-panel" aria-labelledby="boat-geom-title" aria-live="polite">
-              <h4 id="boat-geom-title" class="mark-bcast-title">Distances</h4>
+              <h4 id="boat-geom-title" class="mark-bcast-title">Distances &amp; TDoA</h4>
               <dl class="mark-bcast-fields">
+                <div class="mark-bcast-row">
+                  <dt>Position (P origin)</dt>
+                  <dd id="boat-geom-xy">—</dd>
+                </div>
                 <div class="mark-bcast-row">
                   <dt>Boat → Port</dt>
                   <dd id="boat-geom-boat-port">—</dd>
@@ -298,6 +303,10 @@
                 <div class="mark-bcast-row">
                   <dt>Boat → Starboard</dt>
                   <dd id="boat-geom-boat-starboard">—</dd>
+                </div>
+                <div class="mark-bcast-row">
+                  <dt>Boat → Reference</dt>
+                  <dd id="boat-geom-boat-reference">—</dd>
                 </div>
                 <div class="mark-bcast-row">
                   <dt>Port → Starboard</dt>

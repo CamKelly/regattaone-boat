@@ -24,8 +24,7 @@ extern "C" {
  *
  * Boat devices do not broadcast. They learn Port/Starboard UWB addresses and
  * baseline distances from mark RX, and sniff UWB mark blinks passively for ToA
- * (see mark_blink). Boat↔mark distances are solved later; $PREGGEOM currently
- * reports port↔starboard distances from LoRa with boat↔mark as null.
+ * (see mark_blink / boat_tdoa). Boat↔mark distances come from the TDoA solve.
  */
 
 #define MARK_BROADCAST_PKT_LEN 18U
@@ -59,6 +58,14 @@ bool mark_broadcast_get_port(mark_broadcast_record_t *out);
 
 /** Boat (or any listener): last heard starboard mark, or false if none. */
 bool mark_broadcast_get_starboard(mark_broadcast_record_t *out);
+
+/**
+ * Boat: publish a passive TDoA fix (updates boat↔mark cm and notifies BLE).
+ * Sends $PREGGEOM (distances) and $PREGTDOA (XY + deltas). No-op if not boat.
+ */
+void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double y_m, double residual_m,
+                                      double delta_sp_m, double delta_rp_m, uint16_t boat_port_cm,
+                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm);
 
 #ifdef __cplusplus
 }

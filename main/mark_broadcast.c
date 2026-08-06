@@ -234,8 +234,7 @@ static void fmt_dist_json(char *buf, size_t buflen, uint16_t cm)
 }
 
 /**
- * Boat → UI: opposite-mark distances from LoRa; boat↔mark left null until
- * passive ToA solve is added.
+ * Boat → UI: opposite-mark distances from LoRa; boat↔mark from TDoA when solved.
  */
 static void boat_geom_ble_notify(void)
 {
@@ -277,6 +276,51 @@ static void boat_geom_ble_notify(void)
         "\"port_starboard_cm\":%s,\"starboard_port_cm\":%s,"
         "\"port_uwb\":%u,\"starboard_uwb\":%u}\n",
         bp, bs, ps, sp, (unsigned)port_uwb, (unsigned)stb_uwb);
+    if (n > 0 && (size_t)n < sizeof(line)) {
+        ble_sen0140_meshtastic_rx_notify((const uint8_t *)line, (size_t)n);
+    }
+}
+
+void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double y_m, double residual_m,
+                                      double delta_sp_m, double delta_rp_m, uint16_t boat_port_cm,
+                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm)
+{
+    if (device_type_get() != DEVICE_TYPE_BOAT) {
+        return;
+    }
+
+    if (ok) {
+        if (s_store_mtx != NULL && xSemaphoreTake(s_store_mtx, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (boat_port_cm != MARK_BROADCAST_DIST_UNKNOWN) {
+                s_boat_to_port_cm = boat_port_cm;
+            }
+            if (boat_starboard_cm != MARK_BROADCAST_DIST_UNKNOWN) {
+                s_boat_to_starboard_cm = boat_starboard_cm;
+            }
+            xSemaphoreGive(s_store_mtx);
+        } else {
+            if (boat_port_cm != MARK_BROADCAST_DIST_UNKNOWN) {
+                s_boat_to_port_cm = boat_port_cm;
+            }
+            if (boat_starboard_cm != MARK_BROADCAST_DIST_UNKNOWN) {
+                s_boat_to_starboard_cm = boat_starboard_cm;
+            }
+        }
+        boat_geom_ble_notify();
+    }
+
+    char br[12];
+    fmt_dist_json(br, sizeof(br), boat_reference_cm);
+
+    char line[320];
+    const int n = snprintf(
+        line, sizeof(line),
+        "$PREGTDOA,{\"seq\":%lu,\"ok\":%u,\"x_m\":%.3f,\"y_m\":%.3f,\"residual_m\":%.4f,"
+        "\"delta_sp_m\":%.3f,\"delta_rp_m\":%.3f,"
+        "\"boat_port_cm\":%u,\"boat_starboard_cm\":%u,\"boat_reference_cm\":%s}\n",
+        (unsigned long)seq, ok ? 1U : 0U, x_m, y_m, residual_m, delta_sp_m, delta_rp_m,
+        (unsigned)(boat_port_cm == MARK_BROADCAST_DIST_UNKNOWN ? 0U : boat_port_cm),
+        (unsigned)(boat_starboard_cm == MARK_BROADCAST_DIST_UNKNOWN ? 0U : boat_starboard_cm), br);
     if (n > 0 && (size_t)n < sizeof(line)) {
         ble_sen0140_meshtastic_rx_notify((const uint8_t *)line, (size_t)n);
     }
@@ -499,6 +543,22 @@ bool mark_broadcast_get_starboard(mark_broadcast_record_t *out)
 {
     (void)out;
     return false;
+}
+
+void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double y_m, double residual_m,
+                                      double delta_sp_m, double delta_rp_m, uint16_t boat_port_cm,
+                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm)
+{
+    (void)seq;
+    (void)ok;
+    (void)x_m;
+    (void)y_m;
+    (void)residual_m;
+    (void)delta_sp_m;
+    (void)delta_rp_m;
+    (void)boat_port_cm;
+    (void)boat_starboard_cm;
+    (void)boat_reference_cm;
 }
 
 #endif /* CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE */

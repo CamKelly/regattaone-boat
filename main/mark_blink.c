@@ -7,6 +7,7 @@
 #include "device_type.h"
 #include "dw3000_config.h"
 #include "dw3000_ranging.h"
+#include "boat_tdoa.h"
 
 #if CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE
 #include "mark_broadcast.h"
@@ -598,10 +599,36 @@ static void boat_log_beacon(const struct anchor_beacon_msg *msg, uint16_t uwb, u
         const int64_t tx_sp = (int64_t)s_boat_tx_s - (int64_t)s_boat_tx_p;
         const int64_t tx_rp = (int64_t)s_boat_tx_r - (int64_t)s_boat_tx_p;
         ESP_LOGI(TAG,
-                 "triple seq=%lu dToA_S-P=%lld dToA_R-P=%lld dTX_S-P=%lld dTX_R-P=%lld "
-                 "(boat solve later)",
+                 "triple seq=%lu dToA_S-P=%lld dToA_R-P=%lld dTX_S-P=%lld dTX_R-P=%lld",
                  (unsigned long)msg->seq, (long long)d_sp, (long long)d_rp, (long long)tx_sp,
                  (long long)tx_rp);
+
+        uint16_t ps = GEOM_UNKNOWN;
+        uint16_t pr = GEOM_UNKNOWN;
+        uint16_t sr = GEOM_UNKNOWN;
+        geom_snapshot(&ps, &pr, &sr, NULL);
+        /* Prefer geometry carried on this superframe's beacons. */
+        if (msg->dist_ps_cm != GEOM_UNKNOWN) {
+            ps = msg->dist_ps_cm;
+        }
+        if (msg->dist_pr_cm != GEOM_UNKNOWN) {
+            pr = msg->dist_pr_cm;
+        }
+        if (msg->dist_sr_cm != GEOM_UNKNOWN) {
+            sr = msg->dist_sr_cm;
+        }
+
+        boat_tdoa_result_t fix;
+        const bool ok =
+            boat_tdoa_solve(msg->seq, s_boat_toa_p, s_boat_toa_s, s_boat_toa_r, s_boat_tx_p,
+                            s_boat_tx_s, s_boat_tx_r, ps, pr, sr, &fix);
+#if CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE
+        mark_broadcast_publish_boat_tdoa(fix.seq, ok, fix.x_m, fix.y_m, fix.residual_m,
+                                         fix.delta_sp_m, fix.delta_rp_m, fix.boat_port_cm,
+                                         fix.boat_starboard_cm, fix.boat_reference_cm);
+#else
+        (void)ok;
+#endif
         s_boat_have_p = s_boat_have_s = s_boat_have_r = false;
     }
 }
@@ -810,7 +837,7 @@ esp_err_t mark_blink_start(void)
         if (start_blink_rx_watchdog() != ESP_OK) {
             return ESP_FAIL;
         }
-        ESP_LOGI(TAG, "Boat beacon sniff armed (UWB TX suppressed; no position solve yet)");
+        ESP_LOGI(TAG, "Boat beacon sniff + TDoA solve armed (UWB TX suppressed)");
     } else {
         ESP_LOGI(TAG, "mark blink idle (device type %d)", (int)t);
     }
