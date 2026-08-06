@@ -90,9 +90,9 @@ static bool s_clk_have_prev;
 static uint64_t s_clk_prev_r;
 static uint64_t s_clk_prev_tm;
 
-/* Boat sniff */
+/* RX liveness (boat sniff + S/R Port-sync). Port TX is free-running and does not need this. */
 static volatile int64_t s_last_blink_us;
-static uint32_t s_boat_rx_recoveries;
+static uint32_t s_rx_recoveries;
 static uint32_t s_boat_last_seq;
 static bool s_boat_have_p;
 static bool s_boat_have_s;
@@ -104,8 +104,8 @@ static uint64_t s_boat_tx_p;
 static uint64_t s_boat_tx_s;
 static uint64_t s_boat_tx_r;
 
-#define BOAT_BLINK_STALE_US (2500LL * 1000LL)
-#define BOAT_BLINK_WATCHDOG_MS 1000U
+#define BLINK_RX_STALE_US (2500LL * 1000LL)
+#define BLINK_RX_WATCHDOG_MS 1000U
 #define ANCHOR_RANGE_PERIOD_MS 10000U
 
 static void geom_lock(void)
@@ -409,6 +409,7 @@ static void maybe_range_peers(void)
 
 static void on_port_sync_for_slave(const struct anchor_beacon_msg *msg, uint16_t src, uint64_t rx_toa)
 {
+    note_blink_rx();
     note_peer_uwb(ANCHOR_ROLE_PORT, src);
     geom_merge_from_beacon(msg);
     pull_lora_baseline();
@@ -600,12 +601,19 @@ static void slave_maintain_task(void *arg)
     }
 }
 
-static void boat_blink_watchdog_task(void *arg)
+/**
+ * Port beacons on a free-running timer and does not need RX to keep TX alive.
+ * Starboard/Reference only TX after hearing Port, so a stuck UWB RX silences them
+ * permanently. Boat is RX-only sniff. Same Meshtastic/load stall that needed a
+ * boat watchdog also hits S/R — recover with forcetrxoff + RX re-arm.
+ */
+static void blink_rx_watchdog_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(BOAT_BLINK_WATCHDOG_MS));
-        if (device_type_get() != DEVICE_TYPE_BOAT) {
+        vTaskDelay(pdMS_TO_TICKS(BLINK_RX_WATCHDOG_MS));
+        const device_type_t me = device_type_get();
+        if (me != DEVICE_TYPE_BOAT && me != DEVICE_TYPE_STARBOARD && me != DEVICE_TYPE_REFERENCE) {
             continue;
         }
         if (twr_in_progress()) {
@@ -618,17 +626,29 @@ static void boat_blink_watchdog_task(void *arg)
 
         dwmac_rx_reenable();
 
-        if (age_us < BOAT_BLINK_STALE_US) {
+        if (age_us < BLINK_RX_STALE_US) {
             continue;
         }
 
-        s_boat_rx_recoveries++;
+        s_rx_recoveries++;
+        const char *who = me == DEVICE_TYPE_BOAT       ? "boat"
+                          : me == DEVICE_TYPE_STARBOARD ? "starboard"
+                                                        : "reference";
         ESP_LOGW(TAG,
-                 "boat UWB sniff stale (no beacon for %lld ms) — forcetrxoff + RX re-arm #%lu",
-                 (long long)(age_us / 1000), (unsigned long)s_boat_rx_recoveries);
+                 "%s UWB RX stale (no Port/beacon for %lld ms) — forcetrxoff + RX re-arm #%lu",
+                 who, (long long)(age_us / 1000), (unsigned long)s_rx_recoveries);
         dwt_forcetrxoff();
         dwmac_rx_reenable();
     }
+}
+
+static esp_err_t start_blink_rx_watchdog(void)
+{
+    if (xTaskCreate(blink_rx_watchdog_task, "blink_wd", 3072, NULL, 6, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "blink RX watchdog create failed");
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 esp_err_t mark_blink_start(void)
@@ -660,14 +680,17 @@ esp_err_t mark_blink_start(void)
             ESP_LOGE(TAG, "slave maintain task create failed");
             return ESP_FAIL;
         }
-        ESP_LOGI(TAG, "%s slave armed (master=Port, slot=%u us)",
+        s_last_blink_us = 0;
+        if (start_blink_rx_watchdog() != ESP_OK) {
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "%s slave armed (master=Port, slot=%u us, RX watchdog on)",
                  t == DEVICE_TYPE_STARBOARD ? "Starboard" : "Reference",
                  (unsigned)(t == DEVICE_TYPE_STARBOARD ? CONFIG_MARK_BLINK_SLOT_STARBOARD_US
                                                        : CONFIG_MARK_BLINK_SLOT_REFERENCE_US));
     } else if (t == DEVICE_TYPE_BOAT) {
         s_last_blink_us = 0;
-        if (xTaskCreate(boat_blink_watchdog_task, "blink_wd", 3072, NULL, 6, NULL) != pdPASS) {
-            ESP_LOGE(TAG, "boat blink watchdog create failed");
+        if (start_blink_rx_watchdog() != ESP_OK) {
             return ESP_FAIL;
         }
         ESP_LOGI(TAG, "Boat beacon sniff armed (UWB TX suppressed; no position solve yet)");

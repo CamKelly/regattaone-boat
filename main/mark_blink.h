@@ -36,7 +36,8 @@ bool mark_blink_try_handle(const struct rxbuf *rx);
 
 /**
  * Start role-specific behaviour (requires DW3000 ranging already up).
- * Port: 1 Hz master task. Starboard/Reference: sync from RX. Boat: sniff + watchdog.
+ * Port: 1 Hz master task. Starboard/Reference: sync from RX + RX watchdog.
+ * Boat: sniff + RX watchdog.
  */
 esp_err_t mark_blink_start(void);
 
