@@ -170,9 +170,10 @@
                   Periodic anchor TWR (Port ↔ Starboard ↔ Reference)
                 </label>
                 <p class="field-hint">
-                  Off by default so beacon sync is not interrupted. Turn on when you need live
-                  triangle baselines in UWB beacons. Manual Measure below still works when off.
-                  LoRa mark broadcasts keep using their last good distance.
+                  Measures ps / pr / sr about every 10 s in the quiet gap after each UWB beacon
+                  superframe so beacons are only skipped if a range is still in flight. Port
+                  measures ps+pr; Starboard measures sr; Reference responds. Turn off to keep
+                  the radio beacon-only. Manual Measure below still works when off.
                 </p>
               </div>
               <div nz-col [nzSpan]="24">

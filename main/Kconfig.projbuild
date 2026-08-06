@@ -319,6 +319,27 @@ menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
             Kept so existing sdkconfig values still parse. Slots above replace
             the old RX-triggered Fixed_Delay chain.
 
+    config MARK_BLINK_ANCHOR_TWR_INTERVAL_MS
+        int "Course-mark baseline TWR interval (ms)"
+        range 2000 120000
+        default 10000
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            How often Port/Starboard/Reference refresh Port↔Starboard,
+            Port↔Reference, and Starboard↔Reference distances via DS-TWR.
+            Runs in the quiet gap after the UWB beacon superframe so beacons
+            are only skipped if a range is still in flight. Default 10000 ms.
+            Runtime enable/disable is dw3000 config anchor_twr (BLE/NVS).
+
+    config MARK_BLINK_ANCHOR_TWR_DEFAULT
+        bool "Enable course-mark baseline TWR by default"
+        default y
+        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
+        help
+            Default for dw3000 config anchor_twr when unset in NVS. Port
+            measures ps+pr; Starboard measures sr; Reference responds only.
+            Can be toggled at runtime over BLE without reflashing.
+
     config BOAT_RANGE_INTERVAL_MS
         int "Boat ranging interval (ms) [deprecated — boats are UWB-passive]"
         range 500 60000

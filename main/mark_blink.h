@@ -37,6 +37,7 @@ bool mark_blink_try_handle(const struct rxbuf *rx);
 /**
  * Start role-specific behaviour (requires DW3000 ranging already up).
  * Port: 1 Hz master task. Starboard/Reference: sync from RX + RX watchdog.
+ * All course marks: baseline TWR in beacon quiet gaps (ps/pr/sr).
  * Boat: sniff + RX watchdog.
  */
 esp_err_t mark_blink_start(void);
@@ -46,6 +47,13 @@ esp_err_t mark_blink_start(void);
  * Pass ANCHOR_DIST_UNKNOWN to leave a field unchanged.
  */
 void mark_blink_set_geometry_cm(uint16_t dist_ps_cm, uint16_t dist_pr_cm, uint16_t dist_sr_cm);
+
+/**
+ * Read current beacon geometry baselines (cm). NULL outs are ignored.
+ * Unknown fields are ANCHOR_DIST_UNKNOWN.
+ */
+void mark_blink_get_geometry_cm(uint16_t *dist_ps_cm, uint16_t *dist_pr_cm, uint16_t *dist_sr_cm,
+                                uint16_t *geom_ver);
 
 #ifdef __cplusplus
 }

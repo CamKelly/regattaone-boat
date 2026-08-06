@@ -44,9 +44,21 @@ static const char *TAG = "mark_blink";
 #ifndef CONFIG_MARK_BLINK_PORT_PREP_MS
 #define CONFIG_MARK_BLINK_PORT_PREP_MS 2
 #endif
+#ifndef CONFIG_MARK_BLINK_ANCHOR_TWR_INTERVAL_MS
+#define CONFIG_MARK_BLINK_ANCHOR_TWR_INTERVAL_MS 10000
+#endif
 
 #define ANCHOR_BEACON_VER 2U
 #define GEOM_UNKNOWN ANCHOR_DIST_UNKNOWN
+
+/** Quiet gap after Port TX (covers S/R slots + airtime) before baseline TWR. */
+#define BEACON_SUPERFRAME_GUARD_MS 25U
+/** Per-peer DS-TWR timeout (keep short so a miss doesn't eat the gap). */
+#define ANCHOR_TWR_TIMEOUT_MS 400U
+/** Do not start TWR if the next Port beacon is closer than this (covers one TWR). */
+#define BEACON_TWR_PRE_GUARD_MS (ANCHOR_TWR_TIMEOUT_MS + 100U)
+/** Max wait for a quiet window before skipping this TWR cycle. */
+#define BEACON_TWR_QUIET_WAIT_MS 1500U
 
 /**
  * v2 beacon — Port sync+pos or slave positioning.
@@ -106,7 +118,9 @@ static uint64_t s_boat_tx_r;
 
 #define BLINK_RX_STALE_US (2500LL * 1000LL)
 #define BLINK_RX_WATCHDOG_MS 1000U
-#define ANCHOR_RANGE_PERIOD_MS 10000U
+
+/** Port's last successful beacon TX (master quiet-window reference). */
+static volatile int64_t s_last_port_tx_us;
 
 static void geom_lock(void)
 {
@@ -165,6 +179,12 @@ static void geom_snapshot(uint16_t *ps, uint16_t *pr, uint16_t *sr, uint16_t *ve
         *ver = s_geom_ver;
     }
     geom_unlock();
+}
+
+void mark_blink_get_geometry_cm(uint16_t *dist_ps_cm, uint16_t *dist_pr_cm, uint16_t *dist_sr_cm,
+                                uint16_t *geom_ver)
+{
+    geom_snapshot(dist_ps_cm, dist_pr_cm, dist_sr_cm, geom_ver);
 }
 
 static void note_peer_uwb(uint8_t role, uint16_t uwb)
@@ -314,6 +334,13 @@ static void pull_lora_baseline(void)
     mark_broadcast_record_t stb;
     const bool have_p = mark_broadcast_get_port(&port);
     const bool have_s = mark_broadcast_get_starboard(&stb);
+    /* LoRa teaches Port/Starboard UWB addrs before (or without) hearing their beacons. */
+    if (have_p && port.uwb_addr != 0) {
+        note_peer_uwb(ANCHOR_ROLE_PORT, port.uwb_addr);
+    }
+    if (have_s && stb.uwb_addr != 0) {
+        note_peer_uwb(ANCHOR_ROLE_STARBOARD, stb.uwb_addr);
+    }
     const bool p_ok = have_p && port.dist_cm != MARK_BROADCAST_DIST_UNKNOWN;
     const bool s_ok = have_s && stb.dist_cm != MARK_BROADCAST_DIST_UNKNOWN;
     if (!p_ok && !s_ok) {
@@ -329,7 +356,105 @@ static void pull_lora_baseline(void)
 #endif
 }
 
-static void maybe_range_peers(void)
+/**
+ * Partition initiators so links are not double-measured / collided:
+ *   Port → Starboard (ps), Port → Reference (pr)
+ *   Starboard → Reference (sr)
+ *   Reference: respond only
+ */
+static int collect_twr_targets(uint16_t *targets, int max_n)
+{
+    if (targets == NULL || max_n <= 0) {
+        return 0;
+    }
+    const device_type_t me = device_type_get();
+    int n = 0;
+    geom_lock();
+    if (me == DEVICE_TYPE_PORT) {
+        if (n < max_n && s_have_uwb_s) {
+            targets[n++] = s_uwb_starboard;
+        }
+        if (n < max_n && s_have_uwb_r) {
+            targets[n++] = s_uwb_reference;
+        }
+    } else if (me == DEVICE_TYPE_STARBOARD) {
+        if (n < max_n && s_have_uwb_r) {
+            targets[n++] = s_uwb_reference;
+        }
+    }
+    geom_unlock();
+    return n;
+}
+
+static void apply_twr_result(uint16_t peer, uint16_t cm)
+{
+    const device_type_t me = device_type_get();
+    geom_lock();
+    const bool to_s = s_have_uwb_s && peer == s_uwb_starboard;
+    const bool to_r = s_have_uwb_r && peer == s_uwb_reference;
+    geom_unlock();
+
+    if (me == DEVICE_TYPE_PORT && to_s) {
+        mark_blink_set_geometry_cm(cm, GEOM_UNKNOWN, GEOM_UNKNOWN);
+        ESP_LOGI(TAG, "baseline ps=%u cm (Port→Starboard 0x%04X)", (unsigned)cm, (unsigned)peer);
+    } else if (me == DEVICE_TYPE_PORT && to_r) {
+        mark_blink_set_geometry_cm(GEOM_UNKNOWN, cm, GEOM_UNKNOWN);
+        ESP_LOGI(TAG, "baseline pr=%u cm (Port→Reference 0x%04X)", (unsigned)cm, (unsigned)peer);
+    } else if (me == DEVICE_TYPE_STARBOARD && to_r) {
+        mark_blink_set_geometry_cm(GEOM_UNKNOWN, GEOM_UNKNOWN, cm);
+        ESP_LOGI(TAG, "baseline sr=%u cm (Starboard→Reference 0x%04X)", (unsigned)cm, (unsigned)peer);
+    }
+}
+
+/** True when UWB is past the beacon superframe and clear of the next Port edge. */
+static bool in_beacon_quiet_window(void)
+{
+    const int64_t now = esp_timer_get_time();
+    const int64_t guard_us = (int64_t)BEACON_SUPERFRAME_GUARD_MS * 1000LL;
+    const int64_t pre_us = (int64_t)BEACON_TWR_PRE_GUARD_MS * 1000LL;
+    const int64_t interval_us = (int64_t)CONFIG_MARK_BLINK_INTERVAL_MS * 1000LL;
+
+    int64_t anchor_us = 0;
+    if (device_type_get() == DEVICE_TYPE_PORT) {
+        anchor_us = s_last_port_tx_us;
+    } else {
+        anchor_us = s_last_blink_us;
+    }
+    if (anchor_us <= 0) {
+        return false;
+    }
+
+    const int64_t since = now - anchor_us;
+    if (since < guard_us) {
+        return false;
+    }
+    /* Phase within the Port beacon period (best-effort for S/R). */
+    int64_t phase = since % interval_us;
+    if (phase < 0) {
+        phase += interval_us;
+    }
+    if (phase < guard_us) {
+        return false;
+    }
+    if ((interval_us - phase) < pre_us) {
+        return false;
+    }
+    return true;
+}
+
+static bool wait_beacon_quiet(uint32_t max_wait_ms)
+{
+    const int64_t deadline = esp_timer_get_time() + (int64_t)max_wait_ms * 1000LL;
+    while (esp_timer_get_time() < deadline) {
+        if (!twr_in_progress() && in_beacon_quiet_window()) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    return false;
+}
+
+static void range_peers_in_gap(void)
 {
     const dw3000_config_t *cfg = dw3000_config_get();
     if (cfg == NULL || !cfg->anchor_twr) {
@@ -337,72 +462,55 @@ static void maybe_range_peers(void)
     }
 
     const device_type_t me = device_type_get();
-    if (!device_type_is_course_mark(me)) {
+    if (me != DEVICE_TYPE_PORT && me != DEVICE_TYPE_STARBOARD) {
+        /* Reference answers TWR but does not initiate. */
         return;
     }
-    if (twr_in_progress()) {
-        return;
+
+#if CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE && CONFIG_MARK_BROADCAST_PEER_UWB_ADDR != 0
+    /* Optional fixed opposite-mark address before LoRa/UWB discovery. */
+    if (me == DEVICE_TYPE_PORT) {
+        note_peer_uwb(ANCHOR_ROLE_STARBOARD, (uint16_t)CONFIG_MARK_BROADCAST_PEER_UWB_ADDR);
+    } else if (me == DEVICE_TYPE_STARBOARD) {
+        note_peer_uwb(ANCHOR_ROLE_PORT, (uint16_t)CONFIG_MARK_BROADCAST_PEER_UWB_ADDR);
     }
+#endif
 
     uint16_t targets[2];
-    int n = 0;
-
-    geom_lock();
-    if (me == DEVICE_TYPE_PORT) {
-        if (s_have_uwb_s) {
-            targets[n++] = s_uwb_starboard;
-        }
-        if (s_have_uwb_r) {
-            targets[n++] = s_uwb_reference;
-        }
-    } else if (me == DEVICE_TYPE_STARBOARD) {
-        if (s_have_uwb_p) {
-            targets[n++] = s_uwb_port;
-        }
-        if (s_have_uwb_r) {
-            targets[n++] = s_uwb_reference;
-        }
-    } else if (me == DEVICE_TYPE_REFERENCE) {
-        if (s_have_uwb_p) {
-            targets[n++] = s_uwb_port;
-        }
-        if (s_have_uwb_s) {
-            targets[n++] = s_uwb_starboard;
-        }
+    const int n = collect_twr_targets(targets, 2);
+    if (n == 0) {
+        ESP_LOGD(TAG, "anchor TWR skipped — peer UWB addr not learned yet");
+        return;
     }
-    geom_unlock();
 
     for (int i = 0; i < n; i++) {
+        if (!wait_beacon_quiet(BEACON_TWR_QUIET_WAIT_MS)) {
+            ESP_LOGW(TAG, "anchor TWR deferred — no quiet gap before next beacon");
+            return;
+        }
+        if (twr_in_progress()) {
+            return;
+        }
+
         const uint16_t peer = targets[i];
         if (peer == 0 || peer == dw3000_ranging_self_addr()) {
             continue;
         }
+
         uint16_t cm = 0;
-        const esp_err_t err = dw3000_range_to(peer, &cm, 500);
+        const esp_err_t err = dw3000_range_to(peer, &cm, ANCHOR_TWR_TIMEOUT_MS);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "anchor TWR to 0x%04X failed (%s)", (unsigned)peer, esp_err_to_name(err));
-            continue;
+        } else {
+            apply_twr_result(peer, cm);
         }
-        ESP_LOGI(TAG, "anchor TWR to 0x%04X = %u cm", (unsigned)peer, (unsigned)cm);
 
-        geom_lock();
-        const bool to_s = s_have_uwb_s && peer == s_uwb_starboard;
-        const bool to_r = s_have_uwb_r && peer == s_uwb_reference;
-        const bool to_p = s_have_uwb_p && peer == s_uwb_port;
-        geom_unlock();
-
-        if (me == DEVICE_TYPE_PORT && to_s) {
-            mark_blink_set_geometry_cm(cm, GEOM_UNKNOWN, GEOM_UNKNOWN);
-        } else if (me == DEVICE_TYPE_PORT && to_r) {
-            mark_blink_set_geometry_cm(GEOM_UNKNOWN, cm, GEOM_UNKNOWN);
-        } else if (me == DEVICE_TYPE_STARBOARD && to_p) {
-            mark_blink_set_geometry_cm(cm, GEOM_UNKNOWN, GEOM_UNKNOWN);
-        } else if (me == DEVICE_TYPE_STARBOARD && to_r) {
-            mark_blink_set_geometry_cm(GEOM_UNKNOWN, GEOM_UNKNOWN, cm);
-        } else if (me == DEVICE_TYPE_REFERENCE && to_p) {
-            mark_blink_set_geometry_cm(GEOM_UNKNOWN, cm, GEOM_UNKNOWN);
-        } else if (me == DEVICE_TYPE_REFERENCE && to_s) {
-            mark_blink_set_geometry_cm(GEOM_UNKNOWN, GEOM_UNKNOWN, cm);
+        /* One peer per quiet gap — wait out this window before the next range. */
+        if (i + 1 < n) {
+            const int64_t leave_deadline = esp_timer_get_time() + 2000LL * 1000LL;
+            while (esp_timer_get_time() < leave_deadline && in_beacon_quiet_window()) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
         }
     }
 }
@@ -563,7 +671,6 @@ static void port_master_task(void *arg)
     (void)arg;
     const uint32_t interval_ms = (uint32_t)CONFIG_MARK_BLINK_INTERVAL_MS;
     const uint32_t prep_ms = (uint32_t)CONFIG_MARK_BLINK_PORT_PREP_MS;
-    int64_t last_range_us = 0;
 
     vTaskDelay(pdMS_TO_TICKS(200 + (dw3000_ranging_self_addr() & 0x1FFU)));
 
@@ -571,33 +678,47 @@ static void port_master_task(void *arg)
         if (device_type_get() == DEVICE_TYPE_PORT) {
             pull_lora_baseline();
 
-            const int64_t now = esp_timer_get_time();
-            if (last_range_us == 0 || (now - last_range_us) >= (int64_t)ANCHOR_RANGE_PERIOD_MS * 1000LL) {
-                maybe_range_peers();
-                last_range_us = esp_timer_get_time();
-            }
-
+            /* Never run TWR here — prep slack is only a few ms and TWR would
+             * steal it (late delayed-TX). Baseline ranging lives in the gap. */
             uint64_t send_dtu = dw_timestamp_extend(dw_get_systime());
             send_dtu += (uint64_t)MS_TO_DTU((double)prep_ms);
             /* Match libdeca sync.c: advertised TX includes antenna delay. */
             const uint64_t tx_master = send_dtu + (uint64_t)DWPHY_ANTENNA_DELAY;
             const uint32_t seq = ++s_port_seq;
-            (void)tx_beacon(ANCHOR_ROLE_PORT, seq, tx_master, send_dtu);
+            if (tx_beacon(ANCHOR_ROLE_PORT, seq, tx_master, send_dtu)) {
+                s_last_port_tx_us = esp_timer_get_time();
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(interval_ms));
     }
 }
 
-static void slave_maintain_task(void *arg)
+/**
+ * Course-mark baseline TWR in the post-superframe quiet gap.
+ * Beacons only skip when twr_in_progress() at TX time (rare if timing holds).
+ */
+static void anchor_twr_task(void *arg)
 {
     (void)arg;
+    const uint32_t interval_ms = (uint32_t)CONFIG_MARK_BLINK_ANCHOR_TWR_INTERVAL_MS;
+
+    /* Stagger first cycle: Port earlier in the gap, Starboard later (avoids R clash). */
+    uint32_t boot_delay_ms = 1500;
+    if (device_type_get() == DEVICE_TYPE_STARBOARD) {
+        boot_delay_ms = 1800;
+    } else if (device_type_get() == DEVICE_TYPE_REFERENCE) {
+        boot_delay_ms = 2000; /* respond-only; still runs so enable/disable is live */
+    }
+    boot_delay_ms += (dw3000_ranging_self_addr() & 0x7FU) * 5U;
+    vTaskDelay(pdMS_TO_TICKS(boot_delay_ms));
+
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(ANCHOR_RANGE_PERIOD_MS));
         const device_type_t me = device_type_get();
-        if (me == DEVICE_TYPE_STARBOARD || me == DEVICE_TYPE_REFERENCE) {
+        if (device_type_is_course_mark(me)) {
             pull_lora_baseline();
-            maybe_range_peers();
+            range_peers_in_gap();
         }
+        vTaskDelay(pdMS_TO_TICKS(interval_ms));
     }
 }
 
@@ -676,10 +797,6 @@ esp_err_t mark_blink_start(void)
                  (unsigned)CONFIG_MARK_BLINK_SLOT_STARBOARD_US,
                  (unsigned)CONFIG_MARK_BLINK_SLOT_REFERENCE_US);
     } else if (t == DEVICE_TYPE_STARBOARD || t == DEVICE_TYPE_REFERENCE) {
-        if (xTaskCreate(slave_maintain_task, "anchor_slave", 4096, NULL, 5, NULL) != pdPASS) {
-            ESP_LOGE(TAG, "slave maintain task create failed");
-            return ESP_FAIL;
-        }
         s_last_blink_us = 0;
         if (start_blink_rx_watchdog() != ESP_OK) {
             return ESP_FAIL;
@@ -696,6 +813,15 @@ esp_err_t mark_blink_start(void)
         ESP_LOGI(TAG, "Boat beacon sniff armed (UWB TX suppressed; no position solve yet)");
     } else {
         ESP_LOGI(TAG, "mark blink idle (device type %d)", (int)t);
+    }
+
+    if (device_type_is_course_mark(t)) {
+        if (xTaskCreate(anchor_twr_task, "anchor_twr", 4096, NULL, 4, NULL) != pdPASS) {
+            ESP_LOGE(TAG, "anchor TWR task create failed");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "anchor baseline TWR task started (interval=%u ms, default/NVS via anchor_twr)",
+                 (unsigned)CONFIG_MARK_BLINK_ANCHOR_TWR_INTERVAL_MS);
     }
 
     s_started = true;
@@ -720,6 +846,23 @@ void mark_blink_set_geometry_cm(uint16_t dist_ps_cm, uint16_t dist_pr_cm, uint16
     (void)dist_ps_cm;
     (void)dist_pr_cm;
     (void)dist_sr_cm;
+}
+
+void mark_blink_get_geometry_cm(uint16_t *dist_ps_cm, uint16_t *dist_pr_cm, uint16_t *dist_sr_cm,
+                                uint16_t *geom_ver)
+{
+    if (dist_ps_cm) {
+        *dist_ps_cm = ANCHOR_DIST_UNKNOWN;
+    }
+    if (dist_pr_cm) {
+        *dist_pr_cm = ANCHOR_DIST_UNKNOWN;
+    }
+    if (dist_sr_cm) {
+        *dist_sr_cm = ANCHOR_DIST_UNKNOWN;
+    }
+    if (geom_ver) {
+        *geom_ver = 0;
+    }
 }
 
 #endif

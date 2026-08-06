@@ -32,6 +32,9 @@ static dw3000_config_t default_config(void)
     d.panid = (uint16_t)CONFIG_DW3000_PANID;
     d.antenna_delay = (uint16_t)CONFIG_DW3000_ANTENNA_DELAY;
     d.twr_delay_us = (uint32_t)CONFIG_DW3000_TWR_PROCESSING_DELAY_US;
+#if defined(CONFIG_MARK_BLINK_ANCHOR_TWR_DEFAULT) && CONFIG_MARK_BLINK_ANCHOR_TWR_DEFAULT
+    d.anchor_twr = true;
+#endif
 #endif
     return d;
 }

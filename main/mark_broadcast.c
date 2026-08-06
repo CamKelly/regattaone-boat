@@ -105,18 +105,6 @@ static void update_opposite_peer_uwb(mark_role_t my_role, mark_role_t their_role
     }
 }
 
-static uint16_t peer_uwb_get(bool *known_out)
-{
-    peer_lock();
-    const uint16_t peer = s_peer_uwb;
-    const bool known = s_peer_uwb_known;
-    peer_unlock();
-    if (known_out != NULL) {
-        *known_out = known;
-    }
-    return peer;
-}
-
 static void put_be16(uint8_t *p, uint16_t v)
 {
     p[0] = (uint8_t)(v >> 8);
@@ -235,60 +223,6 @@ static mark_role_t local_role(void)
     return (mark_role_t)0;
 }
 
-static void maybe_range_peer(void)
-{
-#if CONFIG_DW3000_RANGING_ENABLE
-    const dw3000_config_t *cfg = dw3000_config_get();
-    if (cfg == NULL || !cfg->anchor_twr) {
-        return;
-    }
-
-    const char *role_name = local_role() == MARK_ROLE_PORT ? "port" : "starboard";
-    const char *opp_name = local_role() == MARK_ROLE_PORT ? "starboard" : "port";
-
-    bool known = false;
-    uint16_t peer = peer_uwb_get(&known);
-    if (!known) {
-#if CONFIG_MARK_BROADCAST_PEER_UWB_ADDR != 0
-        peer = (uint16_t)CONFIG_MARK_BROADCAST_PEER_UWB_ADDR;
-        peer_lock();
-        s_peer_uwb = peer;
-        s_peer_uwb_known = true;
-        peer_unlock();
-        known = true;
-#else
-        /* Wait until the opposite mark's broadcast teaches us its UWB address. */
-        ESP_LOGI(TAG, "%s → %s UWB range skipped: opposite address not learned yet", role_name, opp_name);
-        return;
-#endif
-    }
-    if (peer == 0U || peer == self_uwb_addr()) {
-        ESP_LOGW(TAG, "%s → %s UWB range skipped: peer 0x%04X invalid (self=0x%04X)", role_name, opp_name,
-                 (unsigned)peer, (unsigned)self_uwb_addr());
-        return;
-    }
-    uint16_t cm = 0;
-    ESP_LOGI(TAG, "%s → %s UWB range: measuring to 0x%04X…", role_name, opp_name, (unsigned)peer);
-    const esp_err_t err = dw3000_range_to(peer, &cm, 500);
-    if (err == ESP_OK) {
-        s_last_dist_cm = cm;
-        s_last_dist_ok = true;
-        ESP_LOGI(TAG, "%s → %s UWB range: OK 0x%04X = %u cm (%.2f m)", role_name, opp_name, (unsigned)peer,
-                 (unsigned)cm, (double)cm / 100.0);
-#if CONFIG_DW3000_RANGING_ENABLE
-        /* Feed Port↔Starboard baseline into UWB beacon geometry. */
-        mark_blink_set_geometry_cm(cm, ANCHOR_DIST_UNKNOWN, ANCHOR_DIST_UNKNOWN);
-#endif
-    } else {
-        ESP_LOGW(TAG, "%s → %s UWB range: FAILED 0x%04X (%s) — keeping last %s", role_name, opp_name,
-                 (unsigned)peer, esp_err_to_name(err),
-                 s_last_dist_ok ? "value" : "unknown");
-    }
-#else
-    (void)0;
-#endif
-}
-
 /** Format cm for JSON: 65535 means unknown → null. */
 static void fmt_dist_json(char *buf, size_t buflen, uint16_t cm)
 {
@@ -362,11 +296,27 @@ static void mark_tx_once(void)
     }
 #endif
 
-    maybe_range_peer();
+    /* Baseline TWR lives in mark_blink quiet gaps — do not range here (would
+     * collide with UWB beacons). Prefer blink geometry; fall back to last LoRa. */
+    uint16_t dist = MARK_BROADCAST_DIST_UNKNOWN;
+#if CONFIG_DW3000_RANGING_ENABLE
+    uint16_t ps = ANCHOR_DIST_UNKNOWN;
+    mark_blink_get_geometry_cm(&ps, NULL, NULL, NULL);
+    if (ps != ANCHOR_DIST_UNKNOWN) {
+        dist = ps;
+        s_last_dist_cm = ps;
+        s_last_dist_ok = true;
+    } else if (s_last_dist_ok) {
+        dist = s_last_dist_cm;
+    }
+#else
+    if (s_last_dist_ok) {
+        dist = s_last_dist_cm;
+    }
+#endif
 
     gps_fix_t fix = {0};
     const bool have_fix = gps_fix_get(&fix);
-    const uint16_t dist = s_last_dist_ok ? s_last_dist_cm : MARK_BROADCAST_DIST_UNKNOWN;
 
     uint8_t pkt[MARK_BROADCAST_PKT_LEN];
     encode_packet(role, self_uwb_addr(), have_fix ? &fix : NULL, dist, pkt);

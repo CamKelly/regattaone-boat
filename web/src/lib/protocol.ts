@@ -94,7 +94,7 @@ export interface Dwm3000Config {
   pan: number;
   ant: number;
   twr: number;
-  /** Periodic anchor↔anchor TWR for beacon geometry (default off). */
+  /** Periodic course-mark TWR for beacon geometry (ps/pr/sr); default on in firmware. */
   anchor_twr: boolean;
 }
 
@@ -103,7 +103,7 @@ export const DWM3000_DEFAULTS: Dwm3000Config = {
   pan: 0xdeca,
   ant: 16368,
   twr: 2000,
-  anchor_twr: false,
+  anchor_twr: true,
 };
 
 export function parseDwm3000ConfigJson(raw: string): Dwm3000Config | null {

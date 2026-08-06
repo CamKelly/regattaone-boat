@@ -15,7 +15,7 @@ typedef struct {
     uint16_t panid;
     uint16_t antenna_delay;
     uint32_t twr_delay_us;
-    /** Periodic Port/Starboard/Reference TWR for beacon geometry (default off). */
+    /** Periodic Port/Starboard/Reference TWR for beacon geometry (default on via Kconfig). */
     bool anchor_twr;
 } dw3000_config_t;
 
