@@ -93,6 +93,8 @@ bool boat_tdoa_solve(uint32_t seq, uint64_t toa_p, uint64_t toa_s, uint64_t toa_
                  (unsigned long)seq, b, pr, sr);
         return false;
     }
+    out->reference_x_m = xr;
+    out->reference_y_m = yr;
 
     /* Range differences from TDoA (metres). */
     const int64_t dtoa_sp = (int64_t)toa_s - (int64_t)toa_p;

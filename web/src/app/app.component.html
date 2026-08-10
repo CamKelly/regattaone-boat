@@ -109,6 +109,35 @@
             </div>
           </nz-tab>
 
+          <nz-tab nzTitle="Position">
+            <p id="relative-position-status" class="tab-hint">
+              Connect to a Boat device and wait for a valid three-anchor TDoA fix.
+            </p>
+            <div class="relative-position-toolbar">
+              <label class="field-label" for="relative-position-flip-y">
+                <input id="relative-position-flip-y" type="checkbox" />
+                Flip Y for physical course orientation
+              </label>
+              <span id="relative-position-coordinates" class="relative-position-coordinates">—</span>
+            </div>
+            <div class="relative-position-readout" aria-live="polite">
+              <div><strong>P · Port</strong><span id="relative-position-p">—</span></div>
+              <div><strong>S · Starboard</strong><span id="relative-position-s">—</span></div>
+              <div><strong>R · Reference</strong><span id="relative-position-r">—</span></div>
+              <div><strong>B · Boat</strong><span id="relative-position-b">—</span></div>
+            </div>
+            <div
+              id="relative-position-chart"
+              class="relative-position-chart"
+              role="img"
+              aria-label="Relative positions of Port, Starboard, Reference and Boat"
+            ></div>
+            <p class="field-hint">
+              Port is the origin and Starboard defines +X. The blue line shows the latest 30 valid boat fixes.
+              Reference is shown after firmware supplies its solved relative coordinate.
+            </p>
+          </nz-tab>
+
           <nz-tab nzTitle="DWM3000 · 0xFEF2" id="dwm3000-tab" hidden>
             <p class="tab-hint">
               Qorvo DWM3000 SPI UWB settings (<code>0xFEF2</code>) and two-way ranging

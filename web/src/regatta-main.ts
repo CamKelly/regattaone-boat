@@ -57,6 +57,11 @@ import {
   type BleGattServerLike,
 } from "./lib/ble-transport";
 import { formatDistanceToNow } from "date-fns";
+import {
+  renderRelativePositionChart,
+  resizeRelativePositionChart,
+  type RelativePoint,
+} from "./lib/relative-position-chart";
 
 /** Bump when BLE connect logic changes — shown in UI so stale cached JS is obvious. */
 const WEB_BLE_REV = "2026-07-28a";
@@ -139,6 +144,8 @@ interface BoatGeomSnapshot {
   tdoa_seq?: number;
   x_m?: number | null;
   y_m?: number | null;
+  reference_x_m?: number | null;
+  reference_y_m?: number | null;
   boat_reference_cm?: number | null;
   tdoa_at_ms?: number;
   updatedAtMs: number;
@@ -281,6 +288,7 @@ interface BleBoatSession {
   markPort: MarkBroadcastSnapshot | null;
   markStarboard: MarkBroadcastSnapshot | null;
   boatGeom: BoatGeomSnapshot | null;
+  tdoaTrail: Array<{ seq: number; x: number; y: number }>;
   gpsFix: GpsFix;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -1870,6 +1878,8 @@ function applyBoatTdoaLine(session: BleBoatSession, line: string): boolean {
       ok?: number | boolean;
       x_m?: number;
       y_m?: number;
+      reference_x_m?: number;
+      reference_y_m?: number;
       boat_port_cm?: number | null;
       boat_starboard_cm?: number | null;
       boat_reference_cm?: number | null;
@@ -1899,10 +1909,22 @@ function applyBoatTdoaLine(session: BleBoatSession, line: string): boolean {
       tdoa_seq: typeof o.seq === "number" ? o.seq : prev?.tdoa_seq,
       x_m: ok && typeof o.x_m === "number" ? o.x_m : prev?.x_m ?? null,
       y_m: ok && typeof o.y_m === "number" ? o.y_m : prev?.y_m ?? null,
+      reference_x_m:
+        typeof o.reference_x_m === "number" ? o.reference_x_m : prev?.reference_x_m ?? null,
+      reference_y_m:
+        typeof o.reference_y_m === "number" ? o.reference_y_m : prev?.reference_y_m ?? null,
       boat_reference_cm: ok ? parseGeomCm(o.boat_reference_cm) : prev?.boat_reference_cm ?? null,
       tdoa_at_ms: ok ? now : prev?.tdoa_at_ms,
       updatedAtMs: now,
     };
+    if (ok && typeof o.x_m === "number" && typeof o.y_m === "number") {
+      const seq = typeof o.seq === "number" ? o.seq : 0;
+      if (session.tdoaTrail.at(-1)?.seq !== seq) {
+        session.tdoaTrail.push({ seq, x: o.x_m, y: o.y_m });
+        session.tdoaTrail.splice(0, Math.max(0, session.tdoaTrail.length - 30));
+      }
+    }
+    renderRelativePosition(session);
     return true;
   } catch {
     return false;
@@ -1952,6 +1974,14 @@ function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
       starboard_port_at_ms: stbPort.at,
       port_uwb: typeof o.port_uwb === "number" ? o.port_uwb & 0xffff : prev?.port_uwb ?? 0,
       starboard_uwb: typeof o.starboard_uwb === "number" ? o.starboard_uwb & 0xffff : prev?.starboard_uwb ?? 0,
+      tdoa_ok: prev?.tdoa_ok,
+      tdoa_seq: prev?.tdoa_seq,
+      x_m: prev?.x_m ?? null,
+      y_m: prev?.y_m ?? null,
+      reference_x_m: prev?.reference_x_m ?? null,
+      reference_y_m: prev?.reference_y_m ?? null,
+      boat_reference_cm: prev?.boat_reference_cm ?? null,
+      tdoa_at_ms: prev?.tdoa_at_ms,
       updatedAtMs: now,
     };
     return true;
@@ -1998,6 +2028,66 @@ function renderBoatGeom(session: BleBoatSession | null): void {
   } else {
     set("boat-geom-xy", "—");
   }
+}
+
+function relativeBaselineM(session: BleBoatSession): number | null {
+  const g = session.boatGeom;
+  const cm = g?.port_starboard_cm ?? g?.starboard_port_cm ?? session.markPort?.dist_cm ?? session.markStarboard?.dist_cm;
+  return cm != null && cm > 0 ? cm / 100 : null;
+}
+
+function renderRelativePosition(session: BleBoatSession | null): void {
+  if (session && session.deviceId !== activeSessionId) {
+    return;
+  }
+  const status = document.querySelector<HTMLElement>("#relative-position-status");
+  const coordinates = document.querySelector<HTMLElement>("#relative-position-coordinates");
+  const setPoint = (id: "p" | "s" | "r" | "b", point: RelativePoint | null) => {
+    const el = document.querySelector<HTMLElement>(`#relative-position-${id}`);
+    if (el) {
+      el.textContent = point ? `(${point.x.toFixed(3)}, ${point.y.toFixed(3)}) m` : "—";
+    }
+  };
+  const flipY = document.querySelector<HTMLInputElement>("#relative-position-flip-y")?.checked === true;
+  const sign = flipY ? -1 : 1;
+  if (!session) {
+    if (status) status.textContent = "Connect to a Boat device and wait for a valid three-anchor TDoA fix.";
+    if (coordinates) coordinates.textContent = "—";
+    setPoint("p", null);
+    setPoint("s", null);
+    setPoint("r", null);
+    setPoint("b", null);
+    renderRelativePositionChart([], null, []);
+    return;
+  }
+
+  const baseline = relativeBaselineM(session);
+  const g = session.boatGeom;
+  const anchors: RelativePoint[] = [{ name: "Port", x: 0, y: 0 }];
+  if (baseline != null) {
+    anchors.push({ name: "Starboard", x: baseline, y: 0 });
+  }
+  if (g?.reference_x_m != null && g.reference_y_m != null) {
+    anchors.push({ name: "Reference", x: g.reference_x_m, y: sign * g.reference_y_m });
+  }
+  const boat = g?.tdoa_ok && g.x_m != null && g.y_m != null
+    ? { name: "Boat", x: g.x_m, y: sign * g.y_m }
+    : null;
+  const trail = session.tdoaTrail.map((p) => ({ name: `Seq ${p.seq}`, x: p.x, y: sign * p.y }));
+
+  if (status) {
+    status.textContent = boat
+      ? `Live relative TDoA position · sequence ${g?.tdoa_seq ?? "—"}${flipY ? " · Y flipped for display" : ""}`
+      : "Waiting for a valid TDoA fix…";
+  }
+  if (coordinates) {
+    coordinates.textContent = boat ? `Boat (${boat.x.toFixed(2)}, ${boat.y.toFixed(2)}) m` : "—";
+  }
+  setPoint("p", anchors.find((p) => p.name === "Port") ?? null);
+  setPoint("s", anchors.find((p) => p.name === "Starboard") ?? null);
+  setPoint("r", anchors.find((p) => p.name === "Reference") ?? null);
+  setPoint("b", boat);
+  renderRelativePositionChart(anchors, boat, trail);
 }
 
 function renderMarkBroadcastPanel(
@@ -2058,6 +2148,7 @@ function applyMeshtasticStats(session: BleBoatSession, parsed: MeshtasticStatsSn
   session.meshtasticStatsReceivedWallMs = Date.now();
   mergeMeshtasticPeersFromLog(session);
   renderMeshtastic(session);
+  renderRelativePosition(session);
   renderGpsDisplay(session);
   syncMeshtasticUiRefresh(session);
 }
@@ -2330,6 +2421,7 @@ function renderMeshtastic(session: BleBoatSession): void {
   }
   renderMarkBroadcasts(session);
   renderBoatGeom(session);
+  renderRelativePosition(session);
   if (!tbody) {
     return;
   }
@@ -2388,6 +2480,7 @@ function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
       renderMeshtastic(active);
       renderMarkBroadcasts(active);
       renderBoatGeom(active);
+      renderRelativePosition(active);
     }
     renderGpsDisplay(active);
     renderImuDisplay(active);
@@ -2543,6 +2636,7 @@ function clearUiPanels(): void {
   setText("meshtastic-stats", "TX ok: 0 · fail: 0 · RX: 0");
   renderMarkBroadcasts(null);
   renderBoatGeom(null);
+  renderRelativePosition(null);
   clearConsoleLog(null);
   syncMeshtasticTabVisibility(null);
   syncMeshtasticUiRefresh(null);
@@ -2763,6 +2857,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     markPort: null,
     markStarboard: null,
     boatGeom: null,
+    tdoaTrail: [],
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),
@@ -2828,6 +2923,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     markPort: null,
     markStarboard: null,
     boatGeom: null,
+    tdoaTrail: [],
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),
@@ -3116,6 +3212,12 @@ export function startRegattaApp(): void {
         renderBoatGeom(session);
       }
     }
+    if (label.includes("Position")) {
+      requestAnimationFrame(() => {
+        renderRelativePosition(getActiveSession());
+        resizeRelativePositionChart();
+      });
+    }
     if (label.includes("GPS")) {
       requestAnimationFrame(() => invalidateGpsLeafletMapSize());
       const session = getActiveSession();
@@ -3139,6 +3241,9 @@ export function startRegattaApp(): void {
   });
 
   console.info(`RegattaOne Boat web BLE ${WEB_BLE_REV}`);
+  document.querySelector<HTMLInputElement>("#relative-position-flip-y")?.addEventListener("change", () => {
+    renderRelativePosition(getActiveSession());
+  });
   syncConsoleLogPauseUi();
   if (isNativeBle()) {
     void ensureBleInitialized().catch((e) => {
@@ -3154,5 +3259,3 @@ export function startRegattaApp(): void {
   updateBleToolbar();
   syncActionButtons();
 }
-
-

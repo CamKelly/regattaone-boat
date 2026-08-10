@@ -65,7 +65,8 @@ bool mark_broadcast_get_starboard(mark_broadcast_record_t *out);
  */
 void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double y_m, double residual_m,
                                       double delta_sp_m, double delta_rp_m, uint16_t boat_port_cm,
-                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm);
+                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm,
+                                      double reference_x_m, double reference_y_m);
 
 #ifdef __cplusplus
 }

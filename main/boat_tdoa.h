@@ -21,6 +21,8 @@ typedef struct {
     bool ok;
     double x_m;              /**< metres; Port origin, Starboard +X */
     double y_m;              /**< metres; Reference side is +Y */
+    double reference_x_m;    /**< Reference anchor X in the same local frame */
+    double reference_y_m;    /**< Reference anchor Y in the same local frame */
     double r_port_m;
     double r_starboard_m;
     double r_reference_m;

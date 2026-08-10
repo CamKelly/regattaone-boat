@@ -676,7 +676,7 @@ static void boat_log_beacon(const struct anchor_beacon_msg *msg_in, uint16_t uwb
 #if CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE
     mark_broadcast_publish_boat_tdoa(fix.seq, ok, fix.x_m, fix.y_m, fix.residual_m, fix.delta_sp_m,
                                      fix.delta_rp_m, fix.boat_port_cm, fix.boat_starboard_cm,
-                                     fix.boat_reference_cm);
+                                     fix.boat_reference_cm, fix.reference_x_m, fix.reference_y_m);
 #else
     (void)ok;
 #endif

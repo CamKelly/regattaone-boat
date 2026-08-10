@@ -283,7 +283,8 @@ static void boat_geom_ble_notify(void)
 
 void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double y_m, double residual_m,
                                       double delta_sp_m, double delta_rp_m, uint16_t boat_port_cm,
-                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm)
+                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm,
+                                      double reference_x_m, double reference_y_m)
 {
     if (device_type_get() != DEVICE_TYPE_BOAT) {
         return;
@@ -312,13 +313,14 @@ void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double 
     char br[12];
     fmt_dist_json(br, sizeof(br), boat_reference_cm);
 
-    char line[320];
+    char line[384];
     const int n = snprintf(
         line, sizeof(line),
         "$PREGTDOA,{\"seq\":%lu,\"ok\":%u,\"x_m\":%.3f,\"y_m\":%.3f,\"residual_m\":%.4f,"
-        "\"delta_sp_m\":%.3f,\"delta_rp_m\":%.3f,"
+        "\"delta_sp_m\":%.3f,\"delta_rp_m\":%.3f,\"reference_x_m\":%.3f,\"reference_y_m\":%.3f,"
         "\"boat_port_cm\":%u,\"boat_starboard_cm\":%u,\"boat_reference_cm\":%s}\n",
         (unsigned long)seq, ok ? 1U : 0U, x_m, y_m, residual_m, delta_sp_m, delta_rp_m,
+        reference_x_m, reference_y_m,
         (unsigned)(boat_port_cm == MARK_BROADCAST_DIST_UNKNOWN ? 0U : boat_port_cm),
         (unsigned)(boat_starboard_cm == MARK_BROADCAST_DIST_UNKNOWN ? 0U : boat_starboard_cm), br);
     if (n > 0 && (size_t)n < sizeof(line)) {
@@ -547,7 +549,8 @@ bool mark_broadcast_get_starboard(mark_broadcast_record_t *out)
 
 void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double y_m, double residual_m,
                                       double delta_sp_m, double delta_rp_m, uint16_t boat_port_cm,
-                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm)
+                                      uint16_t boat_starboard_cm, uint16_t boat_reference_cm,
+                                      double reference_x_m, double reference_y_m)
 {
     (void)seq;
     (void)ok;
@@ -559,6 +562,8 @@ void mark_broadcast_publish_boat_tdoa(uint32_t seq, bool ok, double x_m, double 
     (void)boat_port_cm;
     (void)boat_starboard_cm;
     (void)boat_reference_cm;
+    (void)reference_x_m;
+    (void)reference_y_m;
 }
 
 #endif /* CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE */
