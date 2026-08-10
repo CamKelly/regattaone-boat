@@ -293,6 +293,26 @@ static uint64_t master_to_local(uint64_t t_master)
     return (uint64_t)llround(((double)t_master - s_clk_beta) / s_clk_alpha);
 }
 
+static uint64_t local_to_master(uint64_t t_local)
+{
+    if (!s_clk_valid) {
+        return t_local;
+    }
+    return (uint64_t)llround(s_clk_alpha * (double)t_local + s_clk_beta);
+}
+
+/*
+ * DW3000 delayed TX discards the low 9 bits of the programmed time.  The TX
+ * timestamp reported by the radio is that quantised time plus antenna delay.
+ * Advertising the unquantised slot target creates up to 512 DTU (2.4 m) of
+ * false range difference per anchor, which is fatal on a short baseline.
+ */
+static uint64_t delayed_tx_timestamp(uint64_t programmed_time)
+{
+    /* Preserve the software-extended epoch; only the radio register wraps at 40 bits. */
+    return (programmed_time & ~UINT64_C(0x1FF)) + (uint64_t)DWPHY_ANTENNA_DELAY;
+}
+
 static void note_blink_rx(void)
 {
     s_last_blink_us = esp_timer_get_time();
@@ -564,96 +584,103 @@ static void on_port_sync_for_slave(const struct anchor_beacon_msg *msg, uint16_t
     const uint64_t t_slot_master =
         msg->tx_master_dtu + (uint64_t)llround(US_TO_DTU((double)slot_us));
     /* Port advertises TX = programmed + antenna delay; program the same way. */
-    const uint64_t local_advertised = master_to_local(t_slot_master);
+    const uint64_t local_target = master_to_local(t_slot_master);
     const uint64_t local_txtime =
-        (local_advertised > (uint64_t)DWPHY_ANTENNA_DELAY)
-            ? (local_advertised - (uint64_t)DWPHY_ANTENNA_DELAY)
-            : local_advertised;
+        (local_target > (uint64_t)DWPHY_ANTENNA_DELAY)
+            ? (local_target - (uint64_t)DWPHY_ANTENNA_DELAY)
+            : local_target;
+    const uint64_t actual_local_tx = delayed_tx_timestamp(local_txtime);
+    const uint64_t actual_master_tx = local_to_master(actual_local_tx);
 
     ESP_LOGI(TAG, "RX Port sync seq=%lu — schedule %c at master+%u us (alpha=%.9f)",
              (unsigned long)msg->seq, (char)my_role, (unsigned)slot_us, s_clk_alpha);
 
-    (void)tx_beacon(my_role, msg->seq, t_slot_master, local_txtime);
+    (void)tx_beacon(my_role, msg->seq, actual_master_tx, local_txtime);
 }
 
-static void boat_log_beacon(const struct anchor_beacon_msg *msg, uint16_t uwb, uint64_t toa)
+static void boat_log_beacon(const struct anchor_beacon_msg *msg_in, uint16_t uwb, uint64_t toa)
 {
+    /* Snapshot before any logging — shared RX buf can be overwritten while UART blocks. */
+    const struct anchor_beacon_msg msg = *msg_in;
+
     note_blink_rx();
-    note_peer_uwb(msg->role, uwb);
-    geom_merge_from_beacon(msg);
+    note_peer_uwb(msg.role, uwb);
+    geom_merge_from_beacon(&msg);
+
+    /* Collect the superframe before ESP_LOGI (USB UART can block > slot spacing). */
+    if (msg.seq != s_boat_last_seq) {
+        s_boat_last_seq = msg.seq;
+        s_boat_have_p = s_boat_have_s = s_boat_have_r = false;
+    }
+
+    if (msg.role == ANCHOR_ROLE_PORT) {
+        s_boat_have_p = true;
+        s_boat_toa_p = toa;
+        s_boat_tx_p = msg.tx_master_dtu;
+    } else if (msg.role == ANCHOR_ROLE_STARBOARD) {
+        s_boat_have_s = true;
+        s_boat_toa_s = toa;
+        s_boat_tx_s = msg.tx_master_dtu;
+    } else if (msg.role == ANCHOR_ROLE_REFERENCE) {
+        s_boat_have_r = true;
+        s_boat_toa_r = toa;
+        s_boat_tx_r = msg.tx_master_dtu;
+    }
 
     ESP_LOGI(TAG,
              "beacon seq=%lu role=%c uwb=0x%04X ToA=%02x%02x%02x%02x%02x tx_master=%llu "
              "ps=%u pr=%u sr=%u geom_ver=%u",
-             (unsigned long)msg->seq, (char)msg->role, (unsigned)uwb, (unsigned)((toa >> 32) & 0xff),
+             (unsigned long)msg.seq, (char)msg.role, (unsigned)uwb, (unsigned)((toa >> 32) & 0xff),
              (unsigned)((toa >> 24) & 0xff), (unsigned)((toa >> 16) & 0xff),
              (unsigned)((toa >> 8) & 0xff), (unsigned)(toa & 0xff),
-             (unsigned long long)msg->tx_master_dtu,
-             msg->dist_ps_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg->dist_ps_cm,
-             msg->dist_pr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg->dist_pr_cm,
-             msg->dist_sr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg->dist_sr_cm,
-             (unsigned)msg->geom_ver);
+             (unsigned long long)msg.tx_master_dtu,
+             msg.dist_ps_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_ps_cm,
+             msg.dist_pr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_pr_cm,
+             msg.dist_sr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_sr_cm,
+             (unsigned)msg.geom_ver);
 
-    if (msg->seq != s_boat_last_seq) {
-        s_boat_last_seq = msg->seq;
-        s_boat_have_p = s_boat_have_s = s_boat_have_r = false;
+    if (!(s_boat_have_p && s_boat_have_s && s_boat_have_r)) {
+        return;
     }
 
-    if (msg->role == ANCHOR_ROLE_PORT) {
-        s_boat_have_p = true;
-        s_boat_toa_p = toa;
-        s_boat_tx_p = msg->tx_master_dtu;
-    } else if (msg->role == ANCHOR_ROLE_STARBOARD) {
-        s_boat_have_s = true;
-        s_boat_toa_s = toa;
-        s_boat_tx_s = msg->tx_master_dtu;
-    } else if (msg->role == ANCHOR_ROLE_REFERENCE) {
-        s_boat_have_r = true;
-        s_boat_toa_r = toa;
-        s_boat_tx_r = msg->tx_master_dtu;
-    }
+    const int64_t d_sp = (int64_t)s_boat_toa_s - (int64_t)s_boat_toa_p;
+    const int64_t d_rp = (int64_t)s_boat_toa_r - (int64_t)s_boat_toa_p;
+    const int64_t tx_sp = (int64_t)s_boat_tx_s - (int64_t)s_boat_tx_p;
+    const int64_t tx_rp = (int64_t)s_boat_tx_r - (int64_t)s_boat_tx_p;
+    ESP_LOGI(TAG,
+             "triple seq=%lu dToA_S-P=%lld dToA_R-P=%lld dTX_S-P=%lld dTX_R-P=%lld",
+             (unsigned long)msg.seq, (long long)d_sp, (long long)d_rp, (long long)tx_sp,
+             (long long)tx_rp);
 
-    if (s_boat_have_p && s_boat_have_s && s_boat_have_r) {
-        const int64_t d_sp = (int64_t)s_boat_toa_s - (int64_t)s_boat_toa_p;
-        const int64_t d_rp = (int64_t)s_boat_toa_r - (int64_t)s_boat_toa_p;
-        const int64_t tx_sp = (int64_t)s_boat_tx_s - (int64_t)s_boat_tx_p;
-        const int64_t tx_rp = (int64_t)s_boat_tx_r - (int64_t)s_boat_tx_p;
-        ESP_LOGI(TAG,
-                 "triple seq=%lu dToA_S-P=%lld dToA_R-P=%lld dTX_S-P=%lld dTX_R-P=%lld",
-                 (unsigned long)msg->seq, (long long)d_sp, (long long)d_rp, (long long)tx_sp,
-                 (long long)tx_rp);
-
-        uint16_t ps = GEOM_UNKNOWN;
-        uint16_t pr = GEOM_UNKNOWN;
-        uint16_t sr = GEOM_UNKNOWN;
-        geom_snapshot(&ps, &pr, &sr, NULL);
-        /* Prefer this frame's authoritative fields (same rules as merge). */
-        if (msg->role == ANCHOR_ROLE_PORT) {
-            if (msg->dist_ps_cm != GEOM_UNKNOWN) {
-                ps = msg->dist_ps_cm;
-            }
-            if (msg->dist_pr_cm != GEOM_UNKNOWN) {
-                pr = msg->dist_pr_cm;
-            }
-        } else if (msg->role == ANCHOR_ROLE_STARBOARD) {
-            if (msg->dist_sr_cm != GEOM_UNKNOWN) {
-                sr = msg->dist_sr_cm;
-            }
+    uint16_t ps = GEOM_UNKNOWN;
+    uint16_t pr = GEOM_UNKNOWN;
+    uint16_t sr = GEOM_UNKNOWN;
+    geom_snapshot(&ps, &pr, &sr, NULL);
+    if (msg.role == ANCHOR_ROLE_PORT) {
+        if (msg.dist_ps_cm != GEOM_UNKNOWN) {
+            ps = msg.dist_ps_cm;
         }
-
-        boat_tdoa_result_t fix;
-        const bool ok =
-            boat_tdoa_solve(msg->seq, s_boat_toa_p, s_boat_toa_s, s_boat_toa_r, s_boat_tx_p,
-                            s_boat_tx_s, s_boat_tx_r, ps, pr, sr, &fix);
-#if CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE
-        mark_broadcast_publish_boat_tdoa(fix.seq, ok, fix.x_m, fix.y_m, fix.residual_m,
-                                         fix.delta_sp_m, fix.delta_rp_m, fix.boat_port_cm,
-                                         fix.boat_starboard_cm, fix.boat_reference_cm);
-#else
-        (void)ok;
-#endif
-        s_boat_have_p = s_boat_have_s = s_boat_have_r = false;
+        if (msg.dist_pr_cm != GEOM_UNKNOWN) {
+            pr = msg.dist_pr_cm;
+        }
+    } else if (msg.role == ANCHOR_ROLE_STARBOARD) {
+        if (msg.dist_sr_cm != GEOM_UNKNOWN) {
+            sr = msg.dist_sr_cm;
+        }
     }
+
+    boat_tdoa_result_t fix;
+    const bool ok =
+        boat_tdoa_solve(msg.seq, s_boat_toa_p, s_boat_toa_s, s_boat_toa_r, s_boat_tx_p, s_boat_tx_s,
+                        s_boat_tx_r, ps, pr, sr, &fix);
+#if CONFIG_REGATTAONE_MARK_BROADCAST_ENABLE
+    mark_broadcast_publish_boat_tdoa(fix.seq, ok, fix.x_m, fix.y_m, fix.residual_m, fix.delta_sp_m,
+                                     fix.delta_rp_m, fix.boat_port_cm, fix.boat_starboard_cm,
+                                     fix.boat_reference_cm);
+#else
+    (void)ok;
+#endif
+    s_boat_have_p = s_boat_have_s = s_boat_have_r = false;
 }
 
 bool mark_blink_try_handle(const struct rxbuf *rx)
@@ -732,8 +759,8 @@ static void port_master_task(void *arg)
              * steal it (late delayed-TX). Baseline ranging lives in the gap. */
             uint64_t send_dtu = dw_timestamp_extend(dw_get_systime());
             send_dtu += (uint64_t)MS_TO_DTU((double)prep_ms);
-            /* Match libdeca sync.c: advertised TX includes antenna delay. */
-            const uint64_t tx_master = send_dtu + (uint64_t)DWPHY_ANTENNA_DELAY;
+            /* Advertise the timestamp the delayed-TX hardware will actually use. */
+            const uint64_t tx_master = delayed_tx_timestamp(send_dtu);
             const uint32_t seq = ++s_port_seq;
             if (tx_beacon(ANCHOR_ROLE_PORT, seq, tx_master, send_dtu)) {
                 s_last_port_tx_us = esp_timer_get_time();

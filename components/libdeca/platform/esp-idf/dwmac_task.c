@@ -12,6 +12,8 @@
 #include <freertos/queue.h>
 #include <freertos/task.h>
 
+#include <string.h>
+
 #include "dw3000_hw.h"
 #include "dwhw.h"
 #include "dwmac.h"
@@ -24,10 +26,16 @@
 #define DWMAC_TASK_PRIO		  12   /* above Meshtastic/console (prio 5) so UWB RX isn't starved */
 #define DWMAC_QUEUE_LEN		  32
 
+/*
+ * Copy each RX frame into the queue. The IRQ path uses a single global rx_buffer
+ * and re-enables RX before the task runs; queuing only a pointer let the next
+ * beacon (P/S/R are 5–10 ms apart) overwrite the frame while ESP_LOGI blocked
+ * on USB UART — boat TDoA never saw a coherent triple.
+ */
 struct dwmac_event_s {
 	enum dwevent_e type;
 	union {
-		const void* ptr;
+		struct rxbuf rx;
 		uint32_t status;
 	} u;
 };
@@ -47,7 +55,7 @@ static void dwmac_task(void* pvParameters)
 		if (rc == pdTRUE) { // received
 			switch (dwmac_evt.type) {
 			case DWEVT_RX:
-				dwmac_handle_rx_frame(dwmac_evt.u.ptr);
+				dwmac_handle_rx_frame(&dwmac_evt.u.rx);
 				break;
 			case DWEVT_RX_TIMEOUT:
 				dwmac_handle_rx_timeout(dwmac_evt.u.status);
@@ -87,14 +95,17 @@ int dwtask_init(void)
 
 int dwtask_queue_event(enum dwevent_e type, const void* data)
 {
-	struct dwmac_event_s evt = {
-		.type = type,
-	};
+	struct dwmac_event_s evt;
+	memset(&evt, 0, sizeof(evt));
+	evt.type = type;
 
 	if (type == DWEVT_RX) {
-		evt.u.ptr = data;
+		if (data == NULL) {
+			return ESP_ERR_INVALID_ARG;
+		}
+		evt.u.rx = *(const struct rxbuf*)data;
 	} else if (type == DWEVT_RX_TIMEOUT || type == DWEVT_ERR) {
-		evt.u.status = *(uint32_t*)data;
+		evt.u.status = *(const uint32_t*)data;
 	}
 
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;

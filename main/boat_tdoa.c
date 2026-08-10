@@ -104,12 +104,14 @@ bool boat_tdoa_solve(uint32_t seq, uint64_t toa_p, uint64_t toa_s, uint64_t toa_
     out->delta_sp_m = delta_sp;
     out->delta_rp_m = delta_rp;
 
-    /* Soft physical bound: |r_i - r_j| < baseline (+ noise margin). */
+    /* Physical bound: |r_i - r_j| cannot exceed the anchor baseline. */
     const double margin = 0.50;
     if (fabs(delta_sp) > b + margin || fabs(delta_rp) > pr + margin) {
         ESP_LOGW(TAG,
-                 "seq=%lu TDoA out of range δsp=%.3f m (ps=%.2f) δrp=%.3f m (pr=%.2f) — trying anyway",
+                 "seq=%lu reject impossible TDoA δsp=%.3f m (ps=%.2f) δrp=%.3f m (pr=%.2f)",
                  (unsigned long)seq, delta_sp, b, delta_rp, pr);
+        out->residual_m = INFINITY;
+        return false;
     }
 
     /* Initial guess: toward mid-baseline, on Reference side. */
