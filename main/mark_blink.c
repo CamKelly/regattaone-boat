@@ -159,9 +159,29 @@ void mark_blink_set_geometry_cm(uint16_t dist_ps_cm, uint16_t dist_pr_cm, uint16
     geom_unlock();
 }
 
+/**
+ * Merge geometry using measurement authority only:
+ *   Port owns ps + pr (initiates those TWRs)
+ *   Starboard owns sr (initiates Starboard→Reference)
+ *   Reference owns none
+ *
+ * Blind merge let Port's stale sr wipe Starboard's fresh TWR on every sync.
+ */
 static void geom_merge_from_beacon(const struct anchor_beacon_msg *msg)
 {
-    mark_blink_set_geometry_cm(msg->dist_ps_cm, msg->dist_pr_cm, msg->dist_sr_cm);
+    if (msg == NULL) {
+        return;
+    }
+    uint16_t ps = GEOM_UNKNOWN;
+    uint16_t pr = GEOM_UNKNOWN;
+    uint16_t sr = GEOM_UNKNOWN;
+    if (msg->role == ANCHOR_ROLE_PORT) {
+        ps = msg->dist_ps_cm;
+        pr = msg->dist_pr_cm;
+    } else if (msg->role == ANCHOR_ROLE_STARBOARD) {
+        sr = msg->dist_sr_cm;
+    }
+    mark_blink_set_geometry_cm(ps, pr, sr);
 }
 
 static void geom_snapshot(uint16_t *ps, uint16_t *pr, uint16_t *sr, uint16_t *ver)
@@ -607,15 +627,18 @@ static void boat_log_beacon(const struct anchor_beacon_msg *msg, uint16_t uwb, u
         uint16_t pr = GEOM_UNKNOWN;
         uint16_t sr = GEOM_UNKNOWN;
         geom_snapshot(&ps, &pr, &sr, NULL);
-        /* Prefer geometry carried on this superframe's beacons. */
-        if (msg->dist_ps_cm != GEOM_UNKNOWN) {
-            ps = msg->dist_ps_cm;
-        }
-        if (msg->dist_pr_cm != GEOM_UNKNOWN) {
-            pr = msg->dist_pr_cm;
-        }
-        if (msg->dist_sr_cm != GEOM_UNKNOWN) {
-            sr = msg->dist_sr_cm;
+        /* Prefer this frame's authoritative fields (same rules as merge). */
+        if (msg->role == ANCHOR_ROLE_PORT) {
+            if (msg->dist_ps_cm != GEOM_UNKNOWN) {
+                ps = msg->dist_ps_cm;
+            }
+            if (msg->dist_pr_cm != GEOM_UNKNOWN) {
+                pr = msg->dist_pr_cm;
+            }
+        } else if (msg->role == ANCHOR_ROLE_STARBOARD) {
+            if (msg->dist_sr_cm != GEOM_UNKNOWN) {
+                sr = msg->dist_sr_cm;
+            }
         }
 
         boat_tdoa_result_t fix;
