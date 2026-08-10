@@ -133,6 +133,9 @@ interface BoatGeomSnapshot {
   boat_starboard_cm: number | null;
   port_starboard_cm: number | null;
   starboard_port_cm: number | null;
+  anchor_ps_cm?: number | null;
+  anchor_pr_cm?: number | null;
+  anchor_sr_cm?: number | null;
   boat_port_at_ms: number;
   boat_starboard_at_ms: number;
   port_starboard_at_ms: number;
@@ -1899,6 +1902,9 @@ function applyBoatTdoaLine(session: BleBoatSession, line: string): boolean {
       boat_starboard_cm: ok ? boatStb.cm : (prev?.boat_starboard_cm ?? null),
       port_starboard_cm: prev?.port_starboard_cm ?? null,
       starboard_port_cm: prev?.starboard_port_cm ?? null,
+      anchor_ps_cm: prev?.anchor_ps_cm ?? null,
+      anchor_pr_cm: prev?.anchor_pr_cm ?? null,
+      anchor_sr_cm: prev?.anchor_sr_cm ?? null,
       boat_port_at_ms: ok ? boatPort.at : (prev?.boat_port_at_ms ?? 0),
       boat_starboard_at_ms: ok ? boatStb.at : (prev?.boat_starboard_at_ms ?? 0),
       port_starboard_at_ms: prev?.port_starboard_at_ms ?? 0,
@@ -1939,6 +1945,9 @@ function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
       boat_starboard_cm?: number | null;
       port_starboard_cm?: number | null;
       starboard_port_cm?: number | null;
+      anchor_ps_cm?: number | null;
+      anchor_pr_cm?: number | null;
+      anchor_sr_cm?: number | null;
       port_uwb?: number;
       starboard_uwb?: number;
     };
@@ -1968,6 +1977,9 @@ function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
       boat_starboard_cm: boatStb.cm,
       port_starboard_cm: portStb.cm,
       starboard_port_cm: stbPort.cm,
+      anchor_ps_cm: parseGeomCm(o.anchor_ps_cm) ?? prev?.anchor_ps_cm ?? null,
+      anchor_pr_cm: parseGeomCm(o.anchor_pr_cm) ?? prev?.anchor_pr_cm ?? null,
+      anchor_sr_cm: parseGeomCm(o.anchor_sr_cm) ?? prev?.anchor_sr_cm ?? null,
       boat_port_at_ms: boatPort.at,
       boat_starboard_at_ms: boatStb.at,
       port_starboard_at_ms: portStb.at,
@@ -2032,8 +2044,23 @@ function renderBoatGeom(session: BleBoatSession | null): void {
 
 function relativeBaselineM(session: BleBoatSession): number | null {
   const g = session.boatGeom;
-  const cm = g?.port_starboard_cm ?? g?.starboard_port_cm ?? session.markPort?.dist_cm ?? session.markStarboard?.dist_cm;
+  const cm = g?.anchor_ps_cm ?? g?.port_starboard_cm ?? g?.starboard_port_cm ?? session.markPort?.dist_cm ?? session.markStarboard?.dist_cm;
   return cm != null && cm > 0 ? cm / 100 : null;
+}
+
+function referenceFromBaselines(g: BoatGeomSnapshot | null): { x: number; y: number } | null {
+  const ps = g?.anchor_ps_cm != null ? g.anchor_ps_cm / 100 : null;
+  const pr = g?.anchor_pr_cm != null ? g.anchor_pr_cm / 100 : null;
+  const sr = g?.anchor_sr_cm != null ? g.anchor_sr_cm / 100 : null;
+  if (ps == null || pr == null || sr == null || ps <= 0 || pr <= 0 || sr <= 0) {
+    return null;
+  }
+  const x = (ps * ps + pr * pr - sr * sr) / (2 * ps);
+  const y2 = pr * pr - x * x;
+  if (y2 < -0.05) {
+    return null;
+  }
+  return { x, y: Math.sqrt(Math.max(0, y2)) };
 }
 
 function renderRelativePosition(session: BleBoatSession | null): void {
@@ -2063,15 +2090,18 @@ function renderRelativePosition(session: BleBoatSession | null): void {
 
   const baseline = relativeBaselineM(session);
   const g = session.boatGeom;
-  const anchors: RelativePoint[] = [{ name: "Port", x: 0, y: 0 }];
+  const reference = g?.reference_x_m != null && g.reference_y_m != null
+    ? { x: g.reference_x_m, y: g.reference_y_m }
+    : referenceFromBaselines(g ?? null);
+  const anchors: RelativePoint[] = [{ name: "P", x: 0, y: 0 }];
   if (baseline != null) {
-    anchors.push({ name: "Starboard", x: baseline, y: 0 });
+    anchors.push({ name: "S", x: baseline, y: 0 });
   }
-  if (g?.reference_x_m != null && g.reference_y_m != null) {
-    anchors.push({ name: "Reference", x: g.reference_x_m, y: sign * g.reference_y_m });
+  if (reference) {
+    anchors.push({ name: "R", x: reference.x, y: sign * reference.y });
   }
   const boat = g?.tdoa_ok && g.x_m != null && g.y_m != null
-    ? { name: "Boat", x: g.x_m, y: sign * g.y_m }
+    ? { name: "B", x: g.x_m, y: sign * g.y_m }
     : null;
   const trail = session.tdoaTrail.map((p) => ({ name: `Seq ${p.seq}`, x: p.x, y: sign * p.y }));
 
@@ -2083,9 +2113,9 @@ function renderRelativePosition(session: BleBoatSession | null): void {
   if (coordinates) {
     coordinates.textContent = boat ? `Boat (${boat.x.toFixed(2)}, ${boat.y.toFixed(2)}) m` : "—";
   }
-  setPoint("p", anchors.find((p) => p.name === "Port") ?? null);
-  setPoint("s", anchors.find((p) => p.name === "Starboard") ?? null);
-  setPoint("r", anchors.find((p) => p.name === "Reference") ?? null);
+  setPoint("p", anchors.find((p) => p.name === "P") ?? null);
+  setPoint("s", anchors.find((p) => p.name === "S") ?? null);
+  setPoint("r", anchors.find((p) => p.name === "R") ?? null);
   setPoint("b", boat);
   renderRelativePositionChart(anchors, boat, trail);
 }
@@ -2336,6 +2366,46 @@ function clearConsoleLog(session: BleBoatSession | null): void {
   }
 }
 
+function applyAnchorGeometryFromConsole(session: BleBoatSession, line: string): boolean {
+  const match = line.match(/mark_blink:\s+beacon\b.*\bps=(\d+)\s+pr=(\d+)\s+sr=(\d+)\b/);
+  if (!match) {
+    return false;
+  }
+  const ps = Number(match[1]);
+  const pr = Number(match[2]);
+  const sr = Number(match[3]);
+  if (!Number.isFinite(ps) || !Number.isFinite(pr) || !Number.isFinite(sr) || ps <= 0 || pr <= 0 || sr <= 0) {
+    return false;
+  }
+  const now = Date.now();
+  const prev = session.boatGeom;
+  session.boatGeom = {
+    boat_port_cm: prev?.boat_port_cm ?? null,
+    boat_starboard_cm: prev?.boat_starboard_cm ?? null,
+    port_starboard_cm: prev?.port_starboard_cm ?? ps,
+    starboard_port_cm: prev?.starboard_port_cm ?? ps,
+    anchor_ps_cm: ps,
+    anchor_pr_cm: pr,
+    anchor_sr_cm: sr,
+    boat_port_at_ms: prev?.boat_port_at_ms ?? 0,
+    boat_starboard_at_ms: prev?.boat_starboard_at_ms ?? 0,
+    port_starboard_at_ms: now,
+    starboard_port_at_ms: now,
+    port_uwb: prev?.port_uwb ?? 0,
+    starboard_uwb: prev?.starboard_uwb ?? 0,
+    tdoa_ok: prev?.tdoa_ok,
+    tdoa_seq: prev?.tdoa_seq,
+    x_m: prev?.x_m ?? null,
+    y_m: prev?.y_m ?? null,
+    reference_x_m: prev?.reference_x_m ?? null,
+    reference_y_m: prev?.reference_y_m ?? null,
+    boat_reference_cm: prev?.boat_reference_cm ?? null,
+    tdoa_at_ms: prev?.tdoa_at_ms,
+    updatedAtMs: now,
+  };
+  return true;
+}
+
 function ingestConsoleLogChunk(session: BleBoatSession, chunk: string): void {
   if (!chunk) {
     return;
@@ -2353,12 +2423,14 @@ function ingestConsoleLogChunk(session: BleBoatSession, chunk: string): void {
   session.consoleLineNotifyBuf = endedWithNewline ? "" : (parts[parts.length - 1] ?? "");
 
   let added = false;
+  let geometryUpdated = false;
   for (const raw of complete) {
     const line = raw.replace(/\r$/, "");
     if (!line) {
       continue;
     }
     session.consoleLineLogText += `${line}\n`;
+    geometryUpdated = applyAnchorGeometryFromConsole(session, line) || geometryUpdated;
     added = true;
   }
   if (!added) {
@@ -2368,6 +2440,10 @@ function ingestConsoleLogChunk(session: BleBoatSession, chunk: string): void {
     session.consoleLineLogText = session.consoleLineLogText.slice(-72000);
   }
   renderConsoleLog(session);
+  if (geometryUpdated) {
+    renderBoatGeom(session);
+    renderRelativePosition(session);
+  }
 }
 
 function meshtasticSelfLabel(session: BleBoatSession): string {

@@ -252,6 +252,9 @@ static void boat_geom_ble_notify(void)
     uint16_t stb_to_port = MARK_BROADCAST_DIST_UNKNOWN;
     uint16_t boat_port = s_boat_to_port_cm;
     uint16_t boat_stb = s_boat_to_starboard_cm;
+    uint16_t anchor_ps = MARK_BROADCAST_DIST_UNKNOWN;
+    uint16_t anchor_pr = MARK_BROADCAST_DIST_UNKNOWN;
+    uint16_t anchor_sr = MARK_BROADCAST_DIST_UNKNOWN;
 
     if (s_have_port) {
         port_uwb = s_port.uwb_addr;
@@ -263,19 +266,27 @@ static void boat_geom_ble_notify(void)
     }
     xSemaphoreGive(s_store_mtx);
 
-    char bp[12], bs[12], ps[12], sp[12];
+#if CONFIG_DW3000_RANGING_ENABLE
+    mark_blink_get_geometry_cm(&anchor_ps, &anchor_pr, &anchor_sr, NULL);
+#endif
+
+    char bp[12], bs[12], ps[12], sp[12], aps[12], apr[12], asr[12];
     fmt_dist_json(bp, sizeof(bp), boat_port);
     fmt_dist_json(bs, sizeof(bs), boat_stb);
     fmt_dist_json(ps, sizeof(ps), port_to_stb);
     fmt_dist_json(sp, sizeof(sp), stb_to_port);
+    fmt_dist_json(aps, sizeof(aps), anchor_ps);
+    fmt_dist_json(apr, sizeof(apr), anchor_pr);
+    fmt_dist_json(asr, sizeof(asr), anchor_sr);
 
-    char line[256];
+    char line[320];
     const int n = snprintf(
         line, sizeof(line),
         "$PREGGEOM,{\"boat_port_cm\":%s,\"boat_starboard_cm\":%s,"
         "\"port_starboard_cm\":%s,\"starboard_port_cm\":%s,"
+        "\"anchor_ps_cm\":%s,\"anchor_pr_cm\":%s,\"anchor_sr_cm\":%s,"
         "\"port_uwb\":%u,\"starboard_uwb\":%u}\n",
-        bp, bs, ps, sp, (unsigned)port_uwb, (unsigned)stb_uwb);
+        bp, bs, ps, sp, aps, apr, asr, (unsigned)port_uwb, (unsigned)stb_uwb);
     if (n > 0 && (size_t)n < sizeof(line)) {
         ble_sen0140_meshtastic_rx_notify((const uint8_t *)line, (size_t)n);
     }

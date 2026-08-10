@@ -10,7 +10,16 @@ let chart: echarts.ECharts | null = null;
 let resizeObserver: ResizeObserver | null = null;
 
 function tooltipText(point: RelativePoint): string {
-  return `<strong>${point.name}</strong><br/>x ${point.x.toFixed(2)} m<br/>y ${point.y.toFixed(2)} m`;
+  const labels: Record<string, string> = { P: "Port", S: "Starboard", R: "Reference", B: "Boat" };
+  return `<strong>${point.name} · ${labels[point.name] ?? point.name}</strong><br/>x ${point.x.toFixed(2)} m<br/>y ${point.y.toFixed(2)} m`;
+}
+
+function scatterDatum(point: RelativePoint) {
+  return {
+    name: point.name,
+    value: [point.x, point.y],
+    point,
+  };
 }
 
 export function renderRelativePositionChart(
@@ -44,8 +53,34 @@ export function renderRelativePositionChart(
       grid: { left: 58, right: 24, top: 34, bottom: 52 },
       tooltip: {
         trigger: "item",
-        formatter: (params: { data?: RelativePoint }) => params.data ? tooltipText(params.data) : "",
+        formatter: (params: { data?: { point?: RelativePoint } }) =>
+          params.data?.point ? tooltipText(params.data.point) : "",
       },
+      toolbox: {
+        right: 18,
+        feature: {
+          dataZoom: { yAxisIndex: "all", title: { zoom: "Zoom", back: "Undo zoom" } },
+          restore: { title: "Reset view" },
+        },
+      },
+      dataZoom: [
+        {
+          type: "inside",
+          xAxisIndex: 0,
+          filterMode: "none",
+          zoomOnMouseWheel: true,
+          moveOnMouseMove: true,
+          moveOnMouseWheel: false,
+        },
+        {
+          type: "inside",
+          yAxisIndex: 0,
+          filterMode: "none",
+          zoomOnMouseWheel: true,
+          moveOnMouseMove: true,
+          moveOnMouseWheel: false,
+        },
+      ],
       xAxis: {
         type: "value",
         name: "Port → Starboard (m)",
@@ -88,8 +123,8 @@ export function renderRelativePositionChart(
           type: "scatter",
           symbolSize: 20,
           itemStyle: { color: "#d4380d", borderColor: "#fff", borderWidth: 2 },
-          label: { show: true, formatter: "{b}", position: "top", fontWeight: 600 },
-          data: anchors,
+          label: { show: true, formatter: "{b}", position: "top", fontSize: 14, fontWeight: 700 },
+          data: anchors.map(scatterDatum),
         },
         {
           name: "Boat",
@@ -97,16 +132,15 @@ export function renderRelativePositionChart(
           symbol: "diamond",
           symbolSize: 24,
           itemStyle: { color: "#1677ff", borderColor: "#fff", borderWidth: 2 },
-          label: { show: true, formatter: "Boat", position: "top", fontWeight: 600 },
-          data: boat ? [boat] : [],
+          label: { show: true, formatter: "B", position: "top", fontSize: 14, fontWeight: 700 },
+          data: boat ? [scatterDatum(boat)] : [],
         },
       ],
     },
-    true,
+    false,
   );
 }
 
 export function resizeRelativePositionChart(): void {
   chart?.resize();
 }
-
