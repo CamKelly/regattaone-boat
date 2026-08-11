@@ -75,7 +75,8 @@ dwt_callbacks_s dwmac_cbs = {
 bool dwmac_init(uint16_t mypanId, uint16_t myAddr, deca_rx_cb rx_cb,
 				deca_to_cb to_cb, deca_err_cb err_cb)
 {
-	ASSERT_RET(myAddr != 0 && myAddr != 0xffff);
+	/* 0x0000 is the start-line protocol's unregistered Boat address. */
+	ASSERT_RET(myAddr != 0xffff);
 
 	panId = mypanId;
 	macAddr = myAddr;
@@ -680,9 +681,10 @@ uint16_t dwmac_get_panid(void)
 
 bool dwmac_set_pan_addr(uint16_t mypanId, uint16_t myAddr)
 {
-	if (myAddr == 0 || myAddr == 0xffff) {
-		return false;
-	}
+    /* 0x0000 is the start-line protocol's unregistered Boat address. */
+    if (myAddr == 0xffff) {
+        return false;
+    }
 	panId = mypanId;
 	macAddr = myAddr;
 	dwt_setaddress16(macAddr);

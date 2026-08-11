@@ -357,7 +357,11 @@ bool start_line_ranging_try_handle(const struct rxbuf *rx)
     const void *payload = dwprot_get_payload(rx->buf);
     const size_t len = dwprot_get_payload_len(rx->buf, rx->len);
     if (func == SL_MSG_REGISTER_REQUEST) {
-        if (len == sizeof(register_request_t) && device_type_get() == DEVICE_TYPE_PORT)
+        const device_type_t role = device_type_get();
+        ESP_LOGI(TAG, "RX REGISTER_REQUEST src=0x%04X len=%u (expect %u) role=%s",
+                 (unsigned)dwprot_get_src(rx->buf), (unsigned)len,
+                 (unsigned)sizeof(register_request_t), device_type_to_string(role));
+        if (len == sizeof(register_request_t) && role == DEVICE_TYPE_PORT)
             port_register((const register_request_t *)payload);
         return true;
     }
@@ -524,9 +528,17 @@ static void boat_task(void *arg)
                 req.gps_valid = 1U; req.latitude_e7 = (int32_t)llround(fix.lat_deg * 1e7);
                 req.longitude_e7 = (int32_t)llround(fix.lon_deg * 1e7);
             }
-            (void)send_message(SL_MSG_REGISTER_REQUEST, &req, sizeof(req), 0xffffU);
+            const bool sent = send_message(SL_MSG_REGISTER_REQUEST, &req, sizeof(req), 0xffffU);
             char uuid[33]; uuid_format(req.uuid, uuid);
-            ESP_LOGI(TAG, "REGISTER request uuid=%s nonce=%lu", uuid, (unsigned long)req.nonce);
+            if (sent) {
+                ESP_LOGI(TAG, "TX registration blink REGISTER_REQUEST seq=%u src=0x0000 dst=0xFFFF "
+                         "uuid=%s nonce=%lu",
+                         (unsigned)req.sequence, uuid, (unsigned long)req.nonce);
+            } else {
+                ESP_LOGW(TAG, "TX registration blink FAILED seq=%u uuid=%s nonce=%lu twr_busy=%u",
+                         (unsigned)req.sequence, uuid, (unsigned long)req.nonce,
+                         twr_in_progress() ? 1U : 0U);
+            }
             const int32_t jitter = (int32_t)(esp_random() % 1001U) - 500;
             next_registration = now_ms() + (int64_t)dw3000_config_get()->registration_interval_ms + jitter;
         }
