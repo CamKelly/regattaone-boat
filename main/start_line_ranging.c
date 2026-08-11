@@ -132,6 +132,8 @@ static uint16_t s_authorized_twr_peer;
 static int64_t s_authorized_twr_deadline_ms;
 static ranging_grant_t s_pending_grant;
 static bool s_pending_grant_valid;
+static register_response_t s_pending_register_rsp;
+static bool s_pending_register_rsp_valid;
 static size_t s_queue_cursor;
 
 static int64_t now_ms(void) { return esp_timer_get_time() / 1000LL; }
@@ -179,7 +181,34 @@ static bool send_message(uint8_t func, const void *payload, size_t len, uint16_t
     if (!tx) return false;
     void *out = dwprot_short_prepare(tx, len, func, dst);
     memcpy(out, payload, len);
-    return dwmac_transmit(tx);
+    if (!dwmac_transmit(tx)) return false;
+    /* dwmac_transmit returns at TX start; allow the frame to leave the air
+     * before the next caller (baseline/grant) issues dwt_forcetrxoff(). */
+    vTaskDelay(pdMS_TO_TICKS(5));
+    return true;
+}
+
+static void flush_pending_register_response(void)
+{
+    lock();
+    const bool have = s_pending_register_rsp_valid;
+    register_response_t rsp = s_pending_register_rsp;
+    s_pending_register_rsp_valid = false;
+    unlock();
+    if (!have) return;
+    if (send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp), 0xffffU)) {
+        ESP_LOGI(TAG, "TX REGISTER_RESPONSE boat=0x%04X nonce=%lu",
+                 (unsigned)rsp.assigned_device_id, (unsigned long)rsp.request_nonce);
+    } else {
+        ESP_LOGW(TAG, "TX REGISTER_RESPONSE failed boat=0x%04X twr_busy=%u",
+                 (unsigned)rsp.assigned_device_id, twr_in_progress() ? 1U : 0U);
+        lock();
+        if (!s_pending_register_rsp_valid) {
+            s_pending_register_rsp = rsp;
+            s_pending_register_rsp_valid = true;
+        }
+        unlock();
+    }
 }
 
 static size_t boat_count_locked(void)
@@ -282,17 +311,37 @@ static void port_register(const register_request_t *req)
         .port_session_id = s_session_id, .configuration_version = s_config_version,
     };
     memcpy(rsp.uuid, req->uuid, 16);
-    (void)send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp), 0xffffU);
+    /* Defer TX to port_task — RX callback must not contend with baseline/grant. */
+    lock();
+    s_pending_register_rsp = rsp;
+    s_pending_register_rsp_valid = true;
+    unlock();
     char uuid[33]; uuid_format(req->uuid, uuid);
-    ESP_LOGI(TAG, "REGISTER accepted uuid=%s boat=0x%04X nonce=%lu", uuid, assigned,
-             (unsigned long)req->nonce);
+    ESP_LOGI(TAG, "REGISTER accepted uuid=%s boat=0x%04X nonce=%lu (response queued)", uuid,
+             assigned, (unsigned long)req->nonce);
     notify_status();
 }
 
 static void boat_accept_registration(const register_response_t *rsp)
 {
-    if (rsp->protocol_version != SL_PROTOCOL_VERSION || memcmp(rsp->uuid, s_boat.uuid, 16) != 0 ||
-        rsp->request_nonce != s_boat.nonce || rsp->assigned_device_id < SL_FIRST_BOAT_ADDR) return;
+    if (rsp->protocol_version != SL_PROTOCOL_VERSION) {
+        ESP_LOGW(TAG, "RX REGISTER_RESPONSE rejected: bad version %u", rsp->protocol_version);
+        return;
+    }
+    if (memcmp(rsp->uuid, s_boat.uuid, 16) != 0) {
+        ESP_LOGW(TAG, "RX REGISTER_RESPONSE rejected: uuid mismatch");
+        return;
+    }
+    if (rsp->request_nonce != s_boat.nonce) {
+        ESP_LOGW(TAG, "RX REGISTER_RESPONSE rejected: nonce mismatch got=%lu want=%lu",
+                 (unsigned long)rsp->request_nonce, (unsigned long)s_boat.nonce);
+        return;
+    }
+    if (rsp->assigned_device_id < SL_FIRST_BOAT_ADDR) {
+        ESP_LOGW(TAG, "RX REGISTER_RESPONSE rejected: bad addr 0x%04X",
+                 (unsigned)rsp->assigned_device_id);
+        return;
+    }
     lock();
     s_boat.registered = true;
     s_boat.addr = rsp->assigned_device_id;
@@ -366,8 +415,14 @@ bool start_line_ranging_try_handle(const struct rxbuf *rx)
         return true;
     }
     if (func == SL_MSG_REGISTER_RESPONSE) {
+        ESP_LOGI(TAG, "RX REGISTER_RESPONSE src=0x%04X len=%u (expect %u) role=%s",
+                 (unsigned)dwprot_get_src(rx->buf), (unsigned)len,
+                 (unsigned)sizeof(register_response_t),
+                 device_type_to_string(device_type_get()));
         if (len == sizeof(register_response_t) && device_type_get() == DEVICE_TYPE_BOAT)
             boat_accept_registration((const register_response_t *)payload);
+        else if (device_type_get() == DEVICE_TYPE_BOAT)
+            ESP_LOGW(TAG, "RX REGISTER_RESPONSE ignored: len mismatch");
         return true;
     }
     if (func == SL_MSG_RANGING_GRANT) {
@@ -570,15 +625,9 @@ static bool port_measure_baseline(void)
                  (long long)(now_ms() - s_baseline_ms));
         return true;
     }
-    /* Keep serving REGISTER/GRANT with PS=0 so boats can still run the protocol. */
-    lock();
-    s_ps_cm = 0;
-    s_baseline_ms = now_ms();
-    unlock();
-    ESP_LOGW(TAG, "BASELINE failed after %u attempts — continuing with ps=0 cm",
+    ESP_LOGW(TAG, "BASELINE failed after %u attempts — holding grants until Starboard answers UWB",
              (unsigned)dw3000_config_get()->baseline_retries);
-    notify_status();
-    return true;
+    return false;
 }
 
 static void expire_boats(void)
@@ -600,6 +649,7 @@ static void port_task(void *arg)
 {
     (void)arg;
     for (;;) {
+        flush_pending_register_response();
         expire_boats();
         if (dw3000_config_get()->scheduler_paused) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
         lock(); const size_t count = boat_count_locked(); unlock();
