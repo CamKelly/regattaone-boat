@@ -223,7 +223,7 @@ menu "RegattaOne — DWM3000 (DW3000 SPI UWB)"
 
     config DW3000_TWR_PROCESSING_DELAY_US
         int "TWR processing delay (us)"
-        default 2000
+        default 8000
         range 300 20000
         depends on DW3000_RANGING_ENABLE
         help

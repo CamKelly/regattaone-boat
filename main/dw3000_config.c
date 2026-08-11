@@ -33,7 +33,7 @@ static dw3000_config_t default_config(void)
         .addr = 0x0001,
         .panid = 0xDECA,
         .antenna_delay = 16368,
-        .twr_delay_us = 2000,
+        .twr_delay_us = 8000,
         .registration_interval_ms = 5000,
         .grant_duration_ms = 1000,
         .inactivity_timeout_ms = 5000,

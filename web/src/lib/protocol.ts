@@ -105,7 +105,7 @@ export const DWM3000_DEFAULTS: Dwm3000Config = {
   addr: 0x0001,
   pan: 0xdeca,
   ant: 16368,
-  twr: 2000,
+  twr: 8000,
   registration_ms: 5000,
   grant_ms: 20,
   inactivity_ms: 5000,

@@ -99,7 +99,7 @@ Keep leads short; SPI at 2 MHz during init (driver default), up to ~22 MHz in me
    - **Enable UWB two-way ranging (libdeca TWR)** — for distance measurement (not just DEVID probe)
    - Set **This device's 16-bit UWB address** (unique per board; other devices use this as the ranging target id)
    - Set **UWB PAN id** the same on every device (default `0xDECA`)
-   - **TWR processing delay** must match on all ranging peers (default 2000 µs; increase if you see TX timing errors)
+   - **TWR processing delay** must match on all ranging peers (default 8000 µs; increase if you see TX timing errors)
    - **Decadriver** → confirm GPIOs (pre-filled in Freenove `sdkconfig.defaults`)
    - **Select Chip** → **DW3000** (DW3110 / DW3120 on DWM3000)
 3. Build and flash (`./scripts/idf-s3.sh freenove build flash monitor`).
@@ -109,7 +109,7 @@ Keep leads short; SPI at 2 MHz during init (driver default), up to ~22 MHz in me
    ```
    With ranging **enabled**, expect:
    ```
-   dw3000_rng: ready: addr 0x0001, pan 0xdeca, ant 16368, proc 2000 us
+   dw3000_rng: ready: addr 0x0001, pan 0xdeca, ant 16368, proc 8000 us
    ```
 
 If DEVID is wrong: check 3.3 V, GND, CS/RST/IRQ wiring, and that SPI CLK is on **GPIO 9** (not GPIO 12).
@@ -126,7 +126,7 @@ Vendored [libdeca](https://github.com/br101/libdeca) (`components/libdeca/`) pro
 | ------- | -------- | -------- |
 | `DW3000_ADDR` | `0x0001` | `0x0002` |
 | `DW3000_PANID` | `0xDECA` | `0xDECA` (same) |
-| `DW3000_TWR_PROCESSING_DELAY_US` | `2000` | `2000` (same) |
+| `DW3000_TWR_PROCESSING_DELAY_US` | `8000` | `8000` (same) |
 
 Each device automatically listens for ranging requests. No separate “anchor” mode is required.
 
