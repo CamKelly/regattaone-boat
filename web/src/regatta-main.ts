@@ -2072,7 +2072,9 @@ function renderRelativePosition(session: BleBoatSession | null): void {
   const setPoint = (id: "p" | "s" | "r" | "b", point: RelativePoint | null) => {
     const el = document.querySelector<HTMLElement>(`#relative-position-${id}`);
     if (el) {
-      el.textContent = point ? `(${point.x.toFixed(3)}, ${point.y.toFixed(3)}) m` : "—";
+      el.textContent = point
+        ? `(${point.x.toFixed(3)}, ${point.y.toFixed(3)}) m · (${(point.x * 39.37007874).toFixed(1)}, ${(point.y * 39.37007874).toFixed(1)}) in`
+        : "—";
     }
   };
   const flipY = document.querySelector<HTMLInputElement>("#relative-position-flip-y")?.checked === true;
@@ -2111,7 +2113,9 @@ function renderRelativePosition(session: BleBoatSession | null): void {
       : "Waiting for a valid TDoA fix…";
   }
   if (coordinates) {
-    coordinates.textContent = boat ? `Boat (${boat.x.toFixed(2)}, ${boat.y.toFixed(2)}) m` : "—";
+    coordinates.textContent = boat
+      ? `Boat (${boat.x.toFixed(2)}, ${boat.y.toFixed(2)}) m · (${(boat.x * 39.37007874).toFixed(1)}, ${(boat.y * 39.37007874).toFixed(1)}) in`
+      : "—";
   }
   setPoint("p", anchors.find((p) => p.name === "P") ?? null);
   setPoint("s", anchors.find((p) => p.name === "S") ?? null);

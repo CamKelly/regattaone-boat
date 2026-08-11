@@ -116,6 +116,10 @@ static uint64_t s_boat_toa_r;
 static uint64_t s_boat_tx_p;
 static uint64_t s_boat_tx_s;
 static uint64_t s_boat_tx_r;
+/* Authoritative geometry captured from the same superframe as the TDoA triple. */
+static uint16_t s_boat_ps_cm;
+static uint16_t s_boat_pr_cm;
+static uint16_t s_boat_sr_cm;
 
 #define BLINK_RX_STALE_US (2500LL * 1000LL)
 #define BLINK_RX_WATCHDOG_MS 1000U
@@ -310,7 +314,7 @@ static uint64_t local_to_master(uint64_t t_local)
 static uint64_t delayed_tx_timestamp(uint64_t programmed_time)
 {
     /* Preserve the software-extended epoch; only the radio register wraps at 40 bits. */
-    return (programmed_time & ~UINT64_C(0x1FF)) + (uint64_t)DWPHY_ANTENNA_DELAY;
+    return (programmed_time & ~UINT64_C(0x1FF)) + (uint64_t)dwphy_get_antenna_delay();
 }
 
 static void note_blink_rx(void)
@@ -385,6 +389,13 @@ static void pull_lora_baseline(void)
     const bool p_ok = have_p && port.dist_cm != MARK_BROADCAST_DIST_UNKNOWN;
     const bool s_ok = have_s && stb.dist_cm != MARK_BROADCAST_DIST_UNKNOWN;
     if (!p_ok && !s_ok) {
+        return;
+    }
+    /* LoRa is discovery/bootstrap only. Never overwrite a UWB beacon or local
+     * TWR baseline with an older broadcast value immediately before TX. */
+    uint16_t current_ps = GEOM_UNKNOWN;
+    geom_snapshot(&current_ps, NULL, NULL, NULL);
+    if (current_ps != GEOM_UNKNOWN) {
         return;
     }
     uint16_t bl;
@@ -585,9 +596,10 @@ static void on_port_sync_for_slave(const struct anchor_beacon_msg *msg, uint16_t
         msg->tx_master_dtu + (uint64_t)llround(US_TO_DTU((double)slot_us));
     /* Port advertises TX = programmed + antenna delay; program the same way. */
     const uint64_t local_target = master_to_local(t_slot_master);
+    const uint64_t antenna_delay = (uint64_t)dwphy_get_antenna_delay();
     const uint64_t local_txtime =
-        (local_target > (uint64_t)DWPHY_ANTENNA_DELAY)
-            ? (local_target - (uint64_t)DWPHY_ANTENNA_DELAY)
+        (local_target > antenna_delay)
+            ? (local_target - antenna_delay)
             : local_target;
     const uint64_t actual_local_tx = delayed_tx_timestamp(local_txtime);
     const uint64_t actual_master_tx = local_to_master(actual_local_tx);
@@ -611,16 +623,20 @@ static void boat_log_beacon(const struct anchor_beacon_msg *msg_in, uint16_t uwb
     if (msg.seq != s_boat_last_seq) {
         s_boat_last_seq = msg.seq;
         s_boat_have_p = s_boat_have_s = s_boat_have_r = false;
+        s_boat_ps_cm = s_boat_pr_cm = s_boat_sr_cm = GEOM_UNKNOWN;
     }
 
     if (msg.role == ANCHOR_ROLE_PORT) {
         s_boat_have_p = true;
         s_boat_toa_p = toa;
         s_boat_tx_p = msg.tx_master_dtu;
+        s_boat_ps_cm = msg.dist_ps_cm;
+        s_boat_pr_cm = msg.dist_pr_cm;
     } else if (msg.role == ANCHOR_ROLE_STARBOARD) {
         s_boat_have_s = true;
         s_boat_toa_s = toa;
         s_boat_tx_s = msg.tx_master_dtu;
+        s_boat_sr_cm = msg.dist_sr_cm;
     } else if (msg.role == ANCHOR_ROLE_REFERENCE) {
         s_boat_have_r = true;
         s_boat_toa_r = toa;
@@ -648,26 +664,18 @@ static void boat_log_beacon(const struct anchor_beacon_msg *msg_in, uint16_t uwb
     const int64_t tx_sp = (int64_t)s_boat_tx_s - (int64_t)s_boat_tx_p;
     const int64_t tx_rp = (int64_t)s_boat_tx_r - (int64_t)s_boat_tx_p;
     ESP_LOGI(TAG,
-             "triple seq=%lu dToA_S-P=%lld dToA_R-P=%lld dTX_S-P=%lld dTX_R-P=%lld",
+             "triple seq=%lu dToA_S-P=%lld dToA_R-P=%lld dTX_S-P=%lld dTX_R-P=%lld "
+             "geom(P:ps=%u pr=%u S:sr=%u)",
              (unsigned long)msg.seq, (long long)d_sp, (long long)d_rp, (long long)tx_sp,
-             (long long)tx_rp);
+             (long long)tx_rp,
+             s_boat_ps_cm == GEOM_UNKNOWN ? 0U : (unsigned)s_boat_ps_cm,
+             s_boat_pr_cm == GEOM_UNKNOWN ? 0U : (unsigned)s_boat_pr_cm,
+             s_boat_sr_cm == GEOM_UNKNOWN ? 0U : (unsigned)s_boat_sr_cm);
 
-    uint16_t ps = GEOM_UNKNOWN;
-    uint16_t pr = GEOM_UNKNOWN;
-    uint16_t sr = GEOM_UNKNOWN;
-    geom_snapshot(&ps, &pr, &sr, NULL);
-    if (msg.role == ANCHOR_ROLE_PORT) {
-        if (msg.dist_ps_cm != GEOM_UNKNOWN) {
-            ps = msg.dist_ps_cm;
-        }
-        if (msg.dist_pr_cm != GEOM_UNKNOWN) {
-            pr = msg.dist_pr_cm;
-        }
-    } else if (msg.role == ANCHOR_ROLE_STARBOARD) {
-        if (msg.dist_sr_cm != GEOM_UNKNOWN) {
-            sr = msg.dist_sr_cm;
-        }
-    }
+    /* Use geometry from the exact frames in this triple: P owns ps/pr; S owns sr. */
+    const uint16_t ps = s_boat_ps_cm;
+    const uint16_t pr = s_boat_pr_cm;
+    const uint16_t sr = s_boat_sr_cm;
 
     boat_tdoa_result_t fix;
     const bool ok =
@@ -681,6 +689,7 @@ static void boat_log_beacon(const struct anchor_beacon_msg *msg_in, uint16_t uwb
     (void)ok;
 #endif
     s_boat_have_p = s_boat_have_s = s_boat_have_r = false;
+    s_boat_ps_cm = s_boat_pr_cm = s_boat_sr_cm = GEOM_UNKNOWN;
 }
 
 bool mark_blink_try_handle(const struct rxbuf *rx)

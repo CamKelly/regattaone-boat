@@ -203,10 +203,18 @@ bool dwphy_config(void)
 	return true;
 }
 
+static uint16_t antenna_delay = DWPHY_DEFAULT_ANTENNA_DELAY;
+
 void dwphy_set_antenna_delay(uint16_t antdelay)
 {
+	antenna_delay = antdelay;
 	dwt_setrxantennadelay(antdelay);
 	dwt_settxantennadelay(antdelay);
+}
+
+uint16_t dwphy_get_antenna_delay(void)
+{
+	return antenna_delay;
 }
 
 const char* dwphy_rate_str(uint8_t br)

@@ -167,7 +167,7 @@ static bool twr_send_ss_response(uint64_t tag, uint64_t poll_rx_ts)
 	struct twr_msg_ss_resp* msg = dwprot_prepare(
 		tx, sizeof(struct twr_msg_ss_resp), TWR_MSG_SSRESP, tag);
 	msg->poll_rx_ts = (uint32_t)poll_rx_ts;
-	msg->resp_tx_ts = (uint32_t)(resp_tx_time + DWPHY_ANTENNA_DELAY);
+	msg->resp_tx_ts = (uint32_t)(resp_tx_time + dwphy_get_antenna_delay());
 	dwmac_tx_set_ranging(tx);
 	dwmac_tx_set_txtime(tx, resp_tx_time);
 
@@ -203,7 +203,7 @@ static bool twr_send_final(uint64_t ancor, uint64_t resp_rx_ts)
 
 	/* Final TX timestamp is the transmission time we programmed plus the TX
 	 * antenna delay. */
-	uint64_t final_tx_ts = (final_tx_time + DWPHY_ANTENNA_DELAY) & DTU_MASK;
+	uint64_t final_tx_ts = (final_tx_time + dwphy_get_antenna_delay()) & DTU_MASK;
 
 	struct twr_msg_final* final_msg
 		= dwprot_prepare(tx, sizeof(struct twr_msg_final), TWR_MSG_FINA, ancor);

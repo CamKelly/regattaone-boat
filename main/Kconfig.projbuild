@@ -223,7 +223,7 @@ menu "RegattaOne — DWM3000 (DW3000 SPI UWB)"
         depends on DW3000_RANGING_ENABLE
 
     config DW3000_ANTENNA_DELAY
-        int "Antenna delay (DTU, TX+RX combined)"
+        int "Antenna delay (DTU, applied to TX and RX)"
         default 16368
         range 0 65535
         depends on DW3000_RANGING_ENABLE

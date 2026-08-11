@@ -22,7 +22,7 @@
 // #define DWPHY_ANTENNA_DELAY 16384
 // #define DWPHY_ANTENNA_DELAY 16150
 // #define DWPHY_ANTENNA_DELAY 16405
-#define DWPHY_ANTENNA_DELAY 16368
+#define DWPHY_DEFAULT_ANTENNA_DELAY 16368
 
 /* the phy_get_[preable/sfd/phyhdr/data/packet]_time functions return in units
  * of (picoseconds / 10) = (nanoseconds * 100), so this macro can be used to
@@ -31,6 +31,7 @@
 
 bool dwphy_config(void);
 void dwphy_set_antenna_delay(uint16_t antdelay);
+uint16_t dwphy_get_antenna_delay(void);
 
 /* phy time calculations */
 const char* dwphy_rate_str(uint8_t br);

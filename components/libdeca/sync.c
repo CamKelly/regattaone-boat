@@ -40,7 +40,7 @@ bool sync_send_short(void)
 
 	struct toda_sync_msg* msg = dwprot_short_prepare(
 		tx, sizeof(struct toda_sync_msg), SYNC_MSG, 0xffff);
-	msg->tx_ts = send_dtu + DWPHY_ANTENNA_DELAY;
+	msg->tx_ts = send_dtu + dwphy_get_antenna_delay();
 	msg->seq_no = sync_seq++;
 
 	send_dtu &= DTU_MASK;
@@ -64,7 +64,7 @@ bool sync_send_long(uint64_t src)
 
 	struct toda_sync_msg* msg = dwprot_long_src_prepare(
 		tx, sizeof(struct toda_sync_msg), SYNC_MSG, src);
-	msg->tx_ts = send_dtu + DWPHY_ANTENNA_DELAY;
+	msg->tx_ts = send_dtu + dwphy_get_antenna_delay();
 	msg->seq_no = sync_seq++;
 
 	send_dtu &= DTU_MASK;
