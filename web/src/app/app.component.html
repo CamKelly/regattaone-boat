@@ -65,7 +65,6 @@
                   <select id="device-type-select" class="native-select">
                     <option value="port">Port</option>
                     <option value="starboard">Starboard</option>
-                    <option value="reference">Reference</option>
                     <option value="boat">Boat</option>
                   </select>
                 </div>
@@ -74,7 +73,7 @@
                 </div>
               </div>
               <p id="device-type-status" class="field-hint">
-                Port / Starboard / Reference / Boat role for mark broadcast and ranging. Saved on device NVS.
+                Port / Starboard / Boat role for mark broadcast and scheduled DS-TWR. Saved on device NVS.
               </p>
             </div>
           </div>
@@ -111,7 +110,7 @@
 
           <nz-tab nzTitle="Position">
             <p id="relative-position-status" class="tab-hint">
-              Connect to a Boat device and wait for a valid three-anchor TDoA fix.
+              Connect to a Boat and wait for a successful Starboard-then-Port DS-TWR cycle.
             </p>
             <div class="relative-position-toolbar">
               <label class="field-label" for="relative-position-flip-y">
@@ -123,33 +122,30 @@
             <div class="relative-position-readout" aria-live="polite">
               <div><strong>P · Port</strong><span id="relative-position-p">—</span></div>
               <div><strong>S · Starboard</strong><span id="relative-position-s">—</span></div>
-              <div><strong>R · Reference</strong><span id="relative-position-r">—</span></div>
               <div><strong>B · Boat</strong><span id="relative-position-b">—</span></div>
             </div>
             <div
               id="relative-position-chart"
               class="relative-position-chart"
               role="img"
-              aria-label="Relative positions of Port, Starboard, Reference and Boat"
+              aria-label="Relative positions of Port, Starboard and Boat"
             ></div>
             <p class="field-hint">
-              Port is the origin and Starboard defines +X. The blue line shows the latest 30 valid boat fixes.
-              Reference is shown after firmware supplies its solved relative coordinate. Scroll or pinch to zoom,
-              drag to pan, and use the chart toolbar to reset the view.
+              Port is the origin and Starboard defines +X. P↔S is labelled in centimetres and inches.
+              A failed cycle retains B but marks it stale. Scroll or pinch to zoom, drag to pan, and use the
+              chart toolbar to reset the view.
             </p>
           </nz-tab>
 
           <nz-tab nzTitle="DWM3000 · 0xFEF2" id="dwm3000-tab" hidden>
             <p class="tab-hint">
-              Qorvo DWM3000 SPI UWB settings (<code>0xFEF2</code>) and two-way ranging
-              (<code>0xFEF3</code>). Values are saved to device NVS and survive power-off.
-              All devices must share the same PAN id and TWR processing delay.
-              Port / Starboard / Reference / Boat role is set under Device → Device type
-              (<code>0xFEFC</code>).
+              Qorvo DWM3000 and scheduled start-line DS-TWR settings. Values are saved to device NVS.
+              Port is always UWB <code>0x0001</code>, Starboard is <code>0x0002</code>, and Boat addresses
+              are assigned by Port. All devices must share the same PAN id and TWR processing delay.
             </p>
             <div nz-row [nzGutter]="[12, 12]">
               <div nz-col [nzXs]="24" [nzMd]="12">
-                <label class="field-label" for="dwm3000-addr-input">This device&apos;s 16-bit UWB address</label>
+                <label class="field-label" for="dwm3000-addr-input">Runtime UWB address (automatic)</label>
                 <input
                   nz-input
                   id="dwm3000-addr-input"
@@ -194,17 +190,17 @@
                   placeholder="2000"
                 />
               </div>
+              <div nz-col [nzXs]="24" [nzMd]="12"><label class="field-label" for="dwm3000-registration-ms">Registration retry (ms)</label><input nz-input id="dwm3000-registration-ms" type="number" min="500" max="60000" /></div>
+              <div nz-col [nzXs]="24" [nzMd]="12"><label class="field-label" for="dwm3000-grant-ms">Boat ranging duration (ms)</label><input nz-input id="dwm3000-grant-ms" type="number" min="10" max="1000" /></div>
+              <div nz-col [nzXs]="24" [nzMd]="12"><label class="field-label" for="dwm3000-inactivity-ms">Minimum inactivity timeout (ms)</label><input nz-input id="dwm3000-inactivity-ms" type="number" min="1000" max="300000" /></div>
+              <div nz-col [nzXs]="24" [nzMd]="12"><label class="field-label" for="dwm3000-baseline-age-ms">Maximum P↔S baseline age (ms)</label><input nz-input id="dwm3000-baseline-age-ms" type="number" min="500" max="300000" /></div>
+              <div nz-col [nzXs]="24" [nzMd]="8"><label class="field-label" for="dwm3000-max-missed">Maximum missed grants</label><input nz-input id="dwm3000-max-missed" type="number" min="1" max="255" /></div>
+              <div nz-col [nzXs]="24" [nzMd]="8"><label class="field-label" for="dwm3000-baseline-retries">Baseline attempts</label><input nz-input id="dwm3000-baseline-retries" type="number" min="1" max="255" /></div>
+              <div nz-col [nzXs]="24" [nzMd]="8"><label class="field-label" for="dwm3000-boat-retries">Boat retries per mark</label><input nz-input id="dwm3000-boat-retries" type="number" min="0" max="5" /></div>
               <div nz-col [nzSpan]="24">
-                <label class="field-label" for="dwm3000-anchor-twr">
-                  <input id="dwm3000-anchor-twr" type="checkbox" />
-                  Periodic anchor TWR (Port ↔ Starboard ↔ Reference)
-                </label>
-                <p class="field-hint">
-                  Measures ps / pr / sr about every 10 s in the quiet gap after each UWB beacon
-                  superframe so beacons are only skipped if a range is still in flight. Port
-                  measures ps+pr; Starboard measures sr; Reference responds. Turn off to keep
-                  the radio beacon-only. Manual Measure below still works when off.
-                </p>
+                <label class="field-label"><input id="dwm3000-detailed-logs" type="checkbox" /> Detailed ranging diagnostics</label>
+                <label class="field-label"><input id="dwm3000-scheduler-paused" type="checkbox" /> Pause Port scheduler</label>
+                <p class="field-hint">Effective inactivity timeout is the larger of this minimum and three queue rotations.</p>
               </div>
               <div nz-col [nzSpan]="24">
                 <div nz-row [nzGutter]="8">
@@ -215,23 +211,27 @@
                 <p id="dwm3000-config-status" class="field-hint">Connect a DWM3000 device to edit settings.</p>
               </div>
               <div nz-col [nzSpan]="24">
-                <label class="field-label" for="dwm3000-peer-input">Measure distance to peer UWB address</label>
-                <div nz-row [nzGutter]="8">
-                  <div nz-col [nzFlex]="'auto'">
-                    <input
-                      nz-input
-                      id="dwm3000-peer-input"
-                      type="text"
-                      spellcheck="false"
-                      autocomplete="off"
-                      placeholder="0x0002"
-                    />
+                <section class="dwm3000-live-ranges" aria-labelledby="dwm3000-live-ranges-title" aria-live="polite">
+                  <h3 id="dwm3000-live-ranges-title" class="field-label">Latest automatic TWR</h3>
+                  <p id="dwm3000-live-ranges-hint" class="field-hint">Connect a Port or Starboard device.</p>
+                  <div class="dwm3000-live-range-grid">
+                    <div id="dwm3000-live-ps-card" hidden>
+                      <strong>PS · Port ↔ Starboard</strong>
+                      <span id="dwm3000-live-ps">—</span>
+                    </div>
                   </div>
-                  <div nz-col [nzFlex]="'none'">
-                    <button nz-button nzType="primary" type="button" id="dwm3000-range-btn">Measure</button>
+                </section>
+              </div>
+              <div nz-col [nzSpan]="24">
+                <section id="dwm3000-registered-section" hidden>
+                  <h3 class="field-label">Registered Boats</h3>
+                  <div class="table-scroll">
+                    <table class="registered-boats-table">
+                      <thead><tr><th>Boat ID</th><th>UUID</th><th>Last GPS</th><th>Last Port range</th><th>Completed</th><th>Missed</th></tr></thead>
+                      <tbody id="dwm3000-registered-body"></tbody>
+                    </table>
                   </div>
-                </div>
-                <p id="dwm3000-range-status" class="field-hint">Enter another device&apos;s UWB address and tap Measure.</p>
+                </section>
               </div>
             </div>
           </nz-tab>
@@ -315,12 +315,11 @@
 
             <h3 class="field-label">Boat geometry</h3>
             <p class="tab-hint">
-              On a Boat device: TDoA position from Port / Starboard / Reference UWB beacons
-              (local frame: Port at origin, Starboard +X), plus opposite-mark distances from
-              Meshtastic.
+              On a Boat device: scheduled DS-TWR distances and position in the local frame
+              (Port at origin, Starboard +X), plus existing mark broadcasts from Meshtastic.
             </p>
             <section class="mark-bcast-panel boat-geom-panel" aria-labelledby="boat-geom-title" aria-live="polite">
-              <h4 id="boat-geom-title" class="mark-bcast-title">Distances &amp; TDoA</h4>
+              <h4 id="boat-geom-title" class="mark-bcast-title">Start-line distances</h4>
               <dl class="mark-bcast-fields">
                 <div class="mark-bcast-row">
                   <dt>Position (P origin)</dt>
@@ -333,10 +332,6 @@
                 <div class="mark-bcast-row">
                   <dt>Boat → Starboard</dt>
                   <dd id="boat-geom-boat-starboard">—</dd>
-                </div>
-                <div class="mark-bcast-row">
-                  <dt>Boat → Reference</dt>
-                  <dd id="boat-geom-boat-reference">—</dd>
                 </div>
                 <div class="mark-bcast-row">
                   <dt>Port → Starboard</dt>

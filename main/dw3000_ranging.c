@@ -2,7 +2,7 @@
 
 #include "dw3000_config.h"
 #include "device_type.h"
-#include "mark_blink.h"
+#include "start_line_ranging.h"
 
 #include "sdkconfig.h"
 
@@ -33,29 +33,29 @@ static volatile uint16_t s_result_cm;
 static volatile bool s_result_ok;
 
 static dw3000_range_result_cb_t s_user_cb;
+static uint16_t s_runtime_addr;
 
 static uint16_t self_addr(void)
 {
-    return dw3000_config_get()->addr;
+    return s_runtime_addr;
 }
 
 /**
- * App RX path: mark blinks first; boats drop TWR so they stay UWB-passive
- * (no poll replies). All other frames go to libdeca dwprot_rx_handler.
+ * App RX path: registration/grant messages are handled by the start-line
+ * protocol. DS-TWR Polls are admitted only for the current grant.
  */
 static void app_rx_handler(const struct rxbuf *rx)
 {
-    if (mark_blink_try_handle(rx)) {
+    if (start_line_ranging_try_handle(rx)) {
         return;
     }
 
-    if (device_type_get() == DEVICE_TYPE_BOAT && rx != NULL && rx->len >= 2) {
+    if (rx != NULL && rx->len >= 2) {
         const uint16_t fc = *(const uint16_t *)rx->buf;
         if ((fc & MAC154_FC_TYPE_DATA) != 0 && dwprot_check_min_len(rx->buf, rx->len)) {
             const uint8_t func = dwprot_get_func(rx->buf);
-            if ((func & DWMAC_PROTO_MSG_MASK) == TWR_MSG_GROUP) {
-                return; /* boat: never TX a TWR response */
-            }
+            if ((func & DWMAC_PROTO_MSG_MASK) == TWR_MSG_GROUP &&
+                !start_line_ranging_allow_twr(rx)) return;
         }
     }
 
@@ -92,6 +92,7 @@ static void twr_observer(uint64_t src, uint64_t dst, uint16_t dist, uint16_t num
     if (s_user_cb) {
         s_user_cb(peer, cm, ok);
     }
+    start_line_ranging_on_twr_result(src, dst, dist, num);
 }
 
 esp_err_t dw3000_ranging_init(void)
@@ -135,13 +136,17 @@ esp_err_t dw3000_ranging_init(void)
     dwphy_set_antenna_delay(dw3000_config_get()->antenna_delay);
 
     const dw3000_config_t *cfg = dw3000_config_get();
-    if (!dwmac_init(cfg->panid, cfg->addr, app_rx_handler, NULL, NULL)) {
+    const device_type_t role = device_type_get();
+    s_runtime_addr = role == DEVICE_TYPE_PORT ? START_LINE_PORT_ADDR :
+                     role == DEVICE_TYPE_STARBOARD ? START_LINE_STARBOARD_ADDR : START_LINE_UNASSIGNED_ADDR;
+    if (!dwmac_init(cfg->panid, s_runtime_addr, app_rx_handler, NULL, NULL)) {
         ESP_LOGE(TAG, "dwmac_init failed");
         return ESP_FAIL;
     }
     dwmac_set_frame_filter();
 
     twr_init(cfg->twr_delay_us, true);
+    twr_set_diagnostics(cfg->detailed_ranging_logs);
     twr_set_observer(twr_observer);
 
     /* Stay in RX so marks can answer TWR and boats can sniff blinks. */
@@ -160,12 +165,27 @@ esp_err_t dw3000_ranging_apply_config(void)
     }
     const dw3000_config_t *cfg = dw3000_config_get();
     dwphy_set_antenna_delay(cfg->antenna_delay);
-    if (!dwmac_set_pan_addr(cfg->panid, cfg->addr)) {
+    const device_type_t role = device_type_get();
+    const uint16_t fixed_addr = role == DEVICE_TYPE_PORT ? START_LINE_PORT_ADDR :
+                                role == DEVICE_TYPE_STARBOARD ? START_LINE_STARBOARD_ADDR : s_runtime_addr;
+    if (!dwmac_set_pan_addr(cfg->panid, fixed_addr)) {
         return ESP_ERR_INVALID_ARG;
     }
     twr_init(cfg->twr_delay_us, true);
+    twr_set_diagnostics(cfg->detailed_ranging_logs);
+    start_line_ranging_config_changed();
     ESP_LOGI(TAG, "applied config: addr 0x%04X pan 0x%04X ant %u twr %lu us", (unsigned)cfg->addr,
              (unsigned)cfg->panid, (unsigned)cfg->antenna_delay, (unsigned long)cfg->twr_delay_us);
+    return ESP_OK;
+}
+
+esp_err_t dw3000_ranging_set_runtime_addr(uint16_t addr)
+{
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    if (addr == 0xffffU) return ESP_ERR_INVALID_ARG;
+    if (!dwmac_set_pan_addr(dw3000_config_get()->panid, addr)) return ESP_FAIL;
+    s_runtime_addr = addr;
+    ESP_LOGI(TAG, "runtime address 0x%04X", (unsigned)addr);
     return ESP_OK;
 }
 
@@ -192,10 +212,6 @@ esp_err_t dw3000_range_to(uint16_t peer_addr, uint16_t *dist_cm,
     }
     if (!s_ready) {
         return ESP_ERR_INVALID_STATE;
-    }
-    /* Boats are UWB-passive (blink sniff only). */
-    if (device_type_get() == DEVICE_TYPE_BOAT) {
-        return ESP_ERR_NOT_SUPPORTED;
     }
     if (timeout_ms == 0) {
         timeout_ms = DW3000_RANGE_DEFAULT_TIMEOUT_MS;

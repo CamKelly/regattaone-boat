@@ -24,7 +24,6 @@
 #include "ranging.h"
 
 #define TWR_DEBUG_CALCULATION 0
-#define TWR_MAX_RETRY		  3
 #define TWR_RETRY_DELAY		  20  /* random with this maximum in ms */
 #define TWR_SPI_US_PER_BYTE	  2.3 /* TODO: measured with 8MHz DMA for 12 byte */
 
@@ -40,6 +39,7 @@
 #define TWR_MSG_REPO   0x2A
 
 struct twr_msg_final {
+	struct twr_context context;
 	uint32_t round;
 	uint32_t delay;
 	uint16_t cnum; // sequence number / TWR ID
@@ -51,6 +51,7 @@ struct twr_msg_ss_resp {
 } __attribute__((packed));
 
 struct twr_msg_report {
+	struct twr_context context;
 	uint16_t cnum; // sequence number / TWR ID
 	uint16_t dist;
 } __attribute__((packed));
@@ -64,6 +65,10 @@ static uint64_t twr_delay_dtu;
 static uint32_t twr_rx_delay; // UUS
 static uint16_t twr_pto;
 static bool twr_send_report;
+static bool twr_diagnostics;
+static uint8_t twr_max_attempts = 2;
+static struct twr_context twr_tx_context;
+static struct twr_context twr_exchange_context;
 
 /* state */
 static twr_cb_t twr_observer_cb;
@@ -100,7 +105,9 @@ static bool twr_send_poll(uint64_t ancor)
 	if (tx == NULL)
 		return false;
 
-	dwprot_prepare(tx, 0, single_sided ? TWR_MSG_SSPOLL : TWR_MSG_POLL, ancor);
+	struct twr_context* context = dwprot_prepare(
+		tx, sizeof(*context), single_sided ? TWR_MSG_SSPOLL : TWR_MSG_POLL, ancor);
+	*context = twr_tx_context;
 	dwmac_tx_set_ranging(tx);
 	dwmac_tx_expect_response(tx, twr_rx_delay);
 	dwmac_tx_set_preamble_timeout(tx, twr_pto);
@@ -119,7 +126,8 @@ static bool twr_send_poll(uint64_t ancor)
 }
 
 /* ANCOR -> TAG */
-static bool twr_send_response(uint64_t tag, uint64_t poll_rx_ts)
+static bool twr_send_response(uint64_t tag, uint64_t poll_rx_ts,
+						  const struct twr_context* context)
 {
 	struct txbuf* tx = dwmac_txbuf_get();
 	if (tx == NULL) {
@@ -129,7 +137,9 @@ static bool twr_send_response(uint64_t tag, uint64_t poll_rx_ts)
 	last_poll_rx_ts = poll_rx_ts;
 	uint64_t resp_tx_time = poll_rx_ts + twr_delay_dtu;
 
-	dwprot_prepare(tx, 0, TWR_MSG_RESP, tag);
+	struct twr_context* response = dwprot_prepare(tx, sizeof(*response), TWR_MSG_RESP, tag);
+	*response = *context;
+	twr_exchange_context = *context;
 	dwmac_tx_set_ranging(tx);
 	dwmac_tx_expect_response(tx, twr_rx_delay);
 	dwmac_tx_set_preamble_timeout(tx, twr_pto);
@@ -207,6 +217,7 @@ static bool twr_send_final(uint64_t ancor, uint64_t resp_rx_ts)
 
 	struct twr_msg_final* final_msg
 		= dwprot_prepare(tx, sizeof(struct twr_msg_final), TWR_MSG_FINA, ancor);
+	final_msg->context = twr_tx_context;
 	final_msg->cnum = twr_cnum;
 	final_msg->round = resp_rx_ts - poll_tx_ts;
 	final_msg->delay = final_tx_ts - resp_rx_ts;
@@ -258,6 +269,7 @@ static bool twr_send_report_msg(uint64_t tag, uint16_t dist, uint16_t cnum,
 
 	struct twr_msg_report* msg
 		= dwprot_prepare(tx, sizeof(struct twr_msg_report), TWR_MSG_REPO, tag);
+	msg->context = twr_exchange_context;
 	msg->cnum = cnum;
 	msg->dist = dist;
 
@@ -305,6 +317,13 @@ double twr_distance_calculation_dtu(uint32_t poll_rx_ts, uint32_t resp_tx_ts,
 	 * A proof of it can be found here:
 	 * https://forum.bitcraze.io/viewtopic.php?t=1944 */
 	double tof_dtu = (double)(Ra * Rb - Da * Db) / (Ra + Rb + Da + Db);
+	if (twr_diagnostics) {
+		LOG_INF("diag poll_rx=%" PRIu32 " resp_tx=%" PRIu32 " final_rx=%" PRIu32
+				" Ra=%" PRIu32 " Rb=%" PRIu32 " Da=%" PRIu32 " Db=%" PRIu32
+				" tof_dtu=%.3f ant=%u",
+				poll_rx_ts, resp_tx_ts, final_rx_ts, Ra, (uint32_t)Rb, Da,
+				(uint32_t)Db, tof_dtu, (unsigned)dwphy_get_antenna_delay());
+	}
 
 	if (TWR_DEBUG_CALCULATION) {
 		LOG_DBG("Poll RX TS:\t%" PRIu32, poll_rx_ts);
@@ -351,7 +370,7 @@ static void twr_callback(uint64_t src, uint64_t dst, uint16_t dist,
 
 static void twr_retry(void)
 {
-	if (++retry < TWR_MAX_RETRY) {
+	if (++retry < twr_max_attempts) {
 #ifdef __ZEPHYR__
 		int d = sys_rand32_get() % TWR_RETRY_DELAY;
 #else
@@ -419,9 +438,21 @@ static void twr_handle_result(uint64_t src, uint64_t dst, uint16_t dist,
  */
 
 /* ANCOR */
+static bool twr_context_equal(const struct twr_context* a,
+						  const struct twr_context* b)
+{
+	return a->session_id == b->session_id && a->grant_nonce == b->grant_nonce
+		&& a->grant_sequence == b->grant_sequence
+		&& a->protocol_version == b->protocol_version;
+}
+
 static void twr_handle_final(const struct twr_msg_final* msg_final,
 							 uint64_t final_rx_ts, uint64_t src)
 {
+	if (!twr_context_equal(&msg_final->context, &twr_exchange_context)) {
+		LOG_ERR("Drop Final with stale session/grant context");
+		return;
+	}
 	DBG_UWB("Received Final from " LADDR_FMT, LADDR_PAR(src));
 
 	expected_msg = 0;
@@ -445,6 +476,10 @@ static void twr_handle_final(const struct twr_msg_final* msg_final,
 /* TAG */
 static void twr_handle_report(const struct twr_msg_report* msg, uint64_t src)
 {
+	if (!twr_context_equal(&msg->context, &twr_tx_context)) {
+		LOG_ERR("Drop Report with stale session/grant context");
+		return;
+	}
 	/* no more messages expected */
 	expected_msg = 0;
 
@@ -480,15 +515,15 @@ static size_t twr_get_msg_len(uint8_t func)
 {
 	switch (func) {
 	case TWR_MSG_POLL:
-		return 0;
+		return sizeof(struct twr_context);
 	case TWR_MSG_RESP:
-		return 0;
+		return sizeof(struct twr_context);
 	case TWR_MSG_FINA:
 		return sizeof(struct twr_msg_final);
 	case TWR_MSG_REPO:
 		return sizeof(struct twr_msg_report);
 	case TWR_MSG_SSPOLL:
-		return 0;
+		return sizeof(struct twr_context);
 	case TWR_MSG_SSRESP:
 		return sizeof(struct twr_msg_ss_resp);
 	}
@@ -516,9 +551,13 @@ void twr_handle_message(const struct rxbuf* rx)
 
 	switch (func) {
 	case TWR_MSG_POLL:
-		twr_send_response(src, rx->ts);
+		twr_send_response(src, rx->ts, dwprot_get_payload(rx->buf));
 		break;
 	case TWR_MSG_RESP:
+		if (!twr_context_equal(dwprot_get_payload(rx->buf), &twr_tx_context)) {
+			LOG_ERR("Drop Response with stale session/grant context");
+			break;
+		}
 		twr_send_final(src, rx->ts);
 		break;
 	case TWR_MSG_FINA:
@@ -663,6 +702,48 @@ void twr_cancel(void)
 void twr_set_observer(twr_cb_t cb)
 {
 	twr_observer_cb = cb;
+}
+
+void twr_set_diagnostics(bool enabled)
+{
+	twr_diagnostics = enabled;
+}
+
+void twr_set_max_attempts(uint8_t attempts)
+{
+	twr_max_attempts = attempts == 0 ? 1 : attempts;
+}
+
+void twr_set_context(uint32_t session_id, uint32_t grant_nonce,
+					 uint16_t grant_sequence, uint8_t protocol_version)
+{
+	twr_tx_context.session_id = session_id;
+	twr_tx_context.grant_nonce = grant_nonce;
+	twr_tx_context.grant_sequence = grant_sequence;
+	twr_tx_context.protocol_version = protocol_version;
+	twr_tx_context.reserved = 0;
+}
+
+bool twr_get_message_context(const struct rxbuf* rx, struct twr_context* out)
+{
+	if (rx == NULL || out == NULL || !dwprot_check_min_len(rx->buf, rx->len))
+		return false;
+	uint8_t func = dwprot_get_func(rx->buf);
+	if ((func & DWMAC_PROTO_MSG_MASK) != TWR_MSG_GROUP
+		|| dwprot_get_payload_len(rx->buf, rx->len) != twr_get_msg_len(func))
+		return false;
+	const void* payload = dwprot_get_payload(rx->buf);
+	if (func == TWR_MSG_POLL || func == TWR_MSG_RESP
+		|| func == TWR_MSG_SSPOLL) {
+		*out = *(const struct twr_context*)payload;
+	} else if (func == TWR_MSG_FINA) {
+		*out = ((const struct twr_msg_final*)payload)->context;
+	} else if (func == TWR_MSG_REPO) {
+		*out = ((const struct twr_msg_report*)payload)->context;
+	} else {
+		return false;
+	}
+	return true;
 }
 
 bool twr_in_progress(void)

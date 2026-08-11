@@ -76,7 +76,7 @@ struct anchor_beacon_msg {
     uint16_t dist_ps_cm;     /**< Port↔Starboard; 0xFFFF unknown */
     uint16_t dist_pr_cm;     /**< Port↔Reference */
     uint16_t dist_sr_cm;     /**< Starboard↔Reference */
-    uint16_t geom_ver;       /**< Bumps when any baseline updates */
+    uint16_t geom_ver;       /**< Sender-local geometry cache revision */
 } __attribute__((packed));
 
 /* --- shared geometry (beacon payload) --- */
@@ -349,9 +349,10 @@ static bool tx_beacon(uint8_t role, uint32_t seq, uint64_t tx_master, uint64_t l
     msg->slot_s_us = (uint16_t)CONFIG_MARK_BLINK_SLOT_STARBOARD_US;
     msg->slot_r_us = (uint16_t)CONFIG_MARK_BLINK_SLOT_REFERENCE_US;
     msg->tx_master_dtu = tx_master;
-    msg->dist_ps_cm = ps;
-    msg->dist_pr_cm = pr;
-    msg->dist_sr_cm = sr;
+    /* Each measured baseline has exactly one publishing authority. */
+    msg->dist_ps_cm = role == ANCHOR_ROLE_PORT ? ps : GEOM_UNKNOWN;
+    msg->dist_pr_cm = role == ANCHOR_ROLE_PORT ? pr : GEOM_UNKNOWN;
+    msg->dist_sr_cm = role == ANCHOR_ROLE_STARBOARD ? sr : GEOM_UNKNOWN;
     msg->geom_ver = gver;
 
     if (local_txtime != 0) {
@@ -360,11 +361,24 @@ static bool tx_beacon(uint8_t role, uint32_t seq, uint64_t tx_master, uint64_t l
 
     const bool ok = dwmac_transmit(tx);
     if (ok) {
-        ESP_LOGI(TAG, "TX beacon role=%c seq=%lu master_tx=%llu local=%s geom_ver=%u ps=%u pr=%u sr=%u",
-                 (char)role, (unsigned long)seq, (unsigned long long)tx_master,
-                 local_txtime ? "delayed" : "now", (unsigned)gver,
-                 ps == GEOM_UNKNOWN ? 0U : (unsigned)ps, pr == GEOM_UNKNOWN ? 0U : (unsigned)pr,
-                 sr == GEOM_UNKNOWN ? 0U : (unsigned)sr);
+        if (role == ANCHOR_ROLE_PORT) {
+            ESP_LOGI(TAG,
+                     "TX beacon role=P seq=%lu master_tx=%llu local=%s ps=%u pr=%u geom_ver=%u",
+                     (unsigned long)seq, (unsigned long long)tx_master,
+                     local_txtime ? "delayed" : "now",
+                     ps == GEOM_UNKNOWN ? 0U : (unsigned)ps,
+                     pr == GEOM_UNKNOWN ? 0U : (unsigned)pr, (unsigned)gver);
+        } else if (role == ANCHOR_ROLE_STARBOARD) {
+            ESP_LOGI(TAG,
+                     "TX beacon role=S seq=%lu master_tx=%llu local=%s sr=%u geom_ver=%u",
+                     (unsigned long)seq, (unsigned long long)tx_master,
+                     local_txtime ? "delayed" : "now",
+                     sr == GEOM_UNKNOWN ? 0U : (unsigned)sr, (unsigned)gver);
+        } else {
+            ESP_LOGI(TAG, "TX beacon role=R seq=%lu master_tx=%llu local=%s geom_ver=%u",
+                     (unsigned long)seq, (unsigned long long)tx_master,
+                     local_txtime ? "delayed" : "now", (unsigned)gver);
+        }
     } else {
         ESP_LOGW(TAG, "TX beacon FAILED role=%c seq=%lu (slot may be too soon for PHY)", (char)role,
                  (unsigned long)seq);
@@ -643,17 +657,35 @@ static void boat_log_beacon(const struct anchor_beacon_msg *msg_in, uint16_t uwb
         s_boat_tx_r = msg.tx_master_dtu;
     }
 
-    ESP_LOGI(TAG,
-             "beacon seq=%lu role=%c uwb=0x%04X ToA=%02x%02x%02x%02x%02x tx_master=%llu "
-             "ps=%u pr=%u sr=%u geom_ver=%u",
-             (unsigned long)msg.seq, (char)msg.role, (unsigned)uwb, (unsigned)((toa >> 32) & 0xff),
-             (unsigned)((toa >> 24) & 0xff), (unsigned)((toa >> 16) & 0xff),
-             (unsigned)((toa >> 8) & 0xff), (unsigned)(toa & 0xff),
-             (unsigned long long)msg.tx_master_dtu,
-             msg.dist_ps_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_ps_cm,
-             msg.dist_pr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_pr_cm,
-             msg.dist_sr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_sr_cm,
-             (unsigned)msg.geom_ver);
+    const unsigned toa4 = (unsigned)((toa >> 32) & 0xff);
+    const unsigned toa3 = (unsigned)((toa >> 24) & 0xff);
+    const unsigned toa2 = (unsigned)((toa >> 16) & 0xff);
+    const unsigned toa1 = (unsigned)((toa >> 8) & 0xff);
+    const unsigned toa0 = (unsigned)(toa & 0xff);
+    if (msg.role == ANCHOR_ROLE_PORT) {
+        ESP_LOGI(TAG,
+                 "beacon seq=%lu role=P uwb=0x%04X ToA=%02x%02x%02x%02x%02x tx_master=%llu "
+                 "ps=%u pr=%u geom_ver=%u",
+                 (unsigned long)msg.seq, (unsigned)uwb, toa4, toa3, toa2, toa1, toa0,
+                 (unsigned long long)msg.tx_master_dtu,
+                 msg.dist_ps_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_ps_cm,
+                 msg.dist_pr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_pr_cm,
+                 (unsigned)msg.geom_ver);
+    } else if (msg.role == ANCHOR_ROLE_STARBOARD) {
+        ESP_LOGI(TAG,
+                 "beacon seq=%lu role=S uwb=0x%04X ToA=%02x%02x%02x%02x%02x tx_master=%llu "
+                 "sr=%u geom_ver=%u",
+                 (unsigned long)msg.seq, (unsigned)uwb, toa4, toa3, toa2, toa1, toa0,
+                 (unsigned long long)msg.tx_master_dtu,
+                 msg.dist_sr_cm == GEOM_UNKNOWN ? 0U : (unsigned)msg.dist_sr_cm,
+                 (unsigned)msg.geom_ver);
+    } else {
+        ESP_LOGI(TAG,
+                 "beacon seq=%lu role=R uwb=0x%04X ToA=%02x%02x%02x%02x%02x tx_master=%llu "
+                 "geom_ver=%u",
+                 (unsigned long)msg.seq, (unsigned)uwb, toa4, toa3, toa2, toa1, toa0,
+                 (unsigned long long)msg.tx_master_dtu, (unsigned)msg.geom_ver);
+    }
 
     if (!(s_boat_have_p && s_boat_have_s && s_boat_have_r)) {
         return;

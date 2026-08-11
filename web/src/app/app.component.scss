@@ -203,6 +203,49 @@
   background: #fff;
 }
 
+.dwm3000-live-ranges {
+  padding: 10px;
+  border: 1px solid #f0f0f0;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.dwm3000-live-range-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.table-scroll { overflow-x: auto; }
+.registered-boats-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.registered-boats-table th,
+.registered-boats-table td { padding: 7px 9px; border-bottom: 1px solid #e5e7eb; text-align: left; white-space: nowrap; }
+.registered-boats-table th { color: #64748b; font-weight: 600; }
+
+.dwm3000-live-range-grid > div {
+  padding: 8px 10px;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.dwm3000-live-range-grid strong,
+.dwm3000-live-range-grid span {
+  display: block;
+}
+
+.dwm3000-live-range-grid strong {
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.dwm3000-live-range-grid span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
 @media (max-width: 600px) {
   .relative-position-toolbar {
     align-items: flex-start;
@@ -215,6 +258,10 @@
 
   .relative-position-readout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dwm3000-live-range-grid {
+    grid-template-columns: 1fr;
   }
 }
 

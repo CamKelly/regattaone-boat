@@ -20,7 +20,7 @@
 
 #if CONFIG_DW3000_RANGING_ENABLE
 #include "dw3000_ranging.h"
-#include "mark_blink.h"
+#include "start_line_ranging.h"
 #endif
 
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
@@ -267,7 +267,7 @@ static void boat_geom_ble_notify(void)
     xSemaphoreGive(s_store_mtx);
 
 #if CONFIG_DW3000_RANGING_ENABLE
-    mark_blink_get_geometry_cm(&anchor_ps, &anchor_pr, &anchor_sr, NULL);
+    anchor_ps = start_line_ranging_baseline_cm();
 #endif
 
     char bp[12], bs[12], ps[12], sp[12], aps[12], apr[12], asr[12];
@@ -353,13 +353,12 @@ static void mark_tx_once(void)
     }
 #endif
 
-    /* Baseline TWR lives in mark_blink quiet gaps — do not range here (would
-     * collide with UWB beacons). Prefer blink geometry; fall back to last LoRa. */
+    /* UWB scheduler owns baseline ranging. Reuse its latest PS without starting
+     * an independent radio operation from the Meshtastic task. */
     uint16_t dist = MARK_BROADCAST_DIST_UNKNOWN;
 #if CONFIG_DW3000_RANGING_ENABLE
-    uint16_t ps = ANCHOR_DIST_UNKNOWN;
-    mark_blink_get_geometry_cm(&ps, NULL, NULL, NULL);
-    if (ps != ANCHOR_DIST_UNKNOWN) {
+    uint16_t ps = start_line_ranging_baseline_cm();
+    if (ps != UINT16_MAX) {
         dist = ps;
         s_last_dist_cm = ps;
         s_last_dist_ok = true;
@@ -425,7 +424,7 @@ static void mark_task(void *arg)
             mark_tx_once();
             vTaskDelay(pdMS_TO_TICKS(mark_interval_ms));
         } else {
-            /* Boat: LoRa RX is callback-driven; UWB blink sniff is in mark_blink. */
+            /* Boat: LoRa RX and scheduled UWB ranging are callback/task-driven. */
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }

@@ -26,6 +26,14 @@
 typedef void (*twr_cb_t)(uint64_t src, uint64_t dst, uint16_t dist,
 						 uint16_t num);
 
+struct twr_context {
+	uint32_t session_id;
+	uint32_t grant_nonce;
+	uint16_t grant_sequence;
+	uint8_t protocol_version;
+	uint8_t reserved;
+} __attribute__((packed));
+
 /** Initialize TWR with processing delay */
 void twr_init(uint32_t processing_delay_us, bool send_report);
 /** Start DS-TWR (Double Sided - Two Way Ranging) bsequence to ancor */
@@ -35,6 +43,11 @@ bool twr_start_ss(uint64_t dst);
 bool twr_in_progress(void);
 void twr_cancel(void);
 void twr_set_observer(twr_cb_t cb);
+void twr_set_diagnostics(bool enabled);
+void twr_set_max_attempts(uint8_t attempts);
+void twr_set_context(uint32_t session_id, uint32_t grant_nonce,
+					 uint16_t grant_sequence, uint8_t protocol_version);
+bool twr_get_message_context(const struct rxbuf* rx, struct twr_context* out);
 uint16_t twr_get_cnum(void);
 uint64_t twr_get_source_mac(void);
 

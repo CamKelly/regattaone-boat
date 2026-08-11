@@ -22,9 +22,8 @@ extern "C" {
  * Port and Starboard both TX and RX: each opposing broadcast updates the
  * receiver's peer UWB address used for DWM3000 ranging (address may change).
  *
- * Boat devices do not broadcast. They learn Port/Starboard UWB addresses and
- * baseline distances from mark RX, and sniff UWB mark blinks passively for ToA
- * (see mark_blink / boat_tdoa). Boat↔mark distances come from the TDoA solve.
+ * Boat devices do not broadcast this Meshtastic packet. UWB registration,
+ * grants, DS-TWR, and relative positioning are handled by start_line_ranging.
  */
 
 #define MARK_BROADCAST_PKT_LEN 18U

@@ -15,8 +15,7 @@ set(regattaone_srcs
     "lora_stats.c"
     "lora_mesh.c"
     "mark_broadcast.c"
-    "mark_blink.c"
-    "boat_tdoa.c"
+    "start_line_ranging.c"
     "console_ble.c")
 
 # ESP-IDF 6 evaluates main/CMakeLists.txt before sdkconfig symbols are visible to

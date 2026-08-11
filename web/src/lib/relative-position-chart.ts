@@ -4,13 +4,14 @@ export interface RelativePoint {
   name: string;
   x: number;
   y: number;
+  stale?: boolean;
 }
 
 let chart: echarts.ECharts | null = null;
 let resizeObserver: ResizeObserver | null = null;
 
 function tooltipText(point: RelativePoint): string {
-  const labels: Record<string, string> = { P: "Port", S: "Starboard", R: "Reference", B: "Boat" };
+  const labels: Record<string, string> = { P: "Port", S: "Starboard", B: "Boat" };
   return `<strong>${point.name} · ${labels[point.name] ?? point.name}</strong><br/>x ${point.x.toFixed(2)} m<br/>y ${point.y.toFixed(2)} m`;
 }
 
@@ -19,7 +20,27 @@ function scatterDatum(point: RelativePoint) {
     name: point.name,
     value: [point.x, point.y],
     point,
+    itemStyle: point.stale ? { color: "#94a3b8", borderColor: "#fff", borderWidth: 2 } : undefined,
   };
+}
+
+function anchorDistanceLabels(anchors: RelativePoint[]) {
+  const pairs: Array<[string, string]> = [["P", "S"]];
+  return pairs.flatMap(([aName, bName]) => {
+    const a = anchors.find((p) => p.name === aName);
+    const b = anchors.find((p) => p.name === bName);
+    if (!a || !b) {
+      return [];
+    }
+    const metres = Math.hypot(b.x - a.x, b.y - a.y);
+    return [{
+      name: `${aName}–${bName}`,
+      value: [(a.x + b.x) / 2, (a.y + b.y) / 2],
+      from: [a.x, a.y],
+      to: [b.x, b.y],
+      labelText: `${aName}–${bName}  ${(metres * 100).toFixed(0)} cm · ${(metres * 39.37007874).toFixed(1)} in`,
+    }];
+  });
 }
 
 export function renderRelativePositionChart(
@@ -38,6 +59,7 @@ export function renderRelativePositionChart(
   }
 
   const all = [...anchors, ...trail, ...(boat ? [boat] : [])];
+  const dimensions = anchorDistanceLabels(anchors);
   const xs = all.map((p) => p.x);
   const ys = all.map((p) => p.y);
   const rawMin = Math.min(-1, ...xs, ...ys);
@@ -49,7 +71,7 @@ export function renderRelativePositionChart(
 
   chart.setOption(
     {
-      animationDurationUpdate: 250,
+      animation: false,
       grid: { left: 58, right: 24, top: 34, bottom: 52 },
       tooltip: {
         trigger: "item",
@@ -103,12 +125,32 @@ export function renderRelativePositionChart(
       },
       series: [
         {
-          name: "Start line",
-          type: "line",
-          symbol: "none",
+          name: "Anchor distances",
+          type: "scatter",
+          symbolSize: 1,
           silent: true,
-          lineStyle: { color: "#64748b", width: 3 },
-          data: anchors.length >= 2 ? [[anchors[0].x, anchors[0].y], [anchors[1].x, anchors[1].y]] : [],
+          itemStyle: { opacity: 0 },
+          label: {
+            show: true,
+            formatter: (params: { data?: { labelText?: string } }) => params.data?.labelText ?? "",
+            position: "top",
+            distance: 8,
+            padding: [4, 7],
+            borderRadius: 4,
+            backgroundColor: "rgba(255,255,255,.9)",
+            borderColor: "#d9d9d9",
+            borderWidth: 1,
+            color: "#334155",
+            fontSize: 11,
+          },
+          data: dimensions,
+          markLine: {
+            silent: true,
+            symbol: ["none", "none"],
+            lineStyle: { color: "#94a3b8", width: 1, type: "dashed" },
+            label: { show: false },
+            data: dimensions.map((d) => [{ coord: d.from }, { coord: d.to }]),
+          },
         },
         {
           name: "Trail",
@@ -137,7 +179,7 @@ export function renderRelativePositionChart(
         },
       ],
     },
-    false,
+    { notMerge: false, replaceMerge: ["series"] },
   );
 }
 

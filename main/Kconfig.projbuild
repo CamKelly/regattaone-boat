@@ -182,8 +182,6 @@ menu "RegattaOne — Device type"
             bool "Port"
         config DEVICE_DEFAULT_TYPE_STARBOARD
             bool "Starboard"
-        config DEVICE_DEFAULT_TYPE_REFERENCE
-            bool "Reference"
         config DEVICE_DEFAULT_TYPE_BOAT
             bool "Boat"
     endchoice
@@ -208,14 +206,6 @@ menu "RegattaOne — DWM3000 (DW3000 SPI UWB)"
             Bring up the libdeca TWR stack (components/libdeca) so this device can
             measure the distance to other DW3000 devices by address, and answer
             ranging requests from them. Uses dw3000_range_to() in main/dw3000_ranging.h.
-
-    config DW3000_ADDR
-        hex "This device's 16-bit UWB address"
-        default 0x0001
-        depends on DW3000_RANGING_ENABLE
-        help
-            Unique per device on the same PAN. This is the "id" other devices pass
-            to dw3000_range_to() to measure distance to this unit.
 
     config DW3000_PANID
         hex "UWB PAN id (shared by all RegattaOne devices)"
@@ -272,82 +262,6 @@ menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
         help
             Optional fixed peer address for DWM3000 ranging before the first
             opposite-mark broadcast is heard. 0 means auto-learn from RX.
-
-    config MARK_BLINK_INTERVAL_MS
-        int "Port master beacon interval (ms)"
-        range 200 10000
-        default 1000
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            How often Port transmits the UWB sync+positioning beacon (master
-            timeline). Starboard and Reference schedule their beacons from it.
-            Default 1000 ms (1 Hz).
-
-    config MARK_BLINK_PORT_PREP_MS
-        int "Port delayed-TX prep slack (ms)"
-        range 1 20
-        default 2
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            How far ahead Port schedules its delayed TX so the TX timestamp can
-            be embedded in the beacon. Default 2 ms.
-
-    config MARK_BLINK_SLOT_STARBOARD_US
-        int "Starboard beacon slot after Port TX (us)"
-        range 1000 50000
-        default 5000
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            Master-timeline offset for Starboard positioning beacon after Port
-            TX. Default 5000 us for long-preamble PHY.
-
-    config MARK_BLINK_SLOT_REFERENCE_US
-        int "Reference beacon slot after Port TX (us)"
-        range 2000 60000
-        default 10000
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            Master-timeline offset for Reference positioning beacon after Port
-            TX. Must be after the Starboard slot. Default 10000 us.
-
-    config MARK_BLINK_FIXED_DELAY_US
-        int "Legacy Starboard Fixed_Delay (us) [unused]"
-        range 500 20000
-        default 5000
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            Kept so existing sdkconfig values still parse. Slots above replace
-            the old RX-triggered Fixed_Delay chain.
-
-    config MARK_BLINK_ANCHOR_TWR_INTERVAL_MS
-        int "Course-mark baseline TWR interval (ms)"
-        range 2000 120000
-        default 10000
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            How often Port/Starboard/Reference refresh Port↔Starboard,
-            Port↔Reference, and Starboard↔Reference distances via DS-TWR.
-            Runs in the quiet gap after the UWB beacon superframe so beacons
-            are only skipped if a range is still in flight. Default 10000 ms.
-            Runtime enable/disable is dw3000 config anchor_twr (BLE/NVS).
-
-    config MARK_BLINK_ANCHOR_TWR_DEFAULT
-        bool "Enable course-mark baseline TWR by default"
-        default y
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            Default for dw3000 config anchor_twr when unset in NVS. Port
-            measures ps+pr; Starboard measures sr; Reference responds only.
-            Can be toggled at runtime over BLE without reflashing.
-
-    config BOAT_RANGE_INTERVAL_MS
-        int "Boat ranging interval (ms) [deprecated — boats are UWB-passive]"
-        range 500 60000
-        default 10000
-        depends on REGATTAONE_MARK_BROADCAST_ENABLE && DW3000_RANGING_ENABLE
-        help
-            Unused: boats no longer actively range to marks. Kept so existing
-            sdkconfig values still parse. Passive ToA sniffing uses mark blinks.
 
 endmenu
 

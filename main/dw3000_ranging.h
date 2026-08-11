@@ -46,6 +46,9 @@ uint16_t dw3000_ranging_self_addr(void);
 /** UWB PAN id shared by all RegattaOne devices. */
 uint16_t dw3000_ranging_panid(void);
 
+/** Change the volatile short address (registration); does not write NVS. */
+esp_err_t dw3000_ranging_set_runtime_addr(uint16_t addr);
+
 /**
  * Register an async result callback. Pass NULL to clear. The callback is
  * invoked for both locally-initiated ranges and ranges initiated by peers

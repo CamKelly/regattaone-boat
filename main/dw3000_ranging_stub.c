@@ -17,6 +17,12 @@ uint16_t dw3000_ranging_panid(void)
     return 0;
 }
 
+esp_err_t dw3000_ranging_set_runtime_addr(uint16_t addr)
+{
+    (void)addr;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
 void dw3000_ranging_set_callback(dw3000_range_result_cb_t cb)
 {
     (void)cb;

@@ -151,7 +151,22 @@ interface BoatGeomSnapshot {
   reference_y_m?: number | null;
   boat_reference_cm?: number | null;
   tdoa_at_ms?: number;
+  stale?: boolean;
   updatedAtMs: number;
+}
+
+interface LocalTwrSnapshot {
+  ps_cm: number | null;
+  pr_cm: number | null;
+  sr_cm: number | null;
+  ps_at_ms: number;
+  pr_at_ms: number;
+  sr_at_ms: number;
+}
+
+interface RegisteredBoatSnapshot {
+  id: number; uuid: string; gps_valid: boolean; lat_e7: number; lon_e7: number;
+  registered_age_ms: number; last_range_age_ms: number; grants: number; missed: number; completed: number;
 }
 
 interface MeshtasticStatsSnapshot {
@@ -292,6 +307,8 @@ interface BleBoatSession {
   markStarboard: MarkBroadcastSnapshot | null;
   boatGeom: BoatGeomSnapshot | null;
   tdoaTrail: Array<{ seq: number; x: number; y: number }>;
+  localTwr: LocalTwrSnapshot;
+  registeredBoats: RegisteredBoatSnapshot[];
   gpsFix: GpsFix;
   /** True when GATT was intentionally disconnected to park this device in the list. */
   parked: boolean;
@@ -444,18 +461,29 @@ function dwm3000ConfigFromDraft(): Dwm3000Config | null {
   const panRaw = document.querySelector<HTMLInputElement>("#dwm3000-pan-input")?.value ?? "";
   const antRaw = document.querySelector<HTMLInputElement>("#dwm3000-ant-input")?.value ?? "";
   const twrRaw = document.querySelector<HTMLInputElement>("#dwm3000-twr-input")?.value ?? "";
-  const anchorTwr = document.querySelector<HTMLInputElement>("#dwm3000-anchor-twr")?.checked ?? false;
-  const addr = parseHexU16(addrRaw);
+  const readInt = (id: string) => Number.parseInt(document.querySelector<HTMLInputElement>(id)?.value ?? "", 10);
+  const addr = parseHexU16(addrRaw, true);
   const pan = parseHexU16(panRaw, true);
   const ant = Number.parseInt(antRaw.trim(), 10);
   const twr = Number.parseInt(twrRaw.trim(), 10);
-  if (addr == null || pan == null || !Number.isFinite(ant) || !Number.isFinite(twr)) {
+  const registration_ms = readInt("#dwm3000-registration-ms");
+  const grant_ms = readInt("#dwm3000-grant-ms");
+  const inactivity_ms = readInt("#dwm3000-inactivity-ms");
+  const baseline_max_age_ms = readInt("#dwm3000-baseline-age-ms");
+  const max_missed = readInt("#dwm3000-max-missed");
+  const baseline_retries = readInt("#dwm3000-baseline-retries");
+  const boat_retries = readInt("#dwm3000-boat-retries");
+  if (addr == null || pan == null || ![ant, twr, registration_ms, grant_ms, inactivity_ms,
+      baseline_max_age_ms, max_missed, baseline_retries, boat_retries].every(Number.isFinite)) {
     return null;
   }
   if (ant < 0 || ant > 65535 || twr < 300 || twr > 20000) {
     return null;
   }
-  return { addr, pan, ant, twr, anchor_twr: anchorTwr };
+  return { addr, pan, ant, twr, registration_ms, grant_ms, inactivity_ms, baseline_max_age_ms,
+    max_missed, baseline_retries, boat_retries,
+    detailed_logs: document.querySelector<HTMLInputElement>("#dwm3000-detailed-logs")?.checked ?? false,
+    scheduler_paused: document.querySelector<HTMLInputElement>("#dwm3000-scheduler-paused")?.checked ?? false };
 }
 
 async function readDwm3000ConfigFromDevice(session: BleBoatSession): Promise<void> {
@@ -578,7 +606,12 @@ function syncDwm3000Ui(session: BleBoatSession | null): void {
   const panInput = document.querySelector<HTMLInputElement>("#dwm3000-pan-input");
   const antInput = document.querySelector<HTMLInputElement>("#dwm3000-ant-input");
   const twrInput = document.querySelector<HTMLInputElement>("#dwm3000-twr-input");
-  const anchorTwrInput = document.querySelector<HTMLInputElement>("#dwm3000-anchor-twr");
+  const numericConfigInputs: Array<[string, keyof Dwm3000Config]> = [
+    ["#dwm3000-registration-ms", "registration_ms"], ["#dwm3000-grant-ms", "grant_ms"],
+    ["#dwm3000-inactivity-ms", "inactivity_ms"], ["#dwm3000-baseline-age-ms", "baseline_max_age_ms"],
+    ["#dwm3000-max-missed", "max_missed"], ["#dwm3000-baseline-retries", "baseline_retries"],
+    ["#dwm3000-boat-retries", "boat_retries"],
+  ];
   const peerInput = document.querySelector<HTMLInputElement>("#dwm3000-peer-input");
   const saveBtn = document.querySelector<HTMLButtonElement>("#dwm3000-config-save");
   const rangeBtn = document.querySelector<HTMLButtonElement>("#dwm3000-range-btn");
@@ -598,17 +631,24 @@ function syncDwm3000Ui(session: BleBoatSession | null): void {
   if (twrInput && document.activeElement !== twrInput) {
     twrInput.value = String(cfg.twr);
   }
-  if (anchorTwrInput && document.activeElement !== anchorTwrInput) {
-    anchorTwrInput.checked = cfg.anchor_twr === true;
+  for (const [selector, key] of numericConfigInputs) {
+    const input = document.querySelector<HTMLInputElement>(selector);
+    if (input && document.activeElement !== input) input.value = String(cfg[key]);
+    setFieldEnabled(input, canEdit);
   }
+  const detailed = document.querySelector<HTMLInputElement>("#dwm3000-detailed-logs");
+  const paused = document.querySelector<HTMLInputElement>("#dwm3000-scheduler-paused");
+  if (detailed && document.activeElement !== detailed) detailed.checked = cfg.detailed_logs;
+  if (paused && document.activeElement !== paused) paused.checked = cfg.scheduler_paused;
   if (peerInput && document.activeElement !== peerInput) {
     peerInput.value = session?.dwm3000PeerDraft ?? "";
   }
-  setFieldEnabled(addrInput, canEdit);
+  setFieldEnabled(addrInput, false);
   setFieldEnabled(panInput, canEdit);
   setFieldEnabled(antInput, canEdit);
   setFieldEnabled(twrInput, canEdit);
-  setFieldEnabled(anchorTwrInput, canEdit);
+  setFieldEnabled(detailed, canEdit);
+  setFieldEnabled(paused, canEdit && session?.deviceType === "port");
   setFieldEnabled(saveBtn, canEdit);
   setFieldEnabled(peerInput, canRange);
   setFieldEnabled(rangeBtn, canRange);
@@ -626,6 +666,42 @@ function syncDwm3000Ui(session: BleBoatSession | null): void {
   }
   syncDwm3000TabVisibility(session);
   syncDeviceTypeUi(session);
+  renderLocalTwr(session);
+  renderRegisteredBoats(session);
+}
+
+function formatLocalTwr(cm: number | null, atMs: number): string {
+  if (cm == null) {
+    return "Waiting for TWR…";
+  }
+  return withMetricAgo(`${cm} cm · ${(cm / 2.54).toFixed(1)} in`, atMs);
+}
+
+function renderLocalTwr(session: BleBoatSession | null): void {
+  const role = session?.deviceType ?? null;
+  const showPs = role === "port" || role === "boat";
+  const showPr = false;
+  const showSr = false;
+  const setCard = (link: "ps" | "pr" | "sr", visible: boolean, text: string) => {
+    const card = document.querySelector<HTMLElement>(`#dwm3000-live-${link}-card`);
+    const value = document.querySelector<HTMLElement>(`#dwm3000-live-${link}`);
+    if (card) card.hidden = !visible;
+    if (value) value.textContent = text;
+  };
+  const twr = session?.localTwr;
+  setCard("ps", showPs, formatLocalTwr(twr?.ps_cm ?? null, twr?.ps_at_ms ?? 0));
+  setCard("pr", showPr, formatLocalTwr(twr?.pr_cm ?? null, twr?.pr_at_ms ?? 0));
+  setCard("sr", showSr, formatLocalTwr(twr?.sr_cm ?? null, twr?.sr_at_ms ?? 0));
+  const hint = document.querySelector<HTMLElement>("#dwm3000-live-ranges-hint");
+  if (hint) {
+    hint.textContent = role === "port"
+      ? "Port measures P↔S before each complete Boat queue rotation."
+      : role === "starboard"
+        ? "Starboard responds to Port baseline ranging and the currently granted Boat."
+        : role
+          ? "Boat receives PS in its grant, then ranges Starboard and Port."
+          : "Connect a Port or Starboard device.";
+  }
 }
 
 async function readBoatIdFromDevice(session: BleBoatSession): Promise<void> {
@@ -1761,6 +1837,20 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
       }
       continue;
     }
+    if (line.startsWith("$PREGSTART,")) {
+      if (applyStartLinePosition(session, line)) hadGeom = true;
+      else console.warn("Ignored malformed $PREGSTART line", line.slice(0, 120));
+      continue;
+    }
+    if (line.startsWith("$PREGUWB,")) {
+      if (applyStartLineStatus(session, line)) hadGeom = true;
+      else console.warn("Ignored malformed $PREGUWB line", line.slice(0, 120));
+      continue;
+    }
+    if (line.startsWith("$PREGBOATS,")) {
+      if (applyRegisteredBoatsLine(session, line)) hadGeom = true;
+      continue;
+    }
     other += `${line}\n`;
   }
   if (other.length > 0) {
@@ -1937,6 +2027,93 @@ function applyBoatTdoaLine(session: BleBoatSession, line: string): boolean {
   }
 }
 
+function applyStartLinePosition(session: BleBoatSession, line: string): boolean {
+  try {
+    const o = JSON.parse(line.slice("$PREGSTART,".length).trim()) as {
+      seq?: number; fresh?: number | boolean; ps_cm?: number; bp_cm?: number; bs_cm?: number;
+      x_m?: number; y_m?: number;
+    };
+    const now = Date.now();
+    const prev = session.boatGeom;
+    const fresh = o.fresh === true || o.fresh === 1;
+    const ps = parseGeomCm(o.ps_cm) ?? prev?.anchor_ps_cm ?? null;
+    session.boatGeom = {
+      boat_port_cm: fresh ? parseGeomCm(o.bp_cm) : prev?.boat_port_cm ?? null,
+      boat_starboard_cm: fresh ? parseGeomCm(o.bs_cm) : prev?.boat_starboard_cm ?? null,
+      port_starboard_cm: ps, starboard_port_cm: ps, anchor_ps_cm: ps,
+      anchor_pr_cm: null, anchor_sr_cm: null,
+      boat_port_at_ms: fresh ? now : prev?.boat_port_at_ms ?? 0,
+      boat_starboard_at_ms: fresh ? now : prev?.boat_starboard_at_ms ?? 0,
+      port_starboard_at_ms: now, starboard_port_at_ms: now,
+      port_uwb: 1, starboard_uwb: 2,
+      tdoa_ok: prev?.tdoa_ok || fresh,
+      tdoa_seq: fresh && typeof o.seq === "number" ? o.seq : prev?.tdoa_seq,
+      x_m: fresh && typeof o.x_m === "number" ? o.x_m : prev?.x_m ?? null,
+      y_m: fresh && typeof o.y_m === "number" ? o.y_m : prev?.y_m ?? null,
+      reference_x_m: null, reference_y_m: null, boat_reference_cm: null,
+      tdoa_at_ms: fresh ? now : prev?.tdoa_at_ms,
+      stale: !fresh,
+      updatedAtMs: now,
+    };
+    renderRelativePosition(session);
+    return true;
+  } catch { return false; }
+}
+
+function applyStartLineStatus(session: BleBoatSession, line: string): boolean {
+  try {
+    const o = JSON.parse(line.slice("$PREGUWB,".length).trim()) as { ps_cm?: number };
+    const ps = parseGeomCm(o.ps_cm);
+    if (ps != null) {
+      const now = Date.now();
+      session.localTwr.ps_cm = ps;
+      session.localTwr.ps_at_ms = now;
+      const prev = session.boatGeom;
+      if (prev) {
+        prev.anchor_ps_cm = ps; prev.port_starboard_cm = ps; prev.starboard_port_cm = ps;
+        prev.port_starboard_at_ms = now; prev.starboard_port_at_ms = now;
+      }
+    }
+    renderLocalTwr(session);
+    renderRelativePosition(session);
+    return true;
+  } catch { return false; }
+}
+
+function applyRegisteredBoatsLine(session: BleBoatSession, line: string): boolean {
+  try {
+    const o = JSON.parse(line.slice("$PREGBOATS,".length).trim()) as Partial<RegisteredBoatSnapshot> & { reset?: number; end?: number };
+    if (o.reset === 1) session.registeredBoats = [];
+    else if (typeof o.id === "number" && typeof o.uuid === "string") {
+      session.registeredBoats = session.registeredBoats.filter((b) => b.id !== o.id);
+      session.registeredBoats.push({
+        id: o.id, uuid: o.uuid, gps_valid: o.gps_valid === true || (o.gps_valid as unknown) === 1,
+        lat_e7: Number(o.lat_e7 ?? 0), lon_e7: Number(o.lon_e7 ?? 0),
+        registered_age_ms: Number(o.registered_age_ms ?? 0), last_range_age_ms: Number(o.last_range_age_ms ?? 0),
+        grants: Number(o.grants ?? 0), missed: Number(o.missed ?? 0), completed: Number(o.completed ?? 0),
+      });
+    }
+    renderRegisteredBoats(session);
+    return true;
+  } catch { return false; }
+}
+
+function renderRegisteredBoats(session: BleBoatSession | null): void {
+  const section = document.querySelector<HTMLElement>("#dwm3000-registered-section");
+  const body = document.querySelector<HTMLTableSectionElement>("#dwm3000-registered-body");
+  if (section) section.hidden = session?.deviceType !== "port";
+  if (!body) return;
+  body.replaceChildren(...(session?.registeredBoats ?? []).sort((a, b) => a.id - b.id).map((boat) => {
+    const tr = document.createElement("tr");
+    const gps = boat.gps_valid ? `${(boat.lat_e7 / 1e7).toFixed(6)}, ${(boat.lon_e7 / 1e7).toFixed(6)}` : "—";
+    for (const value of [formatHexU16(boat.id), boat.uuid, gps,
+      `${(boat.last_range_age_ms / 1000).toFixed(1)} s`, String(boat.completed), String(boat.missed)]) {
+      const td = document.createElement("td"); td.textContent = value; tr.appendChild(td);
+    }
+    return tr;
+  }));
+}
+
 function applyBoatGeomLine(session: BleBoatSession, line: string): boolean {
   const jsonPart = line.slice("$PREGGEOM,".length).trim();
   try {
@@ -2069,7 +2246,7 @@ function renderRelativePosition(session: BleBoatSession | null): void {
   }
   const status = document.querySelector<HTMLElement>("#relative-position-status");
   const coordinates = document.querySelector<HTMLElement>("#relative-position-coordinates");
-  const setPoint = (id: "p" | "s" | "r" | "b", point: RelativePoint | null) => {
+  const setPoint = (id: "p" | "s" | "b", point: RelativePoint | null) => {
     const el = document.querySelector<HTMLElement>(`#relative-position-${id}`);
     if (el) {
       el.textContent = point
@@ -2080,11 +2257,10 @@ function renderRelativePosition(session: BleBoatSession | null): void {
   const flipY = document.querySelector<HTMLInputElement>("#relative-position-flip-y")?.checked === true;
   const sign = flipY ? -1 : 1;
   if (!session) {
-    if (status) status.textContent = "Connect to a Boat device and wait for a valid three-anchor TDoA fix.";
+    if (status) status.textContent = "Connect to a Boat and wait for a successful DS-TWR cycle.";
     if (coordinates) coordinates.textContent = "—";
     setPoint("p", null);
     setPoint("s", null);
-    setPoint("r", null);
     setPoint("b", null);
     renderRelativePositionChart([], null, []);
     return;
@@ -2092,25 +2268,19 @@ function renderRelativePosition(session: BleBoatSession | null): void {
 
   const baseline = relativeBaselineM(session);
   const g = session.boatGeom;
-  const reference = g?.reference_x_m != null && g.reference_y_m != null
-    ? { x: g.reference_x_m, y: g.reference_y_m }
-    : referenceFromBaselines(g ?? null);
   const anchors: RelativePoint[] = [{ name: "P", x: 0, y: 0 }];
   if (baseline != null) {
     anchors.push({ name: "S", x: baseline, y: 0 });
   }
-  if (reference) {
-    anchors.push({ name: "R", x: reference.x, y: sign * reference.y });
-  }
   const boat = g?.tdoa_ok && g.x_m != null && g.y_m != null
-    ? { name: "B", x: g.x_m, y: sign * g.y_m }
+    ? { name: "B", x: g.x_m, y: sign * g.y_m, stale: g.stale === true }
     : null;
-  const trail = session.tdoaTrail.map((p) => ({ name: `Seq ${p.seq}`, x: p.x, y: sign * p.y }));
+  const trail: RelativePoint[] = [];
 
   if (status) {
     status.textContent = boat
-      ? `Live relative TDoA position · sequence ${g?.tdoa_seq ?? "—"}${flipY ? " · Y flipped for display" : ""}`
-      : "Waiting for a valid TDoA fix…";
+      ? `${g?.stale ? "Stale DS-TWR position (latest cycle failed)" : "Live DS-TWR position"} · sequence ${g?.tdoa_seq ?? "—"}${flipY ? " · Y flipped for display" : ""}`
+      : "Waiting for successful Boat↔Starboard and Boat↔Port ranging…";
   }
   if (coordinates) {
     coordinates.textContent = boat
@@ -2119,7 +2289,6 @@ function renderRelativePosition(session: BleBoatSession | null): void {
   }
   setPoint("p", anchors.find((p) => p.name === "P") ?? null);
   setPoint("s", anchors.find((p) => p.name === "S") ?? null);
-  setPoint("r", anchors.find((p) => p.name === "R") ?? null);
   setPoint("b", boat);
   renderRelativePositionChart(anchors, boat, trail);
 }
@@ -2371,14 +2540,21 @@ function clearConsoleLog(session: BleBoatSession | null): void {
 }
 
 function applyAnchorGeometryFromConsole(session: BleBoatSession, line: string): boolean {
-  const match = line.match(/mark_blink:\s+beacon\b.*\bps=(\d+)\s+pr=(\d+)\s+sr=(\d+)\b/);
-  if (!match) {
+  const beacon = line.match(/mark_blink:\s+beacon\b.*\brole=([PSR])\b/);
+  if (!beacon) {
     return false;
   }
-  const ps = Number(match[1]);
-  const pr = Number(match[2]);
-  const sr = Number(match[3]);
-  if (!Number.isFinite(ps) || !Number.isFinite(pr) || !Number.isFinite(sr) || ps <= 0 || pr <= 0 || sr <= 0) {
+
+  const readCm = (name: "ps" | "pr" | "sr"): number | null => {
+    const match = line.match(new RegExp(`\\b${name}=(\\d+)\\b`));
+    const value = match ? Number(match[1]) : NaN;
+    return Number.isFinite(value) && value > 0 ? value : null;
+  };
+  const role = beacon[1];
+  const ps = role === "P" ? readCm("ps") : null;
+  const pr = role === "P" ? readCm("pr") : null;
+  const sr = role === "S" ? readCm("sr") : null;
+  if (ps == null && pr == null && sr == null) {
     return false;
   }
   const now = Date.now();
@@ -2386,11 +2562,11 @@ function applyAnchorGeometryFromConsole(session: BleBoatSession, line: string): 
   session.boatGeom = {
     boat_port_cm: prev?.boat_port_cm ?? null,
     boat_starboard_cm: prev?.boat_starboard_cm ?? null,
-    port_starboard_cm: prev?.port_starboard_cm ?? ps,
-    starboard_port_cm: prev?.starboard_port_cm ?? ps,
-    anchor_ps_cm: ps,
-    anchor_pr_cm: pr,
-    anchor_sr_cm: sr,
+    port_starboard_cm: ps ?? prev?.port_starboard_cm ?? null,
+    starboard_port_cm: ps ?? prev?.starboard_port_cm ?? null,
+    anchor_ps_cm: ps ?? prev?.anchor_ps_cm ?? null,
+    anchor_pr_cm: pr ?? prev?.anchor_pr_cm ?? null,
+    anchor_sr_cm: sr ?? prev?.anchor_sr_cm ?? null,
     boat_port_at_ms: prev?.boat_port_at_ms ?? 0,
     boat_starboard_at_ms: prev?.boat_starboard_at_ms ?? 0,
     port_starboard_at_ms: now,
@@ -2407,6 +2583,21 @@ function applyAnchorGeometryFromConsole(session: BleBoatSession, line: string): 
     tdoa_at_ms: prev?.tdoa_at_ms,
     updatedAtMs: now,
   };
+  return true;
+}
+
+function applyLocalTwrFromConsole(session: BleBoatSession, line: string): boolean {
+  const match = line.match(/mark_blink:\s+baseline\s+(ps|pr|sr)=(\d+)\s+cm\b/);
+  if (!match) {
+    return false;
+  }
+  const link = match[1] as "ps" | "pr" | "sr";
+  const cm = Number(match[2]);
+  if (!Number.isFinite(cm) || cm <= 0) {
+    return false;
+  }
+  session.localTwr[`${link}_cm`] = cm;
+  session.localTwr[`${link}_at_ms`] = Date.now();
   return true;
 }
 
@@ -2428,13 +2619,18 @@ function ingestConsoleLogChunk(session: BleBoatSession, chunk: string): void {
 
   let added = false;
   let geometryUpdated = false;
+  let localTwrUpdated = false;
   for (const raw of complete) {
     const line = raw.replace(/\r$/, "");
     if (!line) {
       continue;
     }
     session.consoleLineLogText += `${line}\n`;
+    if (line.startsWith("$PREGSTART,")) geometryUpdated = applyStartLinePosition(session, line) || geometryUpdated;
+    else if (line.startsWith("$PREGUWB,")) geometryUpdated = applyStartLineStatus(session, line) || geometryUpdated;
+    else if (line.startsWith("$PREGBOATS,")) geometryUpdated = applyRegisteredBoatsLine(session, line) || geometryUpdated;
     geometryUpdated = applyAnchorGeometryFromConsole(session, line) || geometryUpdated;
+    localTwrUpdated = applyLocalTwrFromConsole(session, line) || localTwrUpdated;
     added = true;
   }
   if (!added) {
@@ -2447,6 +2643,9 @@ function ingestConsoleLogChunk(session: BleBoatSession, chunk: string): void {
   if (geometryUpdated) {
     renderBoatGeom(session);
     renderRelativePosition(session);
+  }
+  if (localTwrUpdated) {
+    renderLocalTwr(session);
   }
 }
 
@@ -2564,6 +2763,7 @@ function syncMeshtasticUiRefresh(session: BleBoatSession | null): void {
     }
     renderGpsDisplay(active);
     renderImuDisplay(active);
+    renderLocalTwr(active);
   }, 1000);
 }
 
@@ -2938,6 +3138,8 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     markStarboard: null,
     boatGeom: null,
     tdoaTrail: [],
+    localTwr: { ps_cm: null, pr_cm: null, sr_cm: null, ps_at_ms: 0, pr_at_ms: 0, sr_at_ms: 0 },
+    registeredBoats: [],
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),
@@ -3004,6 +3206,8 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     markStarboard: null,
     boatGeom: null,
     tdoaTrail: [],
+    localTwr: { ps_cm: null, pr_cm: null, sr_cm: null, ps_at_ms: 0, pr_at_ms: 0, sr_at_ms: 0 },
+    registeredBoats: [],
     gpsFix: defaultGpsFix(),
     parked: false,
     gattChain: Promise.resolve(),
@@ -3231,8 +3435,11 @@ export function startRegattaApp(): void {
       (target.id === "dwm3000-addr-input" ||
         target.id === "dwm3000-pan-input" ||
         target.id === "dwm3000-ant-input" ||
-        target.id === "dwm3000-twr-input" ||
-        target.id === "dwm3000-anchor-twr")
+        target.id === "dwm3000-twr-input" || target.id.startsWith("dwm3000-registration-") ||
+        target.id.startsWith("dwm3000-grant-") || target.id.startsWith("dwm3000-inactivity-") ||
+        target.id.startsWith("dwm3000-baseline-") || target.id.startsWith("dwm3000-max-") ||
+        target.id.startsWith("dwm3000-boat-") || target.id === "dwm3000-detailed-logs" ||
+        target.id === "dwm3000-scheduler-paused")
     ) {
       const cfg = dwm3000ConfigFromDraft();
       if (cfg) {
@@ -3297,6 +3504,9 @@ export function startRegattaApp(): void {
         renderRelativePosition(getActiveSession());
         resizeRelativePositionChart();
       });
+    }
+    if (label.includes("DWM3000")) {
+      renderLocalTwr(getActiveSession());
     }
     if (label.includes("GPS")) {
       requestAnimationFrame(() => invalidateGpsLeafletMapSize());

@@ -35,18 +35,18 @@ export const BLE_CONSOLE_LOG_CHAR_UUID = "0000fee8-0000-1000-8000-00805f9b34fb";
  * Device type (BLE 0xFEFC) — course / fleet role (port, starboard, boat).
  * Stored in NVS; used by mesh, backend, and ranging stacks.
  */
-export type DeviceType = "port" | "starboard" | "boat" | "reference";
+export type DeviceType = "port" | "starboard" | "boat";
 
-export const DEVICE_TYPES: DeviceType[] = ["port", "starboard", "boat", "reference"];
+export const DEVICE_TYPES: DeviceType[] = ["port", "starboard", "boat"];
 
 /** Anchor role implied by device type (boat). */
 export function deviceTypeHasAnchorRole(type: DeviceType): boolean {
   return type === "boat";
 }
 
-/** Tag role implied by device type (port, starboard, reference). */
+/** Fixed mark role implied by device type. */
 export function deviceTypeHasTagRole(type: DeviceType): boolean {
-  return type === "port" || type === "starboard" || type === "reference";
+  return type === "port" || type === "starboard";
 }
 
 /** @deprecated Use deviceTypeHasAnchorRole */
@@ -61,8 +61,6 @@ export function deviceTypeLabel(type: DeviceType): string {
       return "Port";
     case "starboard":
       return "Starboard";
-    case "reference":
-      return "Reference";
     case "boat":
       return "Boat";
   }
@@ -76,9 +74,7 @@ export function parseDeviceType(raw: string): DeviceType | null {
   if (s === "starboard_anchor") {
     return "starboard";
   }
-  if (s === "reference_anchor" || s === "ref") {
-    return "reference";
-  }
+  if (s === "reference" || s === "reference_anchor" || s === "ref") return "boat";
   if (s === "waypoint" || s === "waypoint_anchor" || s === "fixed_dgps_mark") {
     return "boat";
   }
@@ -94,8 +90,15 @@ export interface Dwm3000Config {
   pan: number;
   ant: number;
   twr: number;
-  /** Periodic course-mark TWR for beacon geometry (ps/pr/sr); default on in firmware. */
-  anchor_twr: boolean;
+  registration_ms: number;
+  grant_ms: number;
+  inactivity_ms: number;
+  baseline_max_age_ms: number;
+  max_missed: number;
+  baseline_retries: number;
+  boat_retries: number;
+  detailed_logs: boolean;
+  scheduler_paused: boolean;
 }
 
 export const DWM3000_DEFAULTS: Dwm3000Config = {
@@ -103,25 +106,36 @@ export const DWM3000_DEFAULTS: Dwm3000Config = {
   pan: 0xdeca,
   ant: 16368,
   twr: 2000,
-  anchor_twr: true,
+  registration_ms: 5000,
+  grant_ms: 20,
+  inactivity_ms: 5000,
+  baseline_max_age_ms: 5000,
+  max_missed: 3,
+  baseline_retries: 2,
+  boat_retries: 1,
+  detailed_logs: false,
+  scheduler_paused: false,
 };
 
 export function parseDwm3000ConfigJson(raw: string): Dwm3000Config | null {
   try {
-    const o = JSON.parse(raw) as Partial<Dwm3000Config> & { anchor_twr?: number | boolean };
+    const o = JSON.parse(raw) as Partial<Dwm3000Config> & { detailed_logs?: number | boolean; scheduler_paused?: number | boolean };
     if (typeof o.addr !== "number" || typeof o.pan !== "number" || typeof o.ant !== "number" || typeof o.twr !== "number") {
       return null;
     }
-    if (o.addr <= 0 || o.addr >= 0xffff || o.ant < 0 || o.ant > 65535 || o.twr < 300 || o.twr > 20000) {
+    if (o.addr < 0 || o.addr >= 0xffff || o.ant < 0 || o.ant > 65535 || o.twr < 300 || o.twr > 20000) {
       return null;
     }
-    let anchor_twr = false;
-    if (typeof o.anchor_twr === "boolean") {
-      anchor_twr = o.anchor_twr;
-    } else if (typeof o.anchor_twr === "number") {
-      anchor_twr = o.anchor_twr !== 0;
-    }
-    return { addr: o.addr, pan: o.pan, ant: o.ant, twr: o.twr, anchor_twr };
+    const num = (v: unknown, fallback: number) => typeof v === "number" && Number.isFinite(v) ? v : fallback;
+    const bool = (v: unknown, fallback: boolean) => typeof v === "boolean" ? v : typeof v === "number" ? v !== 0 : fallback;
+    return {
+      addr: o.addr, pan: o.pan, ant: o.ant, twr: o.twr,
+      registration_ms: num(o.registration_ms, 5000), grant_ms: num(o.grant_ms, 20),
+      inactivity_ms: num(o.inactivity_ms, 5000), baseline_max_age_ms: num(o.baseline_max_age_ms, 5000),
+      max_missed: num(o.max_missed, 3), baseline_retries: num(o.baseline_retries, 2),
+      boat_retries: num(o.boat_retries, 1), detailed_logs: bool(o.detailed_logs, false),
+      scheduler_paused: bool(o.scheduler_paused, false),
+    };
   } catch {
     return null;
   }
@@ -133,7 +147,11 @@ export function formatDwm3000ConfigJson(cfg: Dwm3000Config): string {
     pan: cfg.pan,
     ant: cfg.ant,
     twr: cfg.twr,
-    anchor_twr: cfg.anchor_twr ? 1 : 0,
+    registration_ms: cfg.registration_ms, grant_ms: cfg.grant_ms,
+    inactivity_ms: cfg.inactivity_ms, baseline_max_age_ms: cfg.baseline_max_age_ms,
+    max_missed: cfg.max_missed, baseline_retries: cfg.baseline_retries,
+    boat_retries: cfg.boat_retries, detailed_logs: cfg.detailed_logs ? 1 : 0,
+    scheduler_paused: cfg.scheduler_paused ? 1 : 0,
   });
 }
 

@@ -23,7 +23,7 @@
 #if CONFIG_REGATTAONE_SX1262_ENABLE
 #include "sx1262_lora.h"
 #endif
-#include "mark_blink.h"
+#include "start_line_ranging.h"
 #include "mark_broadcast.h"
 #include "driver/i2c_master.h"
 #include "i2c_bus_mux.h"
@@ -150,9 +150,9 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "DWM3000 ranging ready, addr 0x%04X",
                  dw3000_ranging_self_addr());
-        err = mark_blink_start();
+        err = start_line_ranging_start();
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Mark blink: %s", esp_err_to_name(err));
+            ESP_LOGW(TAG, "Start-line ranging: %s", esp_err_to_name(err));
         }
     }
 #else
