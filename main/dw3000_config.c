@@ -35,7 +35,7 @@ static dw3000_config_t default_config(void)
         .antenna_delay = 16368,
         .twr_delay_us = 2000,
         .registration_interval_ms = 5000,
-        .grant_duration_ms = 20,
+        .grant_duration_ms = 1000,
         .inactivity_timeout_ms = 5000,
         .baseline_max_age_ms = 5000,
         .max_missed_grants = 3,
