@@ -69,7 +69,7 @@ const WEB_BLE_REV = "2026-07-28a";
 const DEFAULT_IMU_META =
   "Connect to stream accel, gyro, mag, temperature, and pressure.";
 
-let imuTabActive = true;
+let imuTabActive = false;
 let regattaAppStarted = false;
 /** When true, console log text still accumulates but the UI is frozen. */
 let consoleLogPaused = false;
@@ -1345,8 +1345,7 @@ async function activateSession(session: BleBoatSession): Promise<boolean> {
         }
       })();
     }
-    imuTabActive = true;
-    await setImuNotifications(session, true);
+    await setImuNotifications(session, imuTabActive);
     await readBoatIdFromDevice(session);
     await readDeviceTypeFromDevice(session);
     await readDwm3000ConfigFromDevice(session);
