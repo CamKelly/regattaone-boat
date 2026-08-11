@@ -562,8 +562,23 @@ static bool port_measure_baseline(void)
             notify_status(); return true;
         }
     }
-    ESP_LOGW(TAG, "BASELINE failed after %u attempts", (unsigned)dw3000_config_get()->baseline_retries);
-    return s_ps_cm > 0U && now_ms() - s_baseline_ms <= dw3000_config_get()->baseline_max_age_ms;
+    /* Prefer a still-fresh measured baseline over dropping the schedule. */
+    if (s_ps_cm > 0U && s_baseline_ms > 0 &&
+        now_ms() - s_baseline_ms <= (int64_t)dw3000_config_get()->baseline_max_age_ms) {
+        ESP_LOGW(TAG, "BASELINE failed after %u attempts — reusing ps=%u cm (age %lld ms)",
+                 (unsigned)dw3000_config_get()->baseline_retries, (unsigned)s_ps_cm,
+                 (long long)(now_ms() - s_baseline_ms));
+        return true;
+    }
+    /* Keep serving REGISTER/GRANT with PS=0 so boats can still run the protocol. */
+    lock();
+    s_ps_cm = 0;
+    s_baseline_ms = now_ms();
+    unlock();
+    ESP_LOGW(TAG, "BASELINE failed after %u attempts — continuing with ps=0 cm",
+             (unsigned)dw3000_config_get()->baseline_retries);
+    notify_status();
+    return true;
 }
 
 static void expire_boats(void)
