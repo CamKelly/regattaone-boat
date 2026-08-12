@@ -108,6 +108,7 @@ typedef struct {
     double y_m;
     bool position_valid;
     bool position_stale;
+    bool heard_grant;
     uint32_t position_seq;
     char failure[32];
 } boat_state_t;
@@ -270,7 +271,8 @@ static void notify_status(void)
                 "\"last_range_age_ms\":%lld,\"grants\":%lu,\"missed\":%lu,\"completed\":%lu}\n",
                 boats[i].addr, uuid, boats[i].gps_valid ? 1U : 0U, (long)boats[i].lat_e7,
                 (long)boats[i].lon_e7, (long long)(now_ms() - boats[i].registered_ms),
-                (long long)(now_ms() - boats[i].last_success_ms), (unsigned long)boats[i].grants_sent,
+                boats[i].last_success_ms ? (long long)(now_ms() - boats[i].last_success_ms) : -1LL,
+                (unsigned long)boats[i].grants_sent,
                 (unsigned long)boats[i].missed, (unsigned long)boats[i].completed);
             if (m > 0 && (size_t)m < sizeof(json))
                 ui_notify((const uint8_t *)json, (size_t)m);
@@ -297,7 +299,7 @@ static void port_register(const register_request_t *req)
                 entry->active = true;
                 memcpy(entry->uuid, req->uuid, 16);
                 entry->registered_ms = now_ms();
-                entry->last_success_ms = entry->registered_ms;
+                entry->last_success_ms = 0; /* ranging liveness starts at first Boat↔Port TWR */
             }
         }
     }
@@ -305,6 +307,8 @@ static void port_register(const register_request_t *req)
     entry->lat_e7 = req->latitude_e7;
     entry->lon_e7 = req->longitude_e7;
     entry->gps_valid = req->gps_valid != 0U;
+    entry->registered_ms = now_ms();
+    entry->missed = 0;
     const uint16_t assigned = entry->addr;
     const uint32_t rotation = rotation_ms_locked();
     const uint32_t lease = effective_timeout_ms_locked();
@@ -357,6 +361,7 @@ static void boat_accept_registration(const register_response_t *rsp)
     s_boat.config_version = rsp->configuration_version;
     s_boat.rotation_ms = rsp->rotation_period_ms;
     s_boat.last_port_message_ms = now_ms();
+    s_boat.heard_grant = false;
     s_boat.ps_cm = (uint16_t)(rsp->port_starboard_distance_mm / 10U);
     unlock();
     (void)dw3000_ranging_set_runtime_addr(rsp->assigned_device_id);
@@ -398,6 +403,7 @@ static void accept_grant(const ranging_grant_t *grant)
         s_pending_grant = *grant;
         s_pending_grant_valid = true;
         s_boat.last_port_message_ms = now_ms();
+        s_boat.heard_grant = true;
         s_boat.rotation_ms = grant->rotation_period_ms;
         s_boat.ps_cm = (uint16_t)(grant->port_starboard_distance_mm / 10U);
     }
@@ -581,13 +587,15 @@ static void boat_task(void *arg)
     for (;;) {
         lock();
         bool registered = s_boat.registered;
+        const bool heard_grant = s_boat.heard_grant;
         const int64_t last_port = s_boat.last_port_message_ms;
         const uint32_t rotation = s_boat.rotation_ms;
         unlock();
         const uint32_t configured = dw3000_config_get()->inactivity_timeout_ms;
         const uint32_t guard = rotation * 3U;
         const uint32_t timeout = configured > guard ? configured : guard;
-        if (registered && last_port > 0 && now_ms() - last_port > timeout) {
+        /* Stay registered while Port is holding grants for a P↔S baseline. */
+        if (registered && heard_grant && last_port > 0 && now_ms() - last_port > timeout) {
             lock(); s_boat.registered = false; s_boat.addr = 0; s_boat.nonce = esp_random();
             s_boat.position_stale = s_boat.position_valid;
             snprintf(s_boat.failure, sizeof(s_boat.failure), "Port timeout"); unlock();
@@ -656,11 +664,14 @@ static void expire_boats(void)
     lock();
     const int64_t now = now_ms();
     const uint32_t timeout = effective_timeout_ms_locked();
-    for (size_t i = 0; i < SL_MAX_BOATS; i++) if (s_boats[i].active &&
-        ((uint64_t)(now - s_boats[i].last_success_ms) > timeout ||
-         s_boats[i].missed >= dw3000_config_get()->max_missed_grants)) {
+    for (size_t i = 0; i < SL_MAX_BOATS; i++) if (s_boats[i].active) {
+        const bool missed = s_boats[i].grants_sent > 0U &&
+                            s_boats[i].missed >= dw3000_config_get()->max_missed_grants;
+        const bool idle = s_boats[i].last_success_ms > 0 &&
+                          (uint64_t)(now - s_boats[i].last_success_ms) > timeout;
+        if (!missed && !idle) continue;
         ESP_LOGW(TAG, "REMOVE boat=0x%04X reason=%s", s_boats[i].addr,
-                 s_boats[i].missed >= dw3000_config_get()->max_missed_grants ? "missed grants" : "timeout");
+                 missed ? "missed grants" : "timeout");
         memset(&s_boats[i], 0, sizeof(s_boats[i]));
     }
     unlock();
@@ -675,7 +686,7 @@ static void port_task(void *arg)
         if (dw3000_config_get()->scheduler_paused) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
         lock(); const size_t count = boat_count_locked(); unlock();
         if (count == 0U) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
-        if (!port_measure_baseline()) { vTaskDelay(pdMS_TO_TICKS(200)); continue; }
+        if (!port_measure_baseline()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
         for (size_t visited = 0; visited < count; visited++) {
             lock();
             registered_boat_t *boat = NULL;

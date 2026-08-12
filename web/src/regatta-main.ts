@@ -2061,9 +2061,12 @@ function applyStartLinePosition(session: BleBoatSession, line: string): boolean 
 
 function applyStartLineStatus(session: BleBoatSession, line: string): boolean {
   try {
-    const o = JSON.parse(line.slice("$PREGUWB,".length).trim()) as { ps_cm?: number };
+    const o = JSON.parse(line.slice("$PREGUWB,".length).trim()) as {
+      ps_cm?: number; baseline_age_ms?: number;
+    };
     const ps = parseGeomCm(o.ps_cm);
-    if (ps != null) {
+    const hasBaseline = ps != null && ps > 0 && o.baseline_age_ms !== -1;
+    if (hasBaseline) {
       const now = Date.now();
       session.localTwr.ps_cm = ps;
       session.localTwr.ps_at_ms = now;
@@ -2072,6 +2075,9 @@ function applyStartLineStatus(session: BleBoatSession, line: string): boolean {
         prev.anchor_ps_cm = ps; prev.port_starboard_cm = ps; prev.starboard_port_cm = ps;
         prev.port_starboard_at_ms = now; prev.starboard_port_at_ms = now;
       }
+    } else {
+      session.localTwr.ps_cm = null;
+      session.localTwr.ps_at_ms = 0;
     }
     renderLocalTwr(session);
     renderRelativePosition(session);
