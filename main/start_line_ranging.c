@@ -65,6 +65,7 @@ typedef struct {
     uint8_t protocol_version;
     uint8_t flags;
     uint16_t sequence;
+    uint8_t target_uuid[16];
     uint16_t target_boat_id;
     uint16_t port_device_id;
     uint16_t starboard_device_id;
@@ -77,6 +78,11 @@ typedef struct {
     uint32_t rotation_period_ms;
     uint32_t grant_nonce;
 } __attribute__((packed)) ranging_grant_t;
+
+_Static_assert(DWMAC_PROTO_SHORT_LEN + sizeof(register_response_t) <= DWMAC_RXBUF_LEN,
+               "REGISTER_RESPONSE exceeds short-frame RX buffer");
+_Static_assert(DWMAC_PROTO_SHORT_LEN + sizeof(ranging_grant_t) <= DWMAC_RXBUF_LEN,
+               "RANGING_GRANT exceeds short-frame RX buffer");
 
 typedef struct {
     bool active;
@@ -199,15 +205,12 @@ static void flush_pending_register_response(void)
     s_pending_register_rsp_valid = false;
     unlock();
     if (!have) return;
-    /* Address the unregistered boat (0x0000) first so a filtered receiver still
-     * matches, then broadcast for anything listening promiscuously. */
-    const bool to_unassigned = send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp),
-                                            START_LINE_UNASSIGNED_ADDR);
-    const bool to_broadcast = send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp), 0xffffU);
-    if (to_unassigned || to_broadcast) {
-        ESP_LOGI(TAG, "TX REGISTER_RESPONSE boat=0x%04X nonce=%lu dest=0x0000/%u dest=0xFFFF/%u",
-                 (unsigned)rsp.assigned_device_id, (unsigned long)rsp.request_nonce,
-                 to_unassigned ? 1U : 0U, to_broadcast ? 1U : 0U);
+    /* Every Boat hears this short-frame broadcast; only the Boat whose UUID
+     * and nonce match accepts it. */
+    const bool sent = send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp), 0xffffU);
+    if (sent) {
+        ESP_LOGI(TAG, "TX REGISTER_RESPONSE boat=0x%04X nonce=%lu dst=0xFFFF",
+                 (unsigned)rsp.assigned_device_id, (unsigned long)rsp.request_nonce);
         /* Give the boat time to apply 0x0100 before Port starts baseline TWR. */
         vTaskDelay(pdMS_TO_TICKS(100));
     } else {
@@ -377,19 +380,15 @@ static void accept_grant(const ranging_grant_t *grant)
 {
     if (grant->protocol_version != SL_PROTOCOL_VERSION) return;
     if (device_type_get() == DEVICE_TYPE_STARBOARD) {
-        lock();
-        s_active_boat = grant->target_boat_id;
-        s_active_nonce = grant->grant_nonce;
-        s_active_session = grant->port_session_id;
-        s_active_sequence = grant->sequence;
-        s_grant_deadline_ms = now_ms() + (int64_t)(grant->slot_duration_us / 1000U);
-        unlock();
-        ESP_LOGI(TAG, "GRANT armed boat=0x%04X seq=%u duration=%lu us",
-                 (unsigned)grant->target_boat_id, (unsigned)grant->sequence,
-                 (unsigned long)grant->slot_duration_us);
+        /* Starboard is a passive TWR responder. It does not consume grants or
+         * coordinate Boat access; any peer may initiate a range to it. */
         return;
     }
     if (device_type_get() != DEVICE_TYPE_BOAT) return;
+    if (memcmp(grant->target_uuid, s_boat.uuid, sizeof(s_boat.uuid)) != 0) {
+        ESP_LOGD(TAG, "GRANT ignored: target UUID is another Boat");
+        return;
+    }
     lock();
     const bool mine = s_boat.registered && grant->target_boat_id == s_boat.addr;
     if (mine && (grant->port_session_id != s_boat.session_id ||
@@ -463,19 +462,22 @@ bool start_line_ranging_allow_twr(const struct rxbuf *rx)
         ESP_LOGD(TAG, "TWR deny src=0x%04X func=0x%02X — no context", (unsigned)src, func);
         return false;
     }
-    /* Responder-side libdeca does not mark twr_in_progress, so retain the
+    const device_type_t role = device_type_get();
+    /* Starboard is fully passive: Port schedules Boats, so Starboard answers any
+     * TWR exchange without grant or busy-peer checks. */
+    if (role == DEVICE_TYPE_STARBOARD) {
+        if (func == 0x21U) {
+            ESP_LOGI(TAG, "TWR admit Poll from 0x%04X (passive Starboard)", (unsigned)src);
+        }
+        return true;
+    }
+    /* Responder-side libdeca does not mark twr_in_progress, so Port retains the
      * admitted Poll peer through its Final/Report sequence. */
     if (func != 0x21U) {
         lock();
         const bool responder_sequence = src == s_authorized_twr_peer && now_ms() <= s_authorized_twr_deadline_ms;
         unlock();
         return twr_in_progress() || responder_sequence;
-    }
-    const device_type_t role = device_type_get();
-    if (role == DEVICE_TYPE_STARBOARD && src == START_LINE_PORT_ADDR) {
-        lock(); s_authorized_twr_peer = src; s_authorized_twr_deadline_ms = now_ms() + 250; unlock();
-        ESP_LOGI(TAG, "TWR admit baseline Poll from Port");
-        return true;
     }
     lock();
     const bool active = src == s_active_boat && now_ms() <= s_grant_deadline_ms &&
@@ -485,7 +487,7 @@ bool start_line_ranging_allow_twr(const struct rxbuf *rx)
                         context.grant_sequence == s_active_sequence;
     if (active) { s_authorized_twr_peer = src; s_authorized_twr_deadline_ms = s_grant_deadline_ms; }
     unlock();
-    if (active && (role == DEVICE_TYPE_PORT || role == DEVICE_TYPE_STARBOARD)) {
+    if (active && role == DEVICE_TYPE_PORT) {
         ESP_LOGI(TAG, "TWR admit grant Poll from boat=0x%04X", (unsigned)src);
         return true;
     }
@@ -718,6 +720,8 @@ static void port_task(void *arg)
             }
             if (!boat) { unlock(); break; }
             const uint16_t addr = boat->addr;
+            uint8_t target_uuid[16];
+            memcpy(target_uuid, boat->uuid, sizeof(target_uuid));
             boat->grants_sent++;
             const uint32_t rotation = rotation_ms_locked();
             const uint32_t nonce = esp_random();
@@ -738,6 +742,7 @@ static void port_task(void *arg)
                 .slot_duration_us = dw3000_config_get()->grant_duration_ms * 1000U,
                 .rotation_period_ms = rotation, .grant_nonce = nonce,
             };
+            memcpy(grant.target_uuid, target_uuid, sizeof(grant.target_uuid));
             lock(); s_active_sequence = grant.sequence; unlock();
             xSemaphoreTake(s_port_done_sem, 0);
             bool done = false;

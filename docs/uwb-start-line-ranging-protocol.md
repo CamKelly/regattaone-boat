@@ -41,7 +41,7 @@ max(configured inactivity timeout, 3 × estimated queue rotation time)
 
 An unregistered Boat broadcasts `REGISTER_REQUEST` at its configured retry interval plus jitter. The request contains protocol version, sequence, UUID, optional GPS position and validity, capabilities, and a fresh registration nonce.
 
-Port treats registration by UUID as idempotent. An existing UUID retains its current short address; a new UUID receives the next available address. Port replies with a broadcast `REGISTER_RESPONSE` containing the Boat UUID and nonce, assigned address, fixed mark addresses, latest P↔S baseline and age, registration lease, estimated rotation period, Port session ID, and configuration version.
+Port treats registration by UUID as idempotent. An existing UUID retains its current short address; a new UUID receives the next available address. Port replies with one short-address data frame sent to broadcast address `0xFFFF`. Its `REGISTER_RESPONSE` payload contains the target Boat UUID and nonce, assigned address, fixed mark addresses, latest P↔S baseline and age, registration lease, estimated rotation period, Port session ID, and configuration version. Every listening Boat may receive the frame, but only the Boat whose UUID and nonce match processes it.
 
 A Boat accepts the response only when its UUID and current nonce match and the assigned address is valid. It then changes its runtime UWB address and enters the registered state. Registration state is not stored in NVS.
 
@@ -55,8 +55,9 @@ Port does not issue Boat grants without a valid baseline newer than the configur
 
 ## Grant scheduler
 
-Port maintains a volatile circular queue of registered Boats. For each Boat, Port broadcasts one directed `RANGING_GRANT` containing:
+Port maintains a volatile circular queue of registered Boats. For each Boat, Port broadcasts one target-specific `RANGING_GRANT` containing:
 
+- target Boat UUID
 - target Boat address
 - Port and Starboard addresses
 - Port session ID and configuration version
@@ -65,7 +66,9 @@ Port maintains a volatile circular queue of registered Boats. For each Boat, Por
 - estimated queue rotation
 - grant sequence and random nonce
 
-The grant is Port's only scheduled blink. All Boats and Starboard may hear it, but only the addressed Boat may transmit. Starboard only accepts a Boat Poll while that Boat's grant is active.
+The grant is a short-address data frame sent to broadcast address `0xFFFF`, not an IEEE 802.15.4 multipurpose blink. All Boats may receive it, but Boats ignore grants whose target UUID does not match their own; the matching Boat also verifies its assigned short address before transmitting.
+
+Starboard does not consume grants or coordinate Boat access. It is a passive TWR responder and answers any peer that initiates ranging. Port alone schedules Boats so Starboard never needs to manage overlapping requests.
 
 The granted Boat performs, in this exact order:
 
