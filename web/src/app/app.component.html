@@ -5,15 +5,19 @@
       <span id="ble-status" aria-live="polite">BLE: —</span>
     </nz-tag>
     <button nz-button nzType="primary" type="button" id="connect">
-      <span nz-icon nzType="plus" nzTheme="outline"></span>
-      Add device
+      Connect Device
     </button>
   </nz-header>
 
   <nz-content class="app-content">
     <div id="ui" class="content-inner">
       <div id="screen-boat" role="main">
-        <nz-tabset id="ble-tabs" nzSize="small" nzType="line">
+        <nz-tabset
+          id="ble-tabs"
+          nzSize="small"
+          nzType="line"
+          [(nzSelectedIndex)]="selectedTabIndex"
+        >
           <nz-tab nzTitle="Device">
             <div class="device-tab-body">
               <div nz-row [nzGutter]="[16, 12]">
@@ -139,7 +143,7 @@
             </p>
           </nz-tab>
 
-          <nz-tab nzTitle="DWM3000 · 0xFEF2" id="dwm3000-tab" hidden>
+          <nz-tab nzTitle="DWM3000 · 0xFEF2" id="dwm3000-tab">
             <p class="tab-hint">
               Qorvo DWM3000 and scheduled start-line DS-TWR settings. Values are saved to device NVS.
               Port is always UWB <code>0x0001</code>, Starboard is <code>0x0002</code>, and Boat addresses

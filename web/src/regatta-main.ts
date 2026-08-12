@@ -201,11 +201,6 @@ function hasMeshtastic(session: BleBoatSession | null): boolean {
 }
 
 
-function hasDwm3000(session: BleBoatSession | null): boolean {
-  return session?.charDwm3000Config != null;
-}
-
-
 /** Format an elapsed age as a relative string (e.g. "3s ago", "2 minutes ago"). */
 function formatAgoFromAgeMs(ageMs: number): string {
   if (!Number.isFinite(ageMs) || ageMs < 0) {
@@ -594,10 +589,11 @@ async function measureDwm3000Range(): Promise<void> {
   }
 }
 
-function syncDwm3000TabVisibility(session: BleBoatSession | null): void {
+function syncDwm3000TabVisibility(_session: BleBoatSession | null): void {
+  /* DWM3000 is the default landing tab — keep it visible even before connect. */
   const tab = document.querySelector<HTMLElement>("#dwm3000-tab");
   if (tab) {
-    tab.hidden = !hasDwm3000(session);
+    tab.hidden = false;
   }
 }
 
@@ -813,10 +809,19 @@ function setBleToolbar(text: string): void {
 }
 
 /** Toolbar line: active device name, device count, and problems only (no GATT checklist). */
+function syncConnectButton(): void {
+  if (!connectBtn) {
+    return;
+  }
+  const connected = activeSessionId !== null && sessions.has(activeSessionId);
+  connectBtn.textContent = connected ? "Disconnect" : "Connect Device";
+}
+
 function updateBleToolbar(note?: string): void {
+  syncConnectButton();
   const n = sessions.size;
   if (n === 0) {
-    setBleToolbar(note ?? "BLE: add a device");
+    setBleToolbar(note ?? "BLE: connect a device");
     return;
   }
   const active = getActiveSession();
@@ -3484,7 +3489,13 @@ export function startRegattaApp(): void {
     }
   });
 
-  connectBtn.addEventListener("click", () => void connectBle());
+  connectBtn.addEventListener("click", () => {
+    if (activeSessionId && sessions.has(activeSessionId)) {
+      void disconnectSession(activeSessionId);
+      return;
+    }
+    void connectBle();
+  });
 
   initGpsLeafletMapStyle();
 

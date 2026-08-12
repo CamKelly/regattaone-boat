@@ -102,6 +102,8 @@ typedef struct {
     uint32_t rotation_ms;
     int64_t last_port_message_ms;
     uint16_t ps_cm;
+    /** Age of Port's P↔S baseline when it was last handed to us; UINT32_MAX if unknown. */
+    uint32_t ps_age_ms;
     uint16_t bp_cm;
     uint16_t bs_cm;
     double x_m;
@@ -363,6 +365,7 @@ static void boat_accept_registration(const register_response_t *rsp)
     s_boat.last_port_message_ms = now_ms();
     s_boat.heard_grant = false;
     s_boat.ps_cm = (uint16_t)(rsp->port_starboard_distance_mm / 10U);
+    s_boat.ps_age_ms = UINT32_MAX;
     unlock();
     (void)dw3000_ranging_set_runtime_addr(rsp->assigned_device_id);
     ESP_LOGI(TAG, "STATE unregistered -> registered boat=0x%04X session=%lu", rsp->assigned_device_id,
@@ -406,6 +409,7 @@ static void accept_grant(const ranging_grant_t *grant)
         s_boat.heard_grant = true;
         s_boat.rotation_ms = grant->rotation_period_ms;
         s_boat.ps_cm = (uint16_t)(grant->port_starboard_distance_mm / 10U);
+        s_boat.ps_age_ms = grant->baseline_age_ms;
     }
     unlock();
     if (mine) {
@@ -634,8 +638,22 @@ static void boat_task(void *arg)
     }
 }
 
-static bool port_measure_baseline(void)
+/**
+ * Refresh the P↔S baseline, but only once the cached one has aged past
+ * baseline_max_age_ms. A failed measurement never holds the queue: the last
+ * value is reused and its age rides along in every grant so boats can judge it.
+ */
+static void port_refresh_baseline(void)
 {
+    lock();
+    const uint16_t cached_cm = s_ps_cm;
+    const int64_t cached_at = s_baseline_ms;
+    unlock();
+    if (cached_cm > 0U && cached_at > 0 &&
+        now_ms() - cached_at <= (int64_t)dw3000_config_get()->baseline_max_age_ms) {
+        return;
+    }
+
     uint16_t cm = 0;
     twr_set_context(s_session_id, 0U, (uint16_t)++s_sequence, SL_PROTOCOL_VERSION);
     twr_set_max_attempts(1U);
@@ -643,20 +661,24 @@ static bool port_measure_baseline(void)
         if (dw3000_range_to(START_LINE_STARBOARD_ADDR, &cm, 200U) == ESP_OK) {
             lock(); s_ps_cm = cm; s_baseline_ms = now_ms(); unlock();
             ESP_LOGI(TAG, "BASELINE success ps=%u cm", (unsigned)cm);
-            notify_status(); return true;
+            notify_status();
+            return;
         }
     }
-    /* Prefer a still-fresh measured baseline over dropping the schedule. */
-    if (s_ps_cm > 0U && s_baseline_ms > 0 &&
-        now_ms() - s_baseline_ms <= (int64_t)dw3000_config_get()->baseline_max_age_ms) {
-        ESP_LOGW(TAG, "BASELINE failed after %u attempts — reusing ps=%u cm (age %lld ms)",
-                 (unsigned)dw3000_config_get()->baseline_retries, (unsigned)s_ps_cm,
-                 (long long)(now_ms() - s_baseline_ms));
-        return true;
+    if (cached_cm > 0U) {
+        ESP_LOGW(TAG, "BASELINE failed after %u attempts — reusing ps=%u cm age=%lld ms",
+                 (unsigned)dw3000_config_get()->baseline_retries, (unsigned)cached_cm,
+                 (long long)(cached_at > 0 ? now_ms() - cached_at : -1));
+    } else {
+        ESP_LOGW(TAG, "BASELINE never measured — granting without a P↔S distance");
     }
-    ESP_LOGW(TAG, "BASELINE failed after %u attempts — holding grants until Starboard answers UWB",
-             (unsigned)dw3000_config_get()->baseline_retries);
-    return false;
+}
+
+static void mark_missed_locked(uint16_t addr)
+{
+    for (size_t i = 0; i < SL_MAX_BOATS; i++) {
+        if (s_boats[i].active && s_boats[i].addr == addr) { s_boats[i].missed++; return; }
+    }
 }
 
 static void expire_boats(void)
@@ -686,7 +708,7 @@ static void port_task(void *arg)
         if (dw3000_config_get()->scheduler_paused) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
         lock(); const size_t count = boat_count_locked(); unlock();
         if (count == 0U) { vTaskDelay(pdMS_TO_TICKS(50)); continue; }
-        if (!port_measure_baseline()) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+        port_refresh_baseline();
         for (size_t visited = 0; visited < count; visited++) {
             lock();
             registered_boat_t *boat = NULL;
@@ -699,6 +721,9 @@ static void port_task(void *arg)
             boat->grants_sent++;
             const uint32_t rotation = rotation_ms_locked();
             const uint32_t nonce = esp_random();
+            const uint16_t baseline_cm = s_ps_cm;
+            const uint32_t baseline_age = s_baseline_ms > 0 ? (uint32_t)(now_ms() - s_baseline_ms)
+                                                            : UINT32_MAX;
             s_active_boat = addr; s_active_nonce = nonce;
             s_active_session = s_session_id;
             s_grant_deadline_ms = now_ms() + dw3000_config_get()->grant_duration_ms;
@@ -707,27 +732,29 @@ static void port_task(void *arg)
                 .protocol_version = SL_PROTOCOL_VERSION, .sequence = (uint16_t)++s_sequence,
                 .target_boat_id = addr, .port_device_id = START_LINE_PORT_ADDR,
                 .starboard_device_id = START_LINE_STARBOARD_ADDR, .port_session_id = s_session_id,
-                .configuration_version = s_config_version, .port_starboard_distance_mm = (uint32_t)s_ps_cm * 10U,
-                .baseline_age_ms = (uint32_t)(now_ms() - s_baseline_ms),
+                .configuration_version = s_config_version,
+                .port_starboard_distance_mm = (uint32_t)baseline_cm * 10U,
+                .baseline_age_ms = baseline_age,
                 .slot_duration_us = dw3000_config_get()->grant_duration_ms * 1000U,
                 .rotation_period_ms = rotation, .grant_nonce = nonce,
             };
             lock(); s_active_sequence = grant.sequence; unlock();
             xSemaphoreTake(s_port_done_sem, 0);
+            bool done = false;
             if (!send_message(SL_MSG_RANGING_GRANT, &grant, sizeof(grant), 0xffffU)) {
-                ESP_LOGW(TAG, "GRANT send failed boat=0x%04X", addr);
+                /* Radio busy: hand the slot to the next boat instead of idling through it. */
+                ESP_LOGW(TAG, "GRANT send failed boat=0x%04X — slot skipped", addr);
             } else {
                 ESP_LOGI(TAG, "GRANT sent seq=%u boat=0x%04X duration=%lu us", grant.sequence, addr,
                          (unsigned long)grant.slot_duration_us);
+                done = xSemaphoreTake(s_port_done_sem,
+                                      pdMS_TO_TICKS(dw3000_config_get()->grant_duration_ms)) == pdTRUE;
+                if (!done) ESP_LOGW(TAG, "GRANT expired boat=0x%04X — moving on", addr);
             }
-            const bool done = xSemaphoreTake(s_port_done_sem, pdMS_TO_TICKS(dw3000_config_get()->grant_duration_ms)) == pdTRUE;
-            if (!done) {
-                lock(); for (size_t i = 0; i < SL_MAX_BOATS; i++) if (s_boats[i].active && s_boats[i].addr == addr) {
-                    s_boats[i].missed++; break;
-                } unlock();
-                ESP_LOGW(TAG, "GRANT expired boat=0x%04X", addr);
-            }
-            lock(); s_active_boat = 0; s_grant_deadline_ms = 0; unlock();
+            lock();
+            if (!done) mark_missed_locked(addr);
+            s_active_boat = 0; s_grant_deadline_ms = 0;
+            unlock();
             expire_boats();
         }
         notify_status();
@@ -744,10 +771,13 @@ size_t start_line_ranging_format_status(char *out, size_t cap)
         char uuid[33]; uuid_format(s_boat.uuid, uuid);
         n = snprintf(out, cap,
             "$PREGUWB,{\"role\":\"boat\",\"uuid\":\"%s\",\"registered\":%u,"
-            "\"boat_id\":%u,\"session\":%lu,\"ps_cm\":%u,\"bp_cm\":%u,\"bs_cm\":%u,"
+            "\"boat_id\":%u,\"session\":%lu,\"ps_cm\":%u,\"ps_age_ms\":%lld,"
+            "\"bp_cm\":%u,\"bs_cm\":%u,"
             "\"position_valid\":%u,\"stale\":%u,\"x_m\":%.3f,\"y_m\":%.3f,\"failure\":\"%s\"}\n",
             uuid, s_boat.registered ? 1U : 0U, s_boat.addr, (unsigned long)s_boat.session_id,
-            s_boat.ps_cm, s_boat.bp_cm, s_boat.bs_cm, s_boat.position_valid ? 1U : 0U,
+            s_boat.ps_cm,
+            s_boat.ps_age_ms == UINT32_MAX ? -1LL : (long long)s_boat.ps_age_ms,
+            s_boat.bp_cm, s_boat.bs_cm, s_boat.position_valid ? 1U : 0U,
             s_boat.position_stale ? 1U : 0U, s_boat.x_m, s_boat.y_m, s_boat.failure);
     } else {
         n = snprintf(out, cap,
@@ -786,7 +816,7 @@ esp_err_t start_line_ranging_start(void)
                     role == DEVICE_TYPE_STARBOARD ? START_LINE_STARBOARD_ADDR : START_LINE_UNASSIGNED_ADDR;
     ESP_ERROR_CHECK_WITHOUT_ABORT(dw3000_ranging_set_runtime_addr(addr));
     if (role == DEVICE_TYPE_BOAT) {
-        derive_uuid(s_boat.uuid); s_boat.nonce = esp_random();
+        derive_uuid(s_boat.uuid); s_boat.nonce = esp_random(); s_boat.ps_age_ms = UINT32_MAX;
         if (xTaskCreate(boat_task, "uwb_boat", SL_TASK_STACK, NULL, 5, NULL) != pdPASS) return ESP_ERR_NO_MEM;
     } else if (role == DEVICE_TYPE_PORT) {
         if (xTaskCreate(port_task, "uwb_port", SL_TASK_STACK, NULL, 5, NULL) != pdPASS) return ESP_ERR_NO_MEM;
