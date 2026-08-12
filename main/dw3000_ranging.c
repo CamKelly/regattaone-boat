@@ -3,6 +3,7 @@
 #include "dw3000_config.h"
 #include "device_type.h"
 #include "start_line_ranging.h"
+#include "uwb_test_msg.h"
 
 #include "sdkconfig.h"
 
@@ -46,6 +47,9 @@ static uint16_t self_addr(void)
  */
 static void app_rx_handler(const struct rxbuf *rx)
 {
+    if (uwb_test_msg_try_handle(rx)) {
+        return;
+    }
     if (start_line_ranging_try_handle(rx)) {
         return;
     }

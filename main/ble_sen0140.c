@@ -29,6 +29,7 @@
 #if CONFIG_DW3000_RANGING_ENABLE
 #include "dw3000_config.h"
 #include "dw3000_ranging.h"
+#include "uwb_test_msg.h"
 #endif
 #if CONFIG_REGATTAONE_MESHTASTIC_ENABLE
 #include "meshtastic_client.h"
@@ -48,6 +49,7 @@ static const char *TAG = "ble_sen0140";
 #define SEN0140_GATT_DW3000_CONFIG_UUID  0xfef2
 /** Read/write: DWM3000 ranging — write peer addr, read JSON result. */
 #define SEN0140_GATT_DW3000_RANGE_UUID   0xfef3
+/** Also accepts `msg=<dst>\\n<text>` on 0xFEF3 to send a UWB short test frame. */
 #define SEN0140_GATT_LORA_TX_UUID        0xfef7
 #define SEN0140_GATT_LORA_LINE_UUID      0xfef8
 /** Read/write: user-assigned boat id (UTF-8, max 32 chars, persisted in NVS). */
@@ -536,6 +538,39 @@ static bool parse_peer_addr(const char *s, size_t len, uint16_t *out)
     return true;
 }
 
+/** Parse `msg=<dst>\n<text>` — dst may be 0x0000..0xFFFF (broadcast allowed). */
+static bool parse_uwb_test_msg(const char *s, size_t len, uint16_t *dst_out, const char **text_out,
+                               size_t *text_len_out)
+{
+    if (s == NULL || dst_out == NULL || text_out == NULL || text_len_out == NULL || len < 6U) {
+        return false;
+    }
+    if (strncmp(s, "msg=", 4) != 0) {
+        return false;
+    }
+    const char *p = s + 4;
+    const char *end_region = s + len;
+    char *end = NULL;
+    unsigned long v = strtoul(p, &end, 0);
+    if (end == p || v > 0xFFFFUL) {
+        return false;
+    }
+    while (end < end_region && (*end == ' ' || *end == '\t')) {
+        end++;
+    }
+    if (end >= end_region || (*end != '\n' && *end != '\r' && *end != ':')) {
+        return false;
+    }
+    end++;
+    while (end < end_region && (*end == '\n' || *end == '\r')) {
+        end++;
+    }
+    *dst_out = (uint16_t)v;
+    *text_out = end;
+    *text_len_out = (size_t)(end_region - end);
+    return *text_len_out > 0U;
+}
+
 static int gatt_svr_access_dw3000_config(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt,
                                          void *arg)
 {
@@ -593,13 +628,36 @@ static int gatt_svr_access_dw3000_range(uint16_t conn_handle, uint16_t attr_hand
     }
     if (ctxt->op == BLE_GATT_ACCESS_OP_WRITE_CHR) {
         uint16_t om_len = OS_MBUF_PKTLEN(ctxt->om);
-        if (om_len == 0U || om_len > 31U) {
+        if (om_len == 0U || om_len > 127U) {
             return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
         }
-        char buf[32];
+        char buf[128];
         if (os_mbuf_copydata(ctxt->om, 0, om_len, buf) != 0) {
             return BLE_ATT_ERR_UNLIKELY;
         }
+        buf[om_len] = '\0';
+
+        uint16_t msg_dst = 0;
+        const char *msg_text = NULL;
+        size_t msg_len = 0;
+        if (parse_uwb_test_msg(buf, om_len, &msg_dst, &msg_text, &msg_len)) {
+            const esp_err_t err = uwb_test_msg_send(msg_dst, msg_text, msg_len);
+            if (err == ESP_OK) {
+                snprintf(s_dw3000_range_json, sizeof(s_dw3000_range_json),
+                         "{\"peer\":%u,\"ok\":true,\"err\":\"msg sent\"}", (unsigned)msg_dst);
+                return 0;
+            }
+            const char *why = "failed";
+            if (err == ESP_ERR_INVALID_STATE) {
+                why = "busy";
+            } else if (err == ESP_ERR_INVALID_ARG) {
+                why = "bad msg";
+            }
+            snprintf(s_dw3000_range_json, sizeof(s_dw3000_range_json),
+                     "{\"peer\":%u,\"ok\":false,\"err\":\"%s\"}", (unsigned)msg_dst, why);
+            return err == ESP_ERR_INVALID_ARG ? BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN : BLE_ATT_ERR_UNLIKELY;
+        }
+
         uint16_t peer = 0;
         if (!parse_peer_addr(buf, om_len, &peer)) {
             snprintf(s_dw3000_range_json, sizeof(s_dw3000_range_json),

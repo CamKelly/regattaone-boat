@@ -7,7 +7,9 @@ export const BLE_IMU_CHAR_UUID = "0000fef1-0000-1000-8000-00805f9b34fb";
 
 /** Read/write: DWM3000 config JSON (addr, pan, ant, twr) — persisted in device NVS. */
 export const BLE_DWM3000_CONFIG_CHAR_UUID = "0000fef2-0000-1000-8000-00805f9b34fb";
-/** Read/write: DWM3000 ranging — write peer address, read JSON distance result. */
+/** Read/write: DWM3000 ranging — write `range=<peer>`, read JSON result.
+ * Also accepts `msg=<dst>\\n<text>` to send a short UWB test frame (dst may be 0xFFFF).
+ */
 export const BLE_DWM3000_RANGE_CHAR_UUID = "0000fef3-0000-1000-8000-00805f9b34fb";
 
 /** Read/write user-assigned boat id (UTF-8, max 32 chars, stored in device NVS). */

@@ -24,7 +24,7 @@ import { startRegattaApp } from "../regatta-main";
   styleUrl: "./app.component.scss",
 })
 export class AppComponent implements AfterViewInit {
-  /** DWM3000 · 0xFEF2 — Device=0, IMU=1, Position=2, DWM3000=3 */
+  /** DWM3000 · 0xFEF2 — Device=0, IMU=1, Position=2, DWM3000=3, UWB Test=4 */
   selectedTabIndex = 3;
 
   ngAfterViewInit(): void {

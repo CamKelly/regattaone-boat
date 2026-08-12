@@ -435,14 +435,14 @@ function formatHexU16(n: number): string {
   return `0x${n.toString(16).padStart(4, "0").toUpperCase()}`;
 }
 
-function parseHexU16(raw: string, allowZero = false): number | null {
+function parseHexU16(raw: string, allowZero = false, allowBroadcast = false): number | null {
   const s = raw.trim();
   if (!s) {
     return null;
   }
   const hex = s.startsWith("0x") || s.startsWith("0X");
   const v = Number.parseInt(hex ? s.slice(2) : s, hex ? 16 : 10);
-  if (!Number.isFinite(v) || v < 0 || v >= 0xffff) {
+  if (!Number.isFinite(v) || v < 0 || v > 0xffff || (!allowBroadcast && v === 0xffff)) {
     return null;
   }
   if (!allowZero && v === 0) {
@@ -865,6 +865,7 @@ function syncActionButtons(): void {
   syncBoatIdUi(session);
   syncDeviceTypeUi(session);
   syncDwm3000Ui(session);
+  syncUwbTestUi(session);
 }
 
 async function runGattOp<T>(session: BleBoatSession, op: () => Promise<T>): Promise<T> {
@@ -1851,6 +1852,12 @@ function ingestMeshtasticLine(session: BleBoatSession, chunk: string): void {
       else console.warn("Ignored malformed $PREGUWB line", line.slice(0, 120));
       continue;
     }
+    if (line.startsWith("$PREGMSG,")) {
+      if (!applyUwbTestMsgLine(session, line)) {
+        console.warn("Ignored malformed $PREGMSG line", line.slice(0, 120));
+      }
+      continue;
+    }
     if (line.startsWith("$PREGBOATS,")) {
       if (applyRegisteredBoatsLine(session, line)) hadGeom = true;
       continue;
@@ -2088,6 +2095,86 @@ function applyStartLineStatus(session: BleBoatSession, line: string): boolean {
     renderRelativePosition(session);
     return true;
   } catch { return false; }
+}
+
+function applyUwbTestMsgLine(_session: BleBoatSession, line: string): boolean {
+  try {
+    const o = JSON.parse(line.slice("$PREGMSG,".length).trim()) as {
+      src?: number; dst?: number; dir?: string; text?: string;
+    };
+    if (typeof o.src !== "number" || typeof o.dst !== "number" || typeof o.text !== "string") {
+      return false;
+    }
+    const dir = o.dir === "tx" ? "TX" : "RX";
+    const stamp = new Date().toLocaleTimeString();
+    const entry =
+      `[${stamp}] ${dir} src=${formatHexU16(o.src)} dst=${formatHexU16(o.dst)} ${o.text}\n`;
+    const logEl = document.querySelector<HTMLElement>("#uwb-test-log");
+    if (logEl) {
+      logEl.textContent = `${logEl.textContent ?? ""}${entry}`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function syncUwbTestUi(session: BleBoatSession | null): void {
+  const statusEl = document.querySelector("#uwb-test-status");
+  const sendBtn = document.querySelector<HTMLButtonElement>("#uwb-test-send");
+  const dstInput = document.querySelector<HTMLInputElement>("#uwb-test-dst-input");
+  const textInput = document.querySelector<HTMLInputElement>("#uwb-test-text-input");
+  const canSend = session !== null && session.gatt.connected && session.charDwm3000Range !== null;
+  setFieldEnabled(sendBtn, canSend);
+  setFieldEnabled(dstInput, canSend);
+  setFieldEnabled(textInput, canSend);
+  if (statusEl) {
+    if (!session) statusEl.textContent = "Connect a DWM3000 device to send or receive.";
+    else if (!session.charDwm3000Range) statusEl.textContent = "Flash firmware with DWM3000 ranging (0xFEF3).";
+    else if (!session.gatt.connected) statusEl.textContent = "Device disconnected — reconnect to send.";
+    else statusEl.textContent = "Ready. Use 0xFFFF to broadcast to every listening device.";
+  }
+}
+
+function encodeUwbTestMsgCmd(dst: number, message: string): ArrayBuffer {
+  const prefix = new TextEncoder().encode(`msg=${dst}\n`);
+  const body = new TextEncoder().encode(message);
+  const out = new Uint8Array(prefix.length + body.length);
+  out.set(prefix);
+  out.set(body, prefix.length);
+  return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
+}
+
+async function sendUwbTestMsg(): Promise<void> {
+  const session = getActiveSession();
+  const statusEl = document.querySelector("#uwb-test-status");
+  if (!session?.charDwm3000Range) {
+    if (statusEl) statusEl.textContent = "Connect a DWM3000 device first.";
+    return;
+  }
+  const dstRaw = document.querySelector<HTMLInputElement>("#uwb-test-dst-input")?.value ?? "";
+  const text = (document.querySelector<HTMLInputElement>("#uwb-test-text-input")?.value ?? "").trim();
+  const dst = parseHexU16(dstRaw, true, true);
+  if (dst == null) {
+    if (statusEl) statusEl.textContent = "Enter a destination address (e.g. 0xFFFF or 0x0001).";
+    return;
+  }
+  if (!text) {
+    if (statusEl) statusEl.textContent = "Enter a non-empty message (max 48 characters).";
+    return;
+  }
+  if (new TextEncoder().encode(text).length > 48) {
+    if (statusEl) statusEl.textContent = "Message is too long (max 48 UTF-8 bytes).";
+    return;
+  }
+  try {
+    await gattWrite(session, "dwm3000range", encodeUwbTestMsgCmd(dst, text));
+    if (statusEl) statusEl.textContent = `Sent to ${formatHexU16(dst)}.`;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (statusEl) statusEl.textContent = `Send failed: ${msg}`;
+  }
 }
 
 function applyRegisteredBoatsLine(session: BleBoatSession, line: string): boolean {
@@ -2638,6 +2725,7 @@ function ingestConsoleLogChunk(session: BleBoatSession, chunk: string): void {
     session.consoleLineLogText += `${line}\n`;
     if (line.startsWith("$PREGSTART,")) geometryUpdated = applyStartLinePosition(session, line) || geometryUpdated;
     else if (line.startsWith("$PREGUWB,")) geometryUpdated = applyStartLineStatus(session, line) || geometryUpdated;
+    else if (line.startsWith("$PREGMSG,")) applyUwbTestMsgLine(session, line);
     else if (line.startsWith("$PREGBOATS,")) geometryUpdated = applyRegisteredBoatsLine(session, line) || geometryUpdated;
     geometryUpdated = applyAnchorGeometryFromConsole(session, line) || geometryUpdated;
     localTwrUpdated = applyLocalTwrFromConsole(session, line) || localTwrUpdated;
@@ -2932,6 +3020,7 @@ function clearUiPanels(): void {
   syncMeshtasticUiRefresh(null);
   syncDwm3000TabVisibility(null);
   syncDwm3000Ui(null);
+  syncUwbTestUi(null);
   clearGpsDisplay(null);
 }
 
@@ -3497,6 +3586,20 @@ export function startRegattaApp(): void {
     void connectBle();
   });
 
+  document.querySelector("#uwb-test-send")?.addEventListener("click", () => {
+    void sendUwbTestMsg();
+  });
+  document.querySelector("#uwb-test-text-input")?.addEventListener("keydown", (ev) => {
+    if (ev instanceof KeyboardEvent && ev.key === "Enter") {
+      ev.preventDefault();
+      void sendUwbTestMsg();
+    }
+  });
+  document.querySelector("#uwb-test-log-clear")?.addEventListener("click", () => {
+    const logEl = document.querySelector<HTMLElement>("#uwb-test-log");
+    if (logEl) logEl.textContent = "";
+  });
+
   initGpsLeafletMapStyle();
 
   document.querySelector("#ble-tabs")?.addEventListener("click", (ev) => {
@@ -3561,6 +3664,7 @@ export function startRegattaApp(): void {
   syncBoatIdUi(null);
   syncDeviceTypeUi(null);
   syncDwm3000Ui(null);
+  syncUwbTestUi(null);
   renderDeviceSelector();
   updateBleToolbar();
   syncActionButtons();

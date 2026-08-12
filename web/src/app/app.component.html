@@ -242,6 +242,62 @@
             </div>
           </nz-tab>
 
+          <nz-tab nzTitle="UWB Test">
+            <p class="tab-hint">
+              Send a short-address UWB data frame with custom text. Destination
+              <code>0xFFFF</code> is broadcast — every listening device on the PAN can receive it.
+              Directed addresses only reach that device when its frame filter matches.
+              Text is limited to 48 UTF-8 bytes.
+            </p>
+            <div nz-row [nzGutter]="[12, 12]">
+              <div nz-col [nzXs]="24" [nzMd]="8">
+                <label class="field-label" for="uwb-test-dst-input">Destination address</label>
+                <input
+                  nz-input
+                  id="uwb-test-dst-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  placeholder="0xFFFF"
+                  value="0xFFFF"
+                />
+              </div>
+              <div nz-col [nzXs]="24" [nzMd]="16">
+                <label class="field-label" for="uwb-test-text-input">Message</label>
+                <div nz-row [nzGutter]="8">
+                  <div nz-col [nzFlex]="'auto'">
+                    <input
+                      nz-input
+                      id="uwb-test-text-input"
+                      type="text"
+                      spellcheck="false"
+                      autocomplete="off"
+                      maxlength="48"
+                      placeholder="hello from this device"
+                    />
+                  </div>
+                  <div nz-col [nzFlex]="'none'">
+                    <button nz-button nzType="primary" type="button" id="uwb-test-send">Send</button>
+                  </div>
+                </div>
+              </div>
+              <div nz-col [nzSpan]="24">
+                <p id="uwb-test-status" class="field-hint">Connect a DWM3000 device to send or receive.</p>
+              </div>
+              <div nz-col [nzSpan]="24">
+                <div class="log-header">
+                  <label class="field-label" for="uwb-test-log">Received / sent messages</label>
+                  <div class="log-header-actions">
+                    <button nz-button nzType="default" nzSize="small" type="button" id="uwb-test-log-clear">
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <pre id="uwb-test-log" class="ble-log lora-line-log" aria-live="polite"></pre>
+              </div>
+            </div>
+          </nz-tab>
+
           <nz-tab nzTitle="Meshtastic · 0xFEE5" id="meshtastic-tab" hidden>
             <p id="meshtastic-status" class="tab-hint">Meshtastic: connect BLE for status</p>
             <p class="tab-hint">
