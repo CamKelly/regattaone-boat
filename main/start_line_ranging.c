@@ -184,7 +184,7 @@ static bool send_message(uint8_t func, const void *payload, size_t len, uint16_t
     if (!dwmac_transmit(tx)) return false;
     /* dwmac_transmit returns at TX start; allow the frame to leave the air
      * before the next caller (baseline/grant) issues dwt_forcetrxoff(). */
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(pdMS_TO_TICKS(20));
     return true;
 }
 
@@ -196,9 +196,17 @@ static void flush_pending_register_response(void)
     s_pending_register_rsp_valid = false;
     unlock();
     if (!have) return;
-    if (send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp), 0xffffU)) {
-        ESP_LOGI(TAG, "TX REGISTER_RESPONSE boat=0x%04X nonce=%lu",
-                 (unsigned)rsp.assigned_device_id, (unsigned long)rsp.request_nonce);
+    /* Address the unregistered boat (0x0000) first so a filtered receiver still
+     * matches, then broadcast for anything listening promiscuously. */
+    const bool to_unassigned = send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp),
+                                            START_LINE_UNASSIGNED_ADDR);
+    const bool to_broadcast = send_message(SL_MSG_REGISTER_RESPONSE, &rsp, sizeof(rsp), 0xffffU);
+    if (to_unassigned || to_broadcast) {
+        ESP_LOGI(TAG, "TX REGISTER_RESPONSE boat=0x%04X nonce=%lu dest=0x0000/%u dest=0xFFFF/%u",
+                 (unsigned)rsp.assigned_device_id, (unsigned long)rsp.request_nonce,
+                 to_unassigned ? 1U : 0U, to_broadcast ? 1U : 0U);
+        /* Give the boat time to apply 0x0100 before Port starts baseline TWR. */
+        vTaskDelay(pdMS_TO_TICKS(100));
     } else {
         ESP_LOGW(TAG, "TX REGISTER_RESPONSE failed boat=0x%04X twr_busy=%u",
                  (unsigned)rsp.assigned_device_id, twr_in_progress() ? 1U : 0U);
@@ -368,6 +376,9 @@ static void accept_grant(const ranging_grant_t *grant)
         s_active_sequence = grant->sequence;
         s_grant_deadline_ms = now_ms() + (int64_t)(grant->slot_duration_us / 1000U);
         unlock();
+        ESP_LOGI(TAG, "GRANT armed boat=0x%04X seq=%u duration=%lu us",
+                 (unsigned)grant->target_boat_id, (unsigned)grant->sequence,
+                 (unsigned long)grant->slot_duration_us);
         return;
     }
     if (device_type_get() != DEVICE_TYPE_BOAT) return;
@@ -438,7 +449,10 @@ bool start_line_ranging_allow_twr(const struct rxbuf *rx)
     const uint16_t src = (uint16_t)dwprot_get_src(rx->buf);
     const uint8_t func = dwprot_get_func(rx->buf);
     struct twr_context context;
-    if (!twr_get_message_context(rx, &context)) return false;
+    if (!twr_get_message_context(rx, &context)) {
+        ESP_LOGD(TAG, "TWR deny src=0x%04X func=0x%02X — no context", (unsigned)src, func);
+        return false;
+    }
     /* Responder-side libdeca does not mark twr_in_progress, so retain the
      * admitted Poll peer through its Final/Report sequence. */
     if (func != 0x21U) {
@@ -450,6 +464,7 @@ bool start_line_ranging_allow_twr(const struct rxbuf *rx)
     const device_type_t role = device_type_get();
     if (role == DEVICE_TYPE_STARBOARD && src == START_LINE_PORT_ADDR) {
         lock(); s_authorized_twr_peer = src; s_authorized_twr_deadline_ms = now_ms() + 250; unlock();
+        ESP_LOGI(TAG, "TWR admit baseline Poll from Port");
         return true;
     }
     lock();
@@ -460,7 +475,13 @@ bool start_line_ranging_allow_twr(const struct rxbuf *rx)
                         context.grant_sequence == s_active_sequence;
     if (active) { s_authorized_twr_peer = src; s_authorized_twr_deadline_ms = s_grant_deadline_ms; }
     unlock();
-    return (role == DEVICE_TYPE_PORT || role == DEVICE_TYPE_STARBOARD) && active;
+    if (active && (role == DEVICE_TYPE_PORT || role == DEVICE_TYPE_STARBOARD)) {
+        ESP_LOGI(TAG, "TWR admit grant Poll from boat=0x%04X", (unsigned)src);
+        return true;
+    }
+    ESP_LOGD(TAG, "TWR deny Poll src=0x%04X role=%s active_boat=0x%04X",
+             (unsigned)src, device_type_to_string(role), (unsigned)s_active_boat);
+    return false;
 }
 
 void start_line_ranging_on_twr_result(uint64_t src64, uint64_t dst64, uint16_t dist, uint16_t num)

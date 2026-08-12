@@ -237,15 +237,15 @@ menu "RegattaOne — Mark broadcast (Port/Starboard → Boat)"
 
     config REGATTAONE_MARK_BROADCAST_ENABLE
         bool "Enable Port/Starboard mark broadcasts (via Meshtastic UART)"
-        default y if REGATTAONE_MESHTASTIC_ENABLE
         default n
         depends on REGATTAONE_MESHTASTIC_ENABLE
         help
             Port and Starboard devices periodically broadcast a compact 18-byte
             frame (role P/S, UWB address, lat/lon, accuracy, opposite-mark distance)
-            over the Meshtastic companion UART (PRIVATE_APP). The SX1262 radio is
-            owned by Meshtastic firmware, not this app. Boat devices store the
-            latest Port and Starboard records in RAM.
+            over the Meshtastic companion UART (PRIVATE_APP). Currently off by
+            default — start-line ranging uses UWB instead. Meshtastic UART/BLE
+            remain available for other traffic. Re-enable here when mark
+            discovery broadcasts are needed again.
 
     config MARK_BROADCAST_INTERVAL_MS
         int "Broadcast interval (ms)"

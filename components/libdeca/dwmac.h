@@ -118,6 +118,7 @@ struct txbuf {
 bool dwmac_init(uint16_t mypanId, uint16_t myAddr, deca_rx_cb rx_cb,
 				deca_to_cb to_cb, deca_err_cb err_cb);
 void dwmac_set_frame_filter(void);
+void dwmac_clear_frame_filter(void);
 void dwmac_set_mac64(uint64_t mac);
 
 /* TX buffers */

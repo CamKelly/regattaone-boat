@@ -154,6 +154,13 @@ void dwmac_set_frame_filter(void)
 								 | DWT_FF_COORD_EN);
 }
 
+void dwmac_clear_frame_filter(void)
+{
+	/* Unregistered boats use short address 0x0000; HW filtering can drop
+	 * broadcast REGISTER_RESPONSE / GRANT while that address is programmed. */
+	dwt_configureframefilter(DWT_FF_DISABLE, 0);
+}
+
 void deca_print_sys_status(uint32_t status)
 {
 #ifdef DRIVER_VERSION_HEX // >= 0x060007

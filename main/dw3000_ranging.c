@@ -143,7 +143,11 @@ esp_err_t dw3000_ranging_init(void)
         ESP_LOGE(TAG, "dwmac_init failed");
         return ESP_FAIL;
     }
-    dwmac_set_frame_filter();
+    if (s_runtime_addr == START_LINE_UNASSIGNED_ADDR) {
+        dwmac_clear_frame_filter();
+    } else {
+        dwmac_set_frame_filter();
+    }
 
     twr_init(cfg->twr_delay_us, true);
     twr_set_diagnostics(cfg->detailed_ranging_logs);
@@ -185,6 +189,11 @@ esp_err_t dw3000_ranging_set_runtime_addr(uint16_t addr)
     if (addr == 0xffffU) return ESP_ERR_INVALID_ARG;
     if (!dwmac_set_pan_addr(dw3000_config_get()->panid, addr)) return ESP_FAIL;
     s_runtime_addr = addr;
+    if (addr == START_LINE_UNASSIGNED_ADDR) {
+        dwmac_clear_frame_filter();
+    } else {
+        dwmac_set_frame_filter();
+    }
     ESP_LOGI(TAG, "runtime address 0x%04X", (unsigned)addr);
     return ESP_OK;
 }
