@@ -297,6 +297,8 @@ interface BleBoatSession {
   /** Incomplete console log fragment across BLE notify chunks. */
   consoleLineNotifyBuf: string;
   consoleLineLogText: string;
+  /** UWB Test tab transcript; kept here so ng-zorro pane remounts can repaint it. */
+  uwbTestLogText: string;
   meshtasticTxDraft: string;
   markPort: MarkBroadcastSnapshot | null;
   markStarboard: MarkBroadcastSnapshot | null;
@@ -866,6 +868,7 @@ function syncActionButtons(): void {
   syncDeviceTypeUi(session);
   syncDwm3000Ui(session);
   syncUwbTestUi(session);
+  renderUwbTestLog(session);
 }
 
 async function runGattOp<T>(session: BleBoatSession, op: () => Promise<T>): Promise<T> {
@@ -2097,7 +2100,27 @@ function applyStartLineStatus(session: BleBoatSession, line: string): boolean {
   } catch { return false; }
 }
 
-function applyUwbTestMsgLine(_session: BleBoatSession, line: string): boolean {
+function renderUwbTestLog(session: BleBoatSession | null): void {
+  const logEl = document.querySelector<HTMLElement>("#uwb-test-log");
+  if (!logEl) {
+    return;
+  }
+  if (session && session.deviceId !== activeSessionId) {
+    return;
+  }
+  logEl.textContent = session?.uwbTestLogText ?? "";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function appendUwbTestLog(session: BleBoatSession, entry: string): void {
+  session.uwbTestLogText += entry;
+  if (session.uwbTestLogText.length > 24000) {
+    session.uwbTestLogText = session.uwbTestLogText.slice(-18000);
+  }
+  renderUwbTestLog(session);
+}
+
+function applyUwbTestMsgLine(session: BleBoatSession, line: string): boolean {
   try {
     const o = JSON.parse(line.slice("$PREGMSG,".length).trim()) as {
       src?: number; dst?: number; dir?: string; text?: string; note?: string;
@@ -2108,13 +2131,10 @@ function applyUwbTestMsgLine(_session: BleBoatSession, line: string): boolean {
     const dir = o.dir === "tx" ? "TX" : "RX";
     const stamp = new Date().toLocaleTimeString();
     const note = typeof o.note === "string" && o.note ? ` [${o.note}]` : "";
-    const entry =
-      `[${stamp}] ${dir} src=${formatHexU16(o.src)} dst=${formatHexU16(o.dst)} ${o.text}${note}\n`;
-    const logEl = document.querySelector<HTMLElement>("#uwb-test-log");
-    if (logEl) {
-      logEl.textContent = `${logEl.textContent ?? ""}${entry}`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+    appendUwbTestLog(
+      session,
+      `[${stamp}] ${dir} src=${formatHexU16(o.src)} dst=${formatHexU16(o.dst)} ${o.text}${note}\n`,
+    );
     return true;
   } catch {
     return false;
@@ -3022,6 +3042,7 @@ function clearUiPanels(): void {
   syncDwm3000TabVisibility(null);
   syncDwm3000Ui(null);
   syncUwbTestUi(null);
+  renderUwbTestLog(null);
   clearGpsDisplay(null);
 }
 
@@ -3233,6 +3254,7 @@ async function setupNativeGattSession(pick: BleDevicePick): Promise<BleBoatSessi
     meshtasticLineLogText: "",
     consoleLineNotifyBuf: "",
     consoleLineLogText: "",
+    uwbTestLogText: "",
     meshtasticTxDraft: "",
     markPort: null,
     markStarboard: null,
@@ -3301,6 +3323,7 @@ async function setupWebGattSession(dev: BluetoothDevice): Promise<BleBoatSession
     meshtasticLineLogText: "",
     consoleLineNotifyBuf: "",
     consoleLineLogText: "",
+    uwbTestLogText: "",
     meshtasticTxDraft: "",
     markPort: null,
     markStarboard: null,
@@ -3587,18 +3610,34 @@ export function startRegattaApp(): void {
     void connectBle();
   });
 
-  document.querySelector("#uwb-test-send")?.addEventListener("click", () => {
-    void sendUwbTestMsg();
+  /* Delegated: ng-zorro remounts tab panes, so listeners bound directly to
+   * elements inside the UWB Test pane are lost on the first tab switch. */
+  document.addEventListener("click", (ev) => {
+    const target = ev.target as HTMLElement | null;
+    if (!target) {
+      return;
+    }
+    if (target.closest("#uwb-test-send")) {
+      void sendUwbTestMsg();
+      return;
+    }
+    if (target.closest("#uwb-test-log-clear")) {
+      const session = getActiveSession();
+      if (session) {
+        session.uwbTestLogText = "";
+      }
+      renderUwbTestLog(session);
+    }
   });
-  document.querySelector("#uwb-test-text-input")?.addEventListener("keydown", (ev) => {
-    if (ev instanceof KeyboardEvent && ev.key === "Enter") {
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter") {
+      return;
+    }
+    const target = ev.target as HTMLElement | null;
+    if (target?.id === "uwb-test-text-input") {
       ev.preventDefault();
       void sendUwbTestMsg();
     }
-  });
-  document.querySelector("#uwb-test-log-clear")?.addEventListener("click", () => {
-    const logEl = document.querySelector<HTMLElement>("#uwb-test-log");
-    if (logEl) logEl.textContent = "";
   });
 
   initGpsLeafletMapStyle();
@@ -3627,6 +3666,14 @@ export function startRegattaApp(): void {
     }
     if (label.includes("DWM3000")) {
       renderLocalTwr(getActiveSession());
+    }
+    if (label.includes("UWB Test")) {
+      // ng-zorro may remount the pane; restore the transcript and button state.
+      requestAnimationFrame(() => {
+        const session = getActiveSession();
+        syncUwbTestUi(session);
+        renderUwbTestLog(session);
+      });
     }
     if (label.includes("GPS")) {
       requestAnimationFrame(() => invalidateGpsLeafletMapSize());
