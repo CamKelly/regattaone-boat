@@ -70,14 +70,15 @@ static size_t json_escape(const char *in, size_t in_len, char *out, size_t out_c
     return o;
 }
 
-static void publish(uint16_t src, uint16_t dst, const char *text, size_t text_len, const char *dir)
+static void publish(uint16_t src, uint16_t dst, const char *text, size_t text_len, const char *dir,
+                    const char *note)
 {
     char escaped[UWB_TEST_MSG_MAX_TEXT * 6U + 1U];
     (void)json_escape(text, text_len, escaped, sizeof(escaped));
-    char line[192];
+    char line[UWB_TEST_MSG_MAX_TEXT * 6U + 128U];
     const int n = snprintf(line, sizeof(line),
-                           "$PREGMSG,{\"src\":%u,\"dst\":%u,\"dir\":\"%s\",\"text\":\"%s\"}\n",
-                           (unsigned)src, (unsigned)dst, dir, escaped);
+                           "$PREGMSG,{\"src\":%u,\"dst\":%u,\"dir\":\"%s\",\"text\":\"%s\",\"note\":\"%s\"}\n",
+                           (unsigned)src, (unsigned)dst, dir, escaped, note ? note : "");
     if (n > 0 && (size_t)n < sizeof(line)) {
         ui_notify((const uint8_t *)line, (size_t)n);
     }
@@ -95,24 +96,30 @@ esp_err_t uwb_test_msg_send(uint16_t dst, const char *text, size_t text_len)
     if (text_len == 0U || text_len > UWB_TEST_MSG_MAX_TEXT) {
         return ESP_ERR_INVALID_ARG;
     }
+    const uint16_t src = dw3000_ranging_self_addr();
     if (twr_in_progress()) {
+        ESP_LOGW(TAG, "TX test msg busy (TWR in progress) src=0x%04X dst=0x%04X", (unsigned)src,
+                 (unsigned)dst);
+        publish(src, dst, text, text_len, "tx", "radio busy");
         return ESP_ERR_INVALID_STATE;
     }
 
     struct txbuf *tx = dwmac_txbuf_get();
     if (tx == NULL) {
+        publish(src, dst, text, text_len, "tx", "no txbuf");
         return ESP_ERR_NO_MEM;
     }
     void *out = dwprot_short_prepare(tx, text_len, UWB_TEST_MSG_FUNC, dst);
     memcpy(out, text, text_len);
     if (!dwmac_transmit(tx)) {
-        ESP_LOGW(TAG, "TX test msg failed dst=0x%04X len=%u", (unsigned)dst, (unsigned)text_len);
+        ESP_LOGW(TAG, "TX test msg transmit failed src=0x%04X dst=0x%04X len=%u", (unsigned)src,
+                 (unsigned)dst, (unsigned)text_len);
+        publish(src, dst, text, text_len, "tx", "tx failed");
         return ESP_FAIL;
     }
     /* dwmac_transmit returns at TX start; allow the frame onto the air. */
     vTaskDelay(pdMS_TO_TICKS(20));
-    const uint16_t src = dw3000_ranging_self_addr();
-    publish(src, dst, text, text_len, "tx");
+    publish(src, dst, text, text_len, "tx", "");
     ESP_LOGI(TAG, "TX test msg src=0x%04X dst=0x%04X len=%u", (unsigned)src, (unsigned)dst,
              (unsigned)text_len);
     return ESP_OK;
@@ -135,7 +142,7 @@ bool uwb_test_msg_try_handle(const struct rxbuf *rx)
     const struct prot_short *ps = (const struct prot_short *)rx->buf;
     const uint16_t dst = ps->hdr.dst;
     const char *text = (const char *)dwprot_get_payload(rx->buf);
-    publish(src, dst, text, plen, "rx");
+    publish(src, dst, text, plen, "rx", "");
     ESP_LOGI(TAG, "RX test msg src=0x%04X dst=0x%04X len=%u", (unsigned)src, (unsigned)dst,
              (unsigned)plen);
     return true;

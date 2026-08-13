@@ -636,6 +636,7 @@ static int gatt_svr_access_dw3000_range(uint16_t conn_handle, uint16_t attr_hand
             return BLE_ATT_ERR_UNLIKELY;
         }
         buf[om_len] = '\0';
+        ESP_LOGI(TAG, "0xFEF3 write len=%u raw=\"%s\"", (unsigned)om_len, buf);
 
         uint16_t msg_dst = 0;
         const char *msg_text = NULL;

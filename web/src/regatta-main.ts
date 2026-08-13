@@ -2100,15 +2100,16 @@ function applyStartLineStatus(session: BleBoatSession, line: string): boolean {
 function applyUwbTestMsgLine(_session: BleBoatSession, line: string): boolean {
   try {
     const o = JSON.parse(line.slice("$PREGMSG,".length).trim()) as {
-      src?: number; dst?: number; dir?: string; text?: string;
+      src?: number; dst?: number; dir?: string; text?: string; note?: string;
     };
     if (typeof o.src !== "number" || typeof o.dst !== "number" || typeof o.text !== "string") {
       return false;
     }
     const dir = o.dir === "tx" ? "TX" : "RX";
     const stamp = new Date().toLocaleTimeString();
+    const note = typeof o.note === "string" && o.note ? ` [${o.note}]` : "";
     const entry =
-      `[${stamp}] ${dir} src=${formatHexU16(o.src)} dst=${formatHexU16(o.dst)} ${o.text}\n`;
+      `[${stamp}] ${dir} src=${formatHexU16(o.src)} dst=${formatHexU16(o.dst)} ${o.text}${note}\n`;
     const logEl = document.querySelector<HTMLElement>("#uwb-test-log");
     if (logEl) {
       logEl.textContent = `${logEl.textContent ?? ""}${entry}`;
